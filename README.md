@@ -7,6 +7,9 @@ Manages per-port power switching on smart USB hubs (via
 healthy mid-range (40–80% by default) without constant trickle charging or
 deep discharge while the watches are physically docked.
 
+Also automates flashing AsteroidOS nightlies to an entire docked fleet in
+one command (`flash-all`).
+
 ## How it works
 
 1. Watches are physically connected to smart USB hubs that support per-port
@@ -28,6 +31,8 @@ ADB shell. This is the standard Linux power-supply class — `dumpsys` and
 | Python 3 | ≥ 3.9 | stdlib only; `python-systemd` optional for journald |
 | [uhubctl](https://github.com/mvp/uhubctl) | any recent | for hub power control |
 | adb | any | `android-tools` or `android-sdk-platform-tools` |
+| fastboot | any | required for `flash-all`; same package as adb |
+| wget | any | required for `flash-all` nightly downloads |
 
 ### Installing dependencies
 
@@ -153,6 +158,34 @@ asteroid-docking-bay discover
 Scan for ADB-connected watches and print their codename and serial. Useful for
 finding serials after a new watch is connected.
 
+```
+asteroid-docking-bay flash-all [codename|all] [--local DIR] [--dry-run]
+                                [--force-download] [--download-dir DIR]
+```
+Flash AsteroidOS nightlies to all configured watches (or a single codename) in
+sequence, fully automated:
+
+1. Downloads `zImage-dtb-{codename}.fastboot` and
+   `asteroid-image-{codename}.rootfs.ext4` from
+   `release.asteroidos.org/nightlies/{codename}/` and verifies SHA512. Already-
+   downloaded files that pass the checksum are reused without re-downloading.
+2. Powers on the hub port.
+3. Waits for ADB. If the watch answers at `192.168.2.15` instead (SSH/RNDIS
+   mode rather than ADB mode), it prints a prompt to switch to ADB mode in
+   Settings → USB on the watch, then waits again.
+4. `adb reboot bootloader`
+5. Waits for a fastboot device to appear.
+6. `fastboot flash userdata` + `fastboot flash boot` + `fastboot continue`
+7. Removes stale `192.168.2.15` and `watch` entries from `~/.ssh/known_hosts`
+   so the next SSH session isn't blocked by a key mismatch.
+
+`--dry-run` prints the fastboot commands without executing them.  
+`--local DIR` uses pre-built images from a local directory instead of
+downloading.  
+`--force-download` re-downloads even if the cached copy passes SHA512.  
+`--download-dir DIR` overrides the default cache location
+(`~/.local/share/asteroid-docking-bay/nightlies/`).
+
 ## Typical status output
 
 ```
@@ -187,6 +220,8 @@ See `config.example.json` in this repo for a fully-annotated example.
 | `adb_wait_seconds` | `15` | Seconds between ADB availability retries |
 | `adb_wait_retries` | `8` | Max retries (total wait: wait_seconds × retries) |
 | `check_interval_hours` | `12` | Documentation only — actual interval is set in the systemd timer |
+| `flash.nightly_url` | `https://release.asteroidos.org/nightlies` | Base URL for nightly image downloads |
+| `flash.download_dir` | `~/.local/share/asteroid-docking-bay/nightlies` | Local cache for downloaded images |
 
 The `check_interval_hours` field does **not** drive scheduling. Edit
 `~/.config/systemd/user/asteroid-docking-bay-charge.timer` to change the
@@ -248,4 +283,11 @@ This removes the binary and systemd units. Config and serial mappings at
 
 ## License
 
-BSD 3-Clause — see [LICENSE](LICENSE).
+GPL-3.0-only — see [LICENSE](LICENSE).
+
+Copyright (C) 2026 Timo Könnecke (moWerk) \<mo@mowerk.net\>  
+Copyright (C) 2023 Ed Beroset \<beroset@ieee.org\>
+
+The flashing sequence in `flash-all` is based on
+[beroset/asteroid-hosttools](https://github.com/beroset/asteroid-hosttools)
+(`flashy`), which is also GPL-3.0-only.
