@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-FileCopyrightText: 2026 Timo Könnecke (moWerk) <mo@mowerk.net>
+# SPDX-FileCopyrightText: 2023 Ed Beroset <beroset@ieee.org>
 """
 asteroid-docking-bay — USB hub power manager for AsteroidOS smartwatches.
 
@@ -33,6 +36,10 @@ DEFAULT_CONFIG = {
         "check_interval_hours": 12,
         "adb_wait_seconds": 15,
         "adb_wait_retries": 8,
+    },
+    "flash": {
+        "nightly_url": "https://release.asteroidos.org/nightlies",
+        "download_dir": str(Path.home() / ".local" / "share" / "asteroid-docking-bay" / "nightlies"),
     },
 }
 
@@ -70,6 +77,9 @@ def load_config() -> dict:
         cfg.setdefault(k, v)
     for k, v in DEFAULT_CONFIG["charge"].items():
         cfg["charge"].setdefault(k, v)
+    cfg.setdefault("flash", {})
+    for k, v in DEFAULT_CONFIG["flash"].items():
+        cfg["flash"].setdefault(k, v)
     return cfg
 
 
@@ -395,6 +405,110 @@ def wait_for_adb(codename: str, cfg: dict, charge_cfg: dict) -> str | None:
     return None
 
 
+# ── Flashing helpers ─────────────────────────────────────────────────────────
+# Flashing logic inspired by beroset's asteroid-hosttools/flashy (GPL-3.0-only).
+# We reimplement it in Python so we can use per-device -s flags and integrate
+# with the docking-bay power control flow.
+
+def _fastboot_devices() -> dict[str, str]:
+    """Return {serial: state} for all fastboot-visible devices."""
+    rc, out, _ = _run("fastboot devices", check=False)
+    result: dict[str, str] = {}
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) >= 2:
+            result[parts[0]] = parts[1]
+    return result
+
+
+def _wait_for_fastboot(known_serials: set[str], timeout: int = 30) -> str | None:
+    """Wait for a fastboot serial not present in known_serials."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        for serial in _fastboot_devices():
+            if serial not in known_serials:
+                return serial
+        time.sleep(1)
+    return None
+
+
+def _detect_rndis() -> bool:
+    """Return True if a watch is reachable at 192.168.2.15 (SSH/RNDIS mode)."""
+    rc, _, _ = _run("ping -c1 -W2 192.168.2.15", check=False)
+    return rc == 0
+
+
+def _download_nightly(codename: str, download_dir: Path, nightly_url: str, force: bool = False) -> tuple[Path, Path]:
+    """
+    Download nightly images for codename into download_dir, verify SHA512.
+    Skips files that already exist and pass verification (unless force=True).
+    Returns (boot_file, img_file).
+    """
+    download_dir.mkdir(parents=True, exist_ok=True)
+    boot_name = f"zImage-dtb-{codename}.fastboot"
+    img_name  = f"asteroid-image-{codename}.rootfs.ext4"
+    sha_name  = "SHA512SUMS"
+    boot_file = download_dir / boot_name
+    img_file  = download_dir / img_name
+    sha_file  = download_dir / sha_name
+    base_url  = f"{nightly_url}/{codename}"
+
+    # Always fetch SHA512SUMS so we detect when a new nightly has landed.
+    log.info("%s: fetching SHA512SUMS…", codename)
+    _run(f"wget -q '{base_url}/{sha_name}' -O '{sha_file}'")
+
+    for url, local_file in [(f"{base_url}/{boot_name}", boot_file),
+                            (f"{base_url}/{img_name}",  img_file)]:
+        if local_file.exists() and not force:
+            rc, _, _ = _run(
+                f"cd '{download_dir}' && grep '{local_file.name}' SHA512SUMS | sha512sum --check --quiet",
+                check=False,
+            )
+            if rc == 0:
+                log.info("%s: cached and verified — skipping", local_file.name)
+                continue
+            log.info("%s: cached but checksum mismatch — re-downloading", local_file.name)
+        log.info("%s: downloading %s…", codename, local_file.name)
+        _run(f"wget -q --show-progress '{url}' -O '{local_file}'")
+
+    # Final verification of both files.
+    rc, _, err = _run(
+        f"cd '{download_dir}' && grep -E '{boot_name}|{img_name}' SHA512SUMS | sha512sum --check --quiet",
+        check=False,
+    )
+    if rc != 0:
+        raise RuntimeError(f"SHA512 verification failed for {codename}: {err}")
+    log.info("%s: images verified OK", codename)
+    return boot_file, img_file
+
+
+def _flash_watch(boot_file: Path, img_file: Path, fb_serial: str | None, dry_run: bool = False):
+    """
+    Flash a watch already in fastboot mode.
+    Permanent install: flash userdata + boot, then fastboot continue.
+    The bootloader is assumed already unlocked (running AsteroidOS).
+    """
+    sflag = f"-s {fb_serial}" if fb_serial else ""
+
+    def fb(subcmd: str):
+        cmd = f"fastboot {sflag} {subcmd}".strip()
+        if dry_run:
+            print(f"    [dry-run] {cmd}")
+        else:
+            _run(cmd)
+
+    fb("oem unlock")                        # no-op if already unlocked
+    fb(f"flash userdata '{img_file}'")
+    fb(f"flash boot '{boot_file}'")
+    fb("continue")
+
+
+def _clear_ssh_known_hosts():
+    """Remove stale SSH host keys left by the previous AsteroidOS install."""
+    _run("ssh-keygen -R watch", check=False)
+    _run("ssh-keygen -R 192.168.2.15", check=False)
+
+
 # ── Commands ──────────────────────────────────────────────────────────────────
 
 def cmd_status(args, cfg: dict):
@@ -684,6 +798,134 @@ def cmd_check_charge(args, cfg: dict):
     log.info("Periodic charge check complete")
 
 
+def cmd_flash_all(args, cfg: dict):
+    """
+    Flash AsteroidOS nightlies to all (or a specified) configured watches.
+
+    For each watch in sequence:
+      1. Download + verify nightly images (cached; skips if already current).
+      2. Power on the hub port.
+      3. Wait for ADB.  If the watch is in SSH/RNDIS mode, alert the user.
+      4. adb reboot bootloader.
+      5. Wait for fastboot device.
+      6. fastboot flash userdata + boot, then fastboot continue.
+      7. Remove stale SSH known_hosts entries for the next SSH session.
+    """
+    targets = _resolve_targets(args.codename, cfg)
+    if not targets:
+        print("No watches configured. Run: asteroid-docking-bay map")
+        return
+
+    dry_run    = args.dry_run
+    force_dl   = args.force_download
+    local_dir  = Path(args.local) if args.local else None
+    flash_cfg  = cfg["flash"]
+    dl_dir     = Path(args.download_dir or flash_cfg["download_dir"])
+    nightly_url = flash_cfg["nightly_url"]
+
+    print()
+    print("   ✨  ⋆  ˚  ✦   asteroid-docking-bay   ✦  ˚  ⋆  ✨")
+    print("   ──────────────── flash sequence ─────────────────")
+    print(f"          {len(targets)} watch(es) queued  {'[DRY RUN]' if dry_run else ''}")
+    print()
+
+    results: dict[str, str] = {}
+
+    for codename in targets:
+        loc, port = find_port_for_codename(cfg, codename)
+        if loc is None:
+            log.error("%s: not mapped to any hub port", codename)
+            results[codename] = "not mapped"
+            continue
+
+        if is_port_smart(cfg, codename) is False:
+            log.error("%s: port not power-switchable — skipping", codename)
+            results[codename] = "non-smart port"
+            continue
+
+        print(f"\n── {codename}  (hub {loc} port {port}) ──")
+
+        # ── 1. Resolve image files ────────────────────────────────────────────
+        if local_dir:
+            boot_file = local_dir / f"zImage-dtb-{codename}.fastboot"
+            img_file  = local_dir / f"asteroid-image-{codename}.rootfs.ext4"
+            missing = [f for f in (boot_file, img_file) if not f.exists()]
+            if missing:
+                log.error("%s: not found in --local dir: %s", codename, ", ".join(f.name for f in missing))
+                results[codename] = "local images not found"
+                continue
+            log.info("%s: using local images from %s", codename, local_dir)
+        else:
+            try:
+                boot_file, img_file = _download_nightly(codename, dl_dir, nightly_url, force=force_dl)
+            except Exception as e:
+                log.error("%s: download failed: %s", codename, e)
+                results[codename] = "download failed"
+                continue
+
+        # ── 2. Power on ───────────────────────────────────────────────────────
+        log.info("%s: powering on port %s:%d", codename, loc, port)
+        if not dry_run:
+            uhubctl_set_power(loc, port, True)
+
+        # ── 3. Wait for ADB, with RNDIS/SSH-mode detection ───────────────────
+        serial = None
+        if not dry_run:
+            serial = wait_for_adb(codename, cfg, cfg["charge"])
+            if serial is None:
+                if _detect_rndis():
+                    print()
+                    print(f"  ⚠  {codename}: watch answered at 192.168.2.15 (SSH/RNDIS mode).")
+                    print(f"     On the watch: Settings → USB → select 'ADB Mode'.")
+                    print(f"     Waiting for ADB after the mode switch…")
+                    print()
+                    serial = wait_for_adb(codename, cfg, cfg["charge"])
+                if serial is None:
+                    log.error("%s: ADB not available — skipping", codename)
+                    results[codename] = "ADB unavailable"
+                    uhubctl_set_power(loc, port, False)
+                    continue
+
+        # ── 4. Reboot to fastboot ─────────────────────────────────────────────
+        log.info("%s: rebooting to bootloader…", codename)
+        before_fb = set(_fastboot_devices().keys())
+        if not dry_run:
+            _run(f"adb -s {serial} reboot bootloader", check=False)
+
+        # ── 5. Wait for fastboot device ───────────────────────────────────────
+        fb_serial = None
+        if not dry_run:
+            fb_serial = _wait_for_fastboot(before_fb, timeout=30)
+            if fb_serial is None:
+                log.error("%s: no fastboot device appeared — skipping", codename)
+                results[codename] = "fastboot timeout"
+                continue
+            log.info("%s: fastboot device ready (%s)", codename, fb_serial)
+
+        # ── 6. Flash ──────────────────────────────────────────────────────────
+        try:
+            _flash_watch(boot_file, img_file, fb_serial, dry_run=dry_run)
+        except RuntimeError as e:
+            log.error("%s: flash failed: %s", codename, e)
+            results[codename] = "flash failed"
+            continue
+
+        # ── 7. Clean up SSH keys ──────────────────────────────────────────────
+        if not dry_run:
+            _clear_ssh_known_hosts()
+
+        results[codename] = "ok"
+        log.info("%s: done — watch is rebooting into AsteroidOS", codename)
+
+    # ── Summary ───────────────────────────────────────────────────────────────
+    print("\n=== Flash results ===\n")
+    for codename, result in results.items():
+        icon = "✓" if result == "ok" else "✗"
+        print(f"  {icon}  {codename:<16}  {result}")
+    if any(r != "ok" for r in results.values()):
+        print("\nFailed watches remain powered on for manual inspection.")
+
+
 def cmd_map(args, cfg: dict):
     """
     Automatic port mapping: power each port on for up to 10 seconds, read
@@ -918,6 +1160,31 @@ def main():
 
     sub.add_parser("discover", help="scan for ADB-connected watches and show codenames")
 
+    p_fa = sub.add_parser(
+        "flash-all",
+        help="flash AsteroidOS nightlies to all (or a specified) configured watches",
+    )
+    p_fa.add_argument(
+        "codename", nargs="?", default="all",
+        help="watch codename, or 'all' (default)",
+    )
+    p_fa.add_argument(
+        "--local", metavar="DIR",
+        help="use image files from DIR instead of downloading nightlies",
+    )
+    p_fa.add_argument(
+        "--dry-run", action="store_true",
+        help="print fastboot commands without executing them",
+    )
+    p_fa.add_argument(
+        "--force-download", action="store_true",
+        help="re-download images even if the cached copy passes SHA512 verification",
+    )
+    p_fa.add_argument(
+        "--download-dir", metavar="DIR",
+        help="override the nightly download cache directory",
+    )
+
     args = parser.parse_args()
     setup_logging(args.verbose)
     cfg = load_config()
@@ -932,6 +1199,7 @@ def main():
         "map": cmd_map,
         "test-ports": cmd_test_ports,
         "discover": cmd_discover,
+        "flash-all": cmd_flash_all,
     }
 
     try:

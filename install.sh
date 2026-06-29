@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-FileCopyrightText: 2026 Timo Könnecke (moWerk) <mo@mowerk.net>
+# SPDX-FileCopyrightText: 2023 Ed Beroset <beroset@ieee.org>
 # install.sh — install asteroid-docking-bay for the current user.
 #
 # Usage:
