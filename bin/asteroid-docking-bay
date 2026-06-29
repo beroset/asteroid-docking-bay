@@ -335,20 +335,17 @@ def _resolve_targets(codename_arg: str, cfg: dict) -> list[str]:
 
 # ── ADB wait helpers ──────────────────────────────────────────────────────────
 
-def _wait_for_new_adb_device(known_serials: set[str], charge_cfg: dict) -> str | None:
+def _wait_for_new_adb_device(known_serials: set[str], timeout: int = 10) -> str | None:
     """
-    Poll until an ADB serial that is NOT in known_serials appears as 'device'.
-    Used by the map wizard: known_serials is the snapshot taken before powering
-    on a port, so the first new 'device' entry is the watch on that port.
+    Poll every second until an ADB serial not in known_serials appears as 'device',
+    or timeout seconds elapse.  Used by the map wizard.
     """
-    wait_secs = charge_cfg.get("adb_wait_seconds", 15)
-    retries = charge_cfg.get("adb_wait_retries", 8)
-    for attempt in range(1, retries + 1):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
         for serial, state in adb_devices().items():
             if serial not in known_serials and state == "device":
                 return serial
-        if attempt < retries:
-            time.sleep(wait_secs)
+        time.sleep(1)
     return None
 
 
@@ -689,20 +686,12 @@ def cmd_check_charge(args, cfg: dict):
 
 def cmd_map(args, cfg: dict):
     """
-    Automatic port mapping.
-
-    Powers each port on one at a time, reads the watch codename directly
-    from the device via ADB (/etc/asteroid-release), then tests per-port
-    power switching.  No manual codename entry required.
-
-    Fallback to manual entry only when a watch does not respond to ADB
-    (e.g. requires a physical power button press after USB power-on).
+    Automatic port mapping: power each port on for up to 10 seconds, read
+    the codename from whatever watch appears in ADB, run PPPS test.
+    No prompts mid-run.  Summary at the end lists what was found and which
+    ports had no response (empty or ADB not working).
     """
     print("=== asteroid-docking-bay automatic port mapping ===\n")
-    print("Each port is powered on in sequence. The watch codename is read")
-    print("directly from the device — no manual entry needed.")
-    print("Each port also gets a ~3 second power switching test (PPPS).")
-    print()
 
     hubs = uhubctl_list()
     if not hubs:
@@ -716,12 +705,11 @@ def cmd_map(args, cfg: dict):
         print(f"  {hub['location']:12}  {hub['description']}  [{ppps_note}]")
     print()
 
-    ans = input("Power off all ports now and start mapping? [Y/n] ").strip().lower()
+    ans = input("Power off all ports and start mapping? [Y/n] ").strip().lower()
     if ans not in ("", "y", "yes"):
         print("Aborted.")
         return
 
-    # Power everything off so each port produces a clean new ADB signal.
     print("\nPowering off all ports…")
     for hub in hubs:
         for port in hub["ports"]:
@@ -729,72 +717,44 @@ def cmd_map(args, cfg: dict):
                 uhubctl_set_power(hub["location"], port, False)
             except RuntimeError as e:
                 log.warning("hub %s port %d: %s", hub["location"], port, e)
-    time.sleep(2)  # let USB host deregister the devices
+    time.sleep(2)
 
     new_hubs: list[dict] = []
+    no_response: list[str] = []   # ports where no watch appeared
 
     for hub in hubs:
         loc = hub["location"]
-        ppps_note = "PPPS advertised" if hub.get("ppps") else "PPPS NOT advertised"
-        print(f"\n── Hub {loc}  [{ppps_note}]  {hub['description']} ──")
+        print(f"\n── Hub {loc}  {hub['description']} ──")
 
         port_map: dict[str, str] = {}
         port_smart: dict[str, bool] = {}
 
         for port in hub["ports"]:
-            print(f"  Port {port}:  ", end="", flush=True)
+            print(f"  Port {port}: ", end="", flush=True)
 
-            # Snapshot all currently-visible serials before powering on this port.
-            # Any new 'device' entry that appears after power-on is the watch on
-            # this port — we know because we control exactly one port at a time.
             before = set(adb_devices().keys())
             uhubctl_set_power(loc, port, True)
 
-            serial = _wait_for_new_adb_device(before, cfg["charge"])
+            serial = _wait_for_new_adb_device(before, timeout=10)
 
             if serial:
-                codename = get_watch_codename(serial)
-                if codename:
-                    print(f"{codename}  ({serial})")
-                    port_map[str(port)] = codename
-                    cfg.setdefault("serials", {})[serial] = codename
-                else:
-                    # ADB reachable but codename not found in release files.
-                    print(f"unknown watch  ({serial})")
-                    resp = input(
-                        f"    Codename not found in /etc/asteroid-release — enter manually: "
-                    ).strip()
-                    if resp:
-                        port_map[str(port)] = resp
-                        cfg.setdefault("serials", {})[serial] = resp
-                    else:
-                        print(f"    Skipped.")
-                        uhubctl_set_power(loc, port, False)
-                        continue
-            else:
-                print(f"no ADB response")
-                print(f"    Watch may need a physical power button press after USB power-on.")
-                print(f"    Press it now if needed, then wait a moment.")
-                resp = input(
-                    f"    Enter codename manually (or Enter to skip): "
-                ).strip()
-                if resp:
-                    port_map[str(port)] = resp
-                    # Serial unknown — will be discovered automatically next time
-                    # the watch is online and 'map' or 'check-charge' runs.
-                else:
-                    print(f"    Port {port} skipped.")
-                    uhubctl_set_power(loc, port, False)
-                    continue
+                codename = get_watch_codename(serial) or serial
+                print(f"{codename}  ({serial})", end="", flush=True)
+                port_map[str(port)] = codename
+                cfg.setdefault("serials", {})[serial] = codename
 
-            # PPPS test — port is ON at this point after successful discovery.
-            print(f"    Power switching:  ", end="", flush=True)
-            try:
-                smart, msg = test_port_power_switching(loc, port)
-            except RuntimeError as e:
-                smart, msg = False, str(e)
-            port_smart[str(port)] = smart
-            print(f"{'SMART [OK]' if smart else 'NOT SMART [!!]'}  ({msg})")
+                # PPPS test inline — port is ON, takes ~3 s.
+                print(f"  …testing PPPS…", end="", flush=True)
+                try:
+                    smart, msg = test_port_power_switching(loc, port)
+                except RuntimeError as e:
+                    smart, msg = False, str(e)
+                port_smart[str(port)] = smart
+                print(f"  {'[smart]' if smart else '[NOT SMART]'}")
+            else:
+                print("(no response)")
+                no_response.append(f"{loc}:p{port}")
+                uhubctl_set_power(loc, port, False)
 
         new_hubs.append({
             "location": loc,
@@ -803,29 +763,30 @@ def cmd_map(args, cfg: dict):
             "ports": port_map,
         })
 
-    # Merge: preserve hubs not visited this run.
     touched_locs = {h["location"] for h in new_hubs}
     cfg["hubs"] = new_hubs + [h for h in cfg.get("hubs", []) if h["location"] not in touched_locs]
     save_config(cfg)
 
-    # Summary
-    print("\n=== Mapping complete ===\n")
+    # ── Summary ────────────────────────────────────────────────────────────────
+    print("\n=== Results ===\n")
+
     any_non_smart = False
     for hub in cfg["hubs"]:
         for port_str, codename in sorted(hub["ports"].items(), key=lambda x: int(x[0])):
             smart = hub.get("port_smart", {}).get(port_str)
-            if smart is True:
-                tag = "smart"
-            elif smart is False:
-                tag = "NOT SMART"
+            tag = "smart" if smart is True else ("NOT SMART" if smart is False else "?")
+            if smart is False:
                 any_non_smart = True
-            else:
-                tag = "untested"
-            print(f"  {hub['location']}:p{port_str}  →  {codename}  [{tag}]")
+            print(f"  {hub['location']}:p{port_str}  →  {codename:<16}  [{tag}]")
+
+    if no_response:
+        print(f"\n  No watch detected on:")
+        for port_id in no_response:
+            print(f"    {port_id}")
+        print("  (empty port, disconnected cable, or ADB not enabled on the watch)")
 
     if any_non_smart:
         print("\nWARNING: ports marked NOT SMART cannot be power-managed.")
-        print("Battery charging requires moving those watches to a smart hub port.")
 
     print(f"\nConfig saved to {CONFIG_FILE}")
     print("Run 'asteroid-docking-bay status' to verify.")
