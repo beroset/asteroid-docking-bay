@@ -751,12 +751,12 @@ function render(ws){
     const adb=w.adb==='device'?'<span class="on">device</span>':w.adb?'<span class="dim">'+esc(w.adb)+'</span>':'<span class="dim">--</span>';
     const bat=w.battery!=null?w.battery+'%':'<span class="dim">--</span>';
     h.push(
-      '<tr class="wr" id="wr-'+esc(w.codename)+'"><td><b>'+esc(w.codename)+'</b></td><td class="dim">'+esc(w.hub)+':p'+w.port+'</td><td>'+pwr+'</td><td>'+smt+'</td><td>'+adb+'</td><td>'+bat+'</td><td>'+
-      '<button class="btn"'+d+' onclick="doUpd(\''+esc(w.codename)+'\')">Update</button>'+
-      '<button class="btn cy"'+d+' onclick="doCy(\''+esc(w.codename)+'\')">Cycle</button>'+
-      '<button class="btn fl"'+d+' onclick="doFl(\''+esc(w.codename)+'\')">Flash nightly</button>'+
-      '</td></tr>'+
-      '<tr class="lr" id="lr-'+esc(w.codename)+'"><td colspan="7"><div class="log'+(busy?' show':'')+'" id="log-'+esc(w.codename)+'"></div></td></tr>'
+      `<tr class="wr" id="wr-${esc(w.codename)}"><td><b>${esc(w.codename)}</b></td><td class="dim">${esc(w.hub)}:p${w.port}</td><td>${pwr}</td><td>${smt}</td><td>${adb}</td><td>${bat}</td><td>`+
+      `<button class="btn"${d} onclick="doUpd('${esc(w.codename)}')">Update</button>`+
+      `<button class="btn cy"${d} onclick="doCy('${esc(w.codename)}')">Cycle</button>`+
+      `<button class="btn fl"${d} onclick="doFl('${esc(w.codename)}')">Flash nightly</button>`+
+      `</td></tr>`+
+      `<tr class="lr" id="lr-${esc(w.codename)}"><td colspan="7"><div class="log${busy?' show':''}" id="log-${esc(w.codename)}"></div></td></tr>`
     );
   });
   tb.innerHTML=h.join('');
