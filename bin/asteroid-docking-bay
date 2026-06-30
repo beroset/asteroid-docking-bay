@@ -13,13 +13,18 @@ Logs:   journald (if python-systemd is installed) + stderr
 """
 
 import argparse
+import copy
 import json
 import logging
 import os
+import queue
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
+from socketserver import ThreadingMixIn
+from wsgiref.simple_server import WSGIServer, WSGIRequestHandler, make_server
 
 CONFIG_DIR = Path.home() / ".config" / "asteroid-docking-bay"
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -44,6 +49,9 @@ DEFAULT_CONFIG = {
 }
 
 log = logging.getLogger("asteroid-docking-bay")
+
+# Per-codename flash task state for the web UI's SSE streaming.
+_flash_tasks: dict[str, dict] = {}
 
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -509,6 +517,290 @@ def _clear_ssh_known_hosts():
     _run("ssh-keygen -R 192.168.2.15", check=False)
 
 
+# ── Web UI helpers ───────────────────────────────────────────────────────────
+
+class _QueueHandler(logging.Handler):
+    """Routes log records from one specific thread into a Queue for SSE streaming."""
+
+    def __init__(self, q: "queue.Queue[str | None]", thread_id: int):
+        super().__init__()
+        self.q = q
+        self.thread_id = thread_id
+
+    def emit(self, record: logging.LogRecord):
+        if record.thread == self.thread_id:
+            try:
+                self.q.put_nowait(self.format(record))
+            except Exception:
+                self.handleError(record)
+
+
+def _flash_one_watch(
+    codename: str,
+    cfg: dict,
+    flash_cfg: dict,
+    dry_run: bool = False,
+    local_dir: "Path | None" = None,
+    force_dl: bool = False,
+) -> str:
+    """
+    Flash one watch end-to-end. Progress is reported via log.*; returns "ok"
+    or a short error string. Used by both cmd_flash_all and the web UI SSE handler.
+    """
+    loc, port = find_port_for_codename(cfg, codename)
+    if loc is None:
+        log.error("%s: not mapped to any hub port", codename)
+        return "not mapped"
+    if is_port_smart(cfg, codename) is False:
+        log.error("%s: port not power-switchable — skipping", codename)
+        return "non-smart port"
+
+    dl_dir = Path(flash_cfg["download_dir"])
+    nightly_url = flash_cfg["nightly_url"]
+
+    if local_dir:
+        boot_file = local_dir / f"zImage-dtb-{codename}.fastboot"
+        img_file  = local_dir / f"asteroid-image-{codename}.rootfs.ext4"
+        missing = [f for f in (boot_file, img_file) if not f.exists()]
+        if missing:
+            log.error("%s: not found in --local: %s", codename, ", ".join(f.name for f in missing))
+            return "local images not found"
+        log.info("%s: using local images from %s", codename, local_dir)
+    else:
+        try:
+            boot_file, img_file = _download_nightly(codename, dl_dir, nightly_url, force=force_dl)
+        except Exception as e:
+            log.error("%s: download failed: %s", codename, e)
+            return "download failed"
+
+    log.info("%s: powering on port %s:%d", codename, loc, port)
+    if not dry_run:
+        uhubctl_set_power(loc, port, True)
+
+    serial = None
+    if not dry_run:
+        serial = wait_for_adb(codename, cfg, cfg["charge"])
+        if serial is None:
+            if _detect_rndis():
+                log.warning(
+                    "%s: watch at 192.168.2.15 (SSH/RNDIS mode) — "
+                    "switch to ADB mode: Settings → USB on the watch",
+                    codename,
+                )
+                serial = wait_for_adb(codename, cfg, cfg["charge"])
+            if serial is None:
+                log.error("%s: ADB not available — skipping", codename)
+                uhubctl_set_power(loc, port, False)
+                return "ADB unavailable"
+
+    log.info("%s: rebooting to bootloader…", codename)
+    before_fb = set(_fastboot_devices().keys())
+    if not dry_run:
+        _run(f"adb -s {serial} reboot bootloader", check=False)
+
+    fb_serial = None
+    if not dry_run:
+        fb_serial = _wait_for_fastboot(before_fb, timeout=30)
+        if fb_serial is None:
+            log.error("%s: no fastboot device appeared — skipping", codename)
+            return "fastboot timeout"
+        log.info("%s: fastboot device ready (%s)", codename, fb_serial)
+
+    try:
+        _flash_watch(boot_file, img_file, fb_serial, dry_run=dry_run)
+    except RuntimeError as e:
+        log.error("%s: flash failed: %s", codename, e)
+        return "flash failed"
+
+    if not dry_run:
+        _clear_ssh_known_hosts()
+
+    log.info("%s: done — watch is rebooting into AsteroidOS", codename)
+    return "ok"
+
+
+def _web_status_data(cfg: dict) -> list[dict]:
+    """Collect current status for all configured watches as a list of dicts."""
+    devices = adb_devices()
+    rows: list[dict] = []
+    for hub in cfg.get("hubs", []):
+        loc = hub["location"]
+        for port_str, codename in sorted(hub.get("ports", {}).items(), key=lambda x: int(x[0])):
+            port = int(port_str)
+            power = uhubctl_get_power(loc, port)
+            smart = hub.get("port_smart", {}).get(port_str)
+            serial = find_serial_for_codename(cfg, codename)
+            adb_state = devices.get(serial) if serial else None
+            battery = None
+            if adb_state == "device":
+                battery = get_battery_level(serial)
+            flashing = (
+                codename in _flash_tasks
+                and not _flash_tasks[codename].get("done", True)
+            )
+            rows.append({
+                "codename": codename,
+                "hub": loc,
+                "port": port,
+                "power": power,
+                "smart": smart,
+                "adb": adb_state,
+                "battery": battery,
+                "flashing": flashing,
+            })
+    return rows
+
+
+def _sse_flash_gen(codename: str, cfg: dict):
+    """
+    Generator yielding SSE-formatted strings for a flash operation.
+    Runs the flash in a daemon thread; log records from that thread are
+    captured by a _QueueHandler and forwarded as SSE data events.
+    """
+    q: "queue.Queue[str | None]" = queue.Queue()
+    flash_cfg = cfg["flash"]
+    cfg_copy = copy.deepcopy(cfg)
+
+    def _run_flash():
+        tid = threading.get_ident()
+        h = _QueueHandler(q, tid)
+        h.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
+        logging.root.addHandler(h)
+        try:
+            _flash_one_watch(codename, cfg_copy, flash_cfg)
+        except Exception as exc:
+            try:
+                q.put(f"ERROR: {exc}")
+            except Exception:
+                pass
+        finally:
+            logging.root.removeHandler(h)
+            q.put(None)
+
+    t = threading.Thread(target=_run_flash, daemon=True)
+    t.start()
+    _flash_tasks[codename] = {"thread": t, "done": False}
+
+    try:
+        while True:
+            try:
+                msg = q.get(timeout=25)
+            except queue.Empty:
+                yield ": heartbeat\n\n"
+                continue
+            if msg is None:
+                break
+            for line in (msg.splitlines() or [""]):
+                yield f"data: {line}\n"
+            yield "\n"
+        yield "event: done\ndata: complete\n\n"
+    finally:
+        _flash_tasks[codename]["done"] = True
+
+
+_WEB_TEMPLATE = """\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>asteroid-docking-bay</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{background:#0d1117;color:#c9d1d9;font:13px/1.6 'Cascadia Code','Fira Mono',monospace;padding:24px}
+    h1{color:#58a6ff;font-size:15px;letter-spacing:3px;margin-bottom:4px}
+    .meta{color:#6e7681;font-size:11px;margin-bottom:20px}
+    table{width:100%;border-collapse:collapse}
+    th{color:#6e7681;text-align:left;padding:5px 12px;border-bottom:1px solid #21262d;font-size:11px;text-transform:uppercase;letter-spacing:1px;font-weight:normal}
+    td{padding:7px 12px;border-bottom:1px solid #161b22;vertical-align:middle}
+    .wr:hover td{background:#161b22}
+    .on{color:#3fb950}.off{color:#6e7681}.warn{color:#d29922}.err{color:#f85149}.dim{color:#6e7681}
+    .dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px;vertical-align:middle}
+    .don{background:#3fb950}.doff{background:#30363d}
+    .btn{background:none;color:#c9d1d9;border:1px solid #30363d;padding:3px 9px;border-radius:4px;cursor:pointer;font:12px monospace;margin-right:3px}
+    .btn:hover{background:#21262d}
+    .cy{border-color:#d29922;color:#d29922}.cy:hover{background:#2a2113}
+    .fl{border-color:#58a6ff;color:#58a6ff}.fl:hover{background:#111d2e}
+    .btn:disabled{opacity:.35;cursor:default;pointer-events:none}
+    .lr td{padding:0 12px 8px}
+    .log{display:none;background:#010409;border:1px solid #21262d;border-radius:4px;padding:10px;font-size:12px;color:#8b949e;max-height:200px;overflow-y:auto;white-space:pre-wrap;word-break:break-all}
+    .log.show{display:block}
+  </style>
+</head>
+<body>
+  <h1>&#10022;  asteroid-docking-bay</h1>
+  <p class="meta">USB hub power manager for AsteroidOS &nbsp;&middot;&nbsp; <span id="ts">loading&hellip;</span></p>
+  <table>
+    <thead><tr>
+      <th>Watch</th><th>Port</th><th>Power</th><th>Smart</th>
+      <th>ADB</th><th>Battery</th><th>Actions</th>
+    </tr></thead>
+    <tbody id="tb"></tbody>
+  </table>
+<script>
+const srcs={};
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;')}
+function render(ws){
+  const tb=document.getElementById('tb');
+  if(!ws||!ws.length){tb.innerHTML='<tr><td colspan="7" class="dim">No watches configured. Run: asteroid-docking-bay map</td></tr>';return}
+  const h=[];
+  ws.forEach(w=>{
+    const busy=!!(srcs[w.codename]||w.flashing);
+    const d=busy?' disabled':'';
+    const pwr=w.power===true?'<span class="dot don"></span><span class="on">ON</span>':w.power===false?'<span class="dot doff"></span><span class="off">OFF</span>':'<span class="dim">---</span>';
+    const smt=w.smart===true?'<span class="on">yes</span>':w.smart===false?'<span class="err">NO!</span>':'<span class="warn">?</span>';
+    const adb=w.adb==='device'?'<span class="on">device</span>':w.adb?'<span class="dim">'+esc(w.adb)+'</span>':'<span class="dim">--</span>';
+    const bat=w.battery!=null?w.battery+'%':'<span class="dim">--</span>';
+    h.push(
+      '<tr class="wr" id="wr-'+esc(w.codename)+'"><td><b>'+esc(w.codename)+'</b></td><td class="dim">'+esc(w.hub)+':p'+w.port+'</td><td>'+pwr+'</td><td>'+smt+'</td><td>'+adb+'</td><td>'+bat+'</td><td>'+
+      '<button class="btn"'+d+' onclick="doUpd(\''+esc(w.codename)+'\')">Update</button>'+
+      '<button class="btn cy"'+d+' onclick="doCy(\''+esc(w.codename)+'\')">Cycle</button>'+
+      '<button class="btn fl"'+d+' onclick="doFl(\''+esc(w.codename)+'\')">Flash nightly</button>'+
+      '</td></tr>'+
+      '<tr class="lr" id="lr-'+esc(w.codename)+'"><td colspan="7"><div class="log'+(busy?' show':'')+'" id="log-'+esc(w.codename)+'"></div></td></tr>'
+    );
+  });
+  tb.innerHTML=h.join('');
+  Object.keys(srcs).forEach(c=>{const b=document.getElementById('log-'+c);if(b)b.classList.add('show')});
+}
+function refresh(){
+  fetch('/api/status').then(r=>r.json()).then(d=>{
+    render(d.watches);
+    document.getElementById('ts').textContent='updated '+new Date().toLocaleTimeString();
+  }).catch(()=>{document.getElementById('ts').textContent='connection error'});
+}
+function doUpd(c){fetch('/api/update/'+c,{method:'POST'}).then(()=>refresh())}
+function doCy(c){
+  const r=document.getElementById('wr-'+c);
+  if(r)r.querySelectorAll('button').forEach(b=>b.disabled=true);
+  fetch('/api/cycle/'+c,{method:'POST'}).then(()=>setTimeout(refresh,7000));
+}
+function doFl(c){
+  if(srcs[c])return;
+  const box=document.getElementById('log-'+c);
+  if(!box)return;
+  box.textContent='';box.classList.add('show');
+  const r=document.getElementById('wr-'+c);
+  if(r)r.querySelectorAll('button').forEach(b=>b.disabled=true);
+  const es=new EventSource('/api/flash/'+c);
+  srcs[c]=es;
+  es.onmessage=ev=>{box.textContent+=ev.data+'\\n';box.scrollTop=box.scrollHeight};
+  es.addEventListener('done',()=>{
+    box.textContent+='\\n── done ──\\n';
+    box.scrollTop=box.scrollHeight;
+    es.close();delete srcs[c];refresh();
+  });
+  es.onerror=()=>{
+    box.textContent+='\\n── connection lost ──\\n';
+    es.close();delete srcs[c];refresh();
+  };
+}
+refresh();setInterval(refresh,15000);
+</script>
+</body>
+</html>
+"""
+
+
 # ── Commands ──────────────────────────────────────────────────────────────────
 
 def cmd_status(args, cfg: dict):
@@ -816,12 +1108,11 @@ def cmd_flash_all(args, cfg: dict):
         print("No watches configured. Run: asteroid-docking-bay map")
         return
 
-    dry_run    = args.dry_run
-    force_dl   = args.force_download
-    local_dir  = Path(args.local) if args.local else None
-    flash_cfg  = cfg["flash"]
-    dl_dir     = Path(args.download_dir or flash_cfg["download_dir"])
-    nightly_url = flash_cfg["nightly_url"]
+    dry_run   = args.dry_run
+    local_dir = Path(args.local) if args.local else None
+    flash_cfg = cfg["flash"]
+    if args.download_dir:
+        flash_cfg = dict(flash_cfg, download_dir=args.download_dir)
 
     print()
     print("   ✨  ⋆  ˚  ✦   asteroid-docking-bay   ✦  ˚  ⋆  ✨")
@@ -830,100 +1121,90 @@ def cmd_flash_all(args, cfg: dict):
     print()
 
     results: dict[str, str] = {}
-
     for codename in targets:
         loc, port = find_port_for_codename(cfg, codename)
-        if loc is None:
-            log.error("%s: not mapped to any hub port", codename)
-            results[codename] = "not mapped"
-            continue
+        if loc is not None:
+            print(f"\n── {codename}  (hub {loc} port {port}) ──")
+        results[codename] = _flash_one_watch(
+            codename, cfg, flash_cfg,
+            dry_run=dry_run,
+            local_dir=local_dir,
+            force_dl=args.force_download,
+        )
 
-        if is_port_smart(cfg, codename) is False:
-            log.error("%s: port not power-switchable — skipping", codename)
-            results[codename] = "non-smart port"
-            continue
-
-        print(f"\n── {codename}  (hub {loc} port {port}) ──")
-
-        # ── 1. Resolve image files ────────────────────────────────────────────
-        if local_dir:
-            boot_file = local_dir / f"zImage-dtb-{codename}.fastboot"
-            img_file  = local_dir / f"asteroid-image-{codename}.rootfs.ext4"
-            missing = [f for f in (boot_file, img_file) if not f.exists()]
-            if missing:
-                log.error("%s: not found in --local dir: %s", codename, ", ".join(f.name for f in missing))
-                results[codename] = "local images not found"
-                continue
-            log.info("%s: using local images from %s", codename, local_dir)
-        else:
-            try:
-                boot_file, img_file = _download_nightly(codename, dl_dir, nightly_url, force=force_dl)
-            except Exception as e:
-                log.error("%s: download failed: %s", codename, e)
-                results[codename] = "download failed"
-                continue
-
-        # ── 2. Power on ───────────────────────────────────────────────────────
-        log.info("%s: powering on port %s:%d", codename, loc, port)
-        if not dry_run:
-            uhubctl_set_power(loc, port, True)
-
-        # ── 3. Wait for ADB, with RNDIS/SSH-mode detection ───────────────────
-        serial = None
-        if not dry_run:
-            serial = wait_for_adb(codename, cfg, cfg["charge"])
-            if serial is None:
-                if _detect_rndis():
-                    print()
-                    print(f"  ⚠  {codename}: watch answered at 192.168.2.15 (SSH/RNDIS mode).")
-                    print(f"     On the watch: Settings → USB → select 'ADB Mode'.")
-                    print(f"     Waiting for ADB after the mode switch…")
-                    print()
-                    serial = wait_for_adb(codename, cfg, cfg["charge"])
-                if serial is None:
-                    log.error("%s: ADB not available — skipping", codename)
-                    results[codename] = "ADB unavailable"
-                    uhubctl_set_power(loc, port, False)
-                    continue
-
-        # ── 4. Reboot to fastboot ─────────────────────────────────────────────
-        log.info("%s: rebooting to bootloader…", codename)
-        before_fb = set(_fastboot_devices().keys())
-        if not dry_run:
-            _run(f"adb -s {serial} reboot bootloader", check=False)
-
-        # ── 5. Wait for fastboot device ───────────────────────────────────────
-        fb_serial = None
-        if not dry_run:
-            fb_serial = _wait_for_fastboot(before_fb, timeout=30)
-            if fb_serial is None:
-                log.error("%s: no fastboot device appeared — skipping", codename)
-                results[codename] = "fastboot timeout"
-                continue
-            log.info("%s: fastboot device ready (%s)", codename, fb_serial)
-
-        # ── 6. Flash ──────────────────────────────────────────────────────────
-        try:
-            _flash_watch(boot_file, img_file, fb_serial, dry_run=dry_run)
-        except RuntimeError as e:
-            log.error("%s: flash failed: %s", codename, e)
-            results[codename] = "flash failed"
-            continue
-
-        # ── 7. Clean up SSH keys ──────────────────────────────────────────────
-        if not dry_run:
-            _clear_ssh_known_hosts()
-
-        results[codename] = "ok"
-        log.info("%s: done — watch is rebooting into AsteroidOS", codename)
-
-    # ── Summary ───────────────────────────────────────────────────────────────
     print("\n=== Flash results ===\n")
     for codename, result in results.items():
         icon = "✓" if result == "ok" else "✗"
         print(f"  {icon}  {codename:<16}  {result}")
     if any(r != "ok" for r in results.values()):
         print("\nFailed watches remain powered on for manual inspection.")
+
+
+def cmd_serve(args, cfg: dict):
+    """Start the web UI. Requires: pip install bottle"""
+    try:
+        from bottle import Bottle, response as resp
+    except ImportError:
+        log.error("bottle is required for 'serve'.\nInstall it:  pip install bottle")
+        sys.exit(1)
+
+    app = Bottle()
+
+    @app.get("/")
+    def index():
+        return _WEB_TEMPLATE
+
+    @app.get("/api/status")
+    def api_status():
+        resp.content_type = "application/json"
+        return json.dumps({"watches": _web_status_data(load_config())})
+
+    @app.post("/api/update/<codename>")
+    def api_update(codename):
+        resp.content_type = "application/json"
+        return json.dumps({"watches": _web_status_data(load_config())})
+
+    @app.post("/api/cycle/<codename>")
+    def api_cycle(codename):
+        resp.content_type = "application/json"
+        c_cfg = load_config()
+        loc, port = find_port_for_codename(c_cfg, codename)
+        if loc is None:
+            return json.dumps({"error": "not mapped"})
+        try:
+            uhubctl_set_power(loc, port, False)
+            time.sleep(5)
+            uhubctl_set_power(loc, port, True)
+        except RuntimeError as e:
+            return json.dumps({"error": str(e)})
+        return json.dumps({"ok": True})
+
+    @app.get("/api/flash/<codename>")
+    def api_flash(codename):
+        resp.content_type = "text/event-stream"
+        resp.headers["Cache-Control"] = "no-cache"
+        resp.headers["X-Accel-Buffering"] = "no"
+        if codename in _flash_tasks and not _flash_tasks[codename].get("done", True):
+            def _busy():
+                yield "data: flash already in progress\n\nevent: done\ndata: \n\n"
+            return _busy()
+        return _sse_flash_gen(codename, load_config())
+
+    class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
+        daemon_threads = True
+
+    host, port = args.host, args.port
+    log.info("Web UI starting on http://%s:%d/", host, port)
+    print(f"asteroid-docking-bay web UI → http://{host}:{port}/")
+    httpd = make_server(
+        host, port, app,
+        server_class=_ThreadingWSGIServer,
+        handler_class=WSGIRequestHandler,
+    )
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        log.info("Web server stopped.")
 
 
 def cmd_map(args, cfg: dict):
@@ -1160,6 +1441,16 @@ def main():
 
     sub.add_parser("discover", help="scan for ADB-connected watches and show codenames")
 
+    p_sv = sub.add_parser("serve", help="start the web UI (requires: pip install bottle)")
+    p_sv.add_argument(
+        "--host", default="127.0.0.1", metavar="HOST",
+        help="bind address (default: 127.0.0.1)",
+    )
+    p_sv.add_argument(
+        "--port", type=int, default=8080, metavar="PORT",
+        help="port to listen on (default: 8080)",
+    )
+
     p_fa = sub.add_parser(
         "flash-all",
         help="flash AsteroidOS nightlies to all (or a specified) configured watches",
@@ -1200,6 +1491,7 @@ def main():
         "test-ports": cmd_test_ports,
         "discover": cmd_discover,
         "flash-all": cmd_flash_all,
+        "serve": cmd_serve,
     }
 
     try:

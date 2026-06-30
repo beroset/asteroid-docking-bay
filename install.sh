@@ -35,11 +35,14 @@ if [[ $UNINSTALL -eq 1 ]]; then
     systemctl --user stop  asteroid-docking-bay-charge.timer  2>/dev/null || true
     systemctl --user disable asteroid-docking-bay-charge.timer 2>/dev/null || true
     systemctl --user stop  asteroid-docking-bay-charge.service 2>/dev/null || true
+    systemctl --user stop  asteroid-docking-bay-web.service    2>/dev/null || true
+    systemctl --user disable asteroid-docking-bay-web.service  2>/dev/null || true
 
     echo "Removing installed files…"
     rm -f "${BIN_DIR}/asteroid-docking-bay"
     rm -f "${SYSTEMD_USER_DIR}/asteroid-docking-bay-charge.service"
     rm -f "${SYSTEMD_USER_DIR}/asteroid-docking-bay-charge.timer"
+    rm -f "${SYSTEMD_USER_DIR}/asteroid-docking-bay-web.service"
 
     systemctl --user daemon-reload
     echo "Uninstall complete. Config and serial mapping preserved in ${CONFIG_DIR}"
@@ -92,7 +95,8 @@ fi
 echo "Installing systemd user units to ${SYSTEMD_USER_DIR}…"
 mkdir -p "${SYSTEMD_USER_DIR}"
 install -m 644 systemd/asteroid-docking-bay-charge.service "${SYSTEMD_USER_DIR}/"
-install -m 644 systemd/asteroid-docking-bay-charge.timer  "${SYSTEMD_USER_DIR}/"
+install -m 644 systemd/asteroid-docking-bay-charge.timer   "${SYSTEMD_USER_DIR}/"
+install -m 644 systemd/asteroid-docking-bay-web.service    "${SYSTEMD_USER_DIR}/"
 systemctl --user daemon-reload
 
 # ── udev rules ────────────────────────────────────────────────────────────────
@@ -114,6 +118,9 @@ echo "  1. Set up udev rules (see above) for rootless operation."
 echo "  2. Map your hubs:     asteroid-docking-bay map"
 echo "  3. Verify:            asteroid-docking-bay status"
 echo "  4. Enable the timer:  systemctl --user enable --now asteroid-docking-bay-charge.timer"
+echo "  5. Web UI (optional): pip install bottle"
+echo "                        systemctl --user enable --now asteroid-docking-bay-web.service"
+echo "                        # then open http://127.0.0.1:8080/"
 echo ""
 echo "Config will be created at ${CONFIG_DIR}/config.json on first use."
 echo "See config.example.json in this repo for all available options."

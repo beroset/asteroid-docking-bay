@@ -33,17 +33,20 @@ ADB shell. This is the standard Linux power-supply class — `dumpsys` and
 | adb | any | `android-tools` or `android-sdk-platform-tools` |
 | fastboot | any | required for `flash-all`; same package as adb |
 | wget | any | required for `flash-all` nightly downloads |
+| [bottle](https://bottlepy.org/) | any recent | optional; required for `serve` (web UI) |
 
 ### Installing dependencies
 
 **Arch Linux**
 ```sh
 sudo pacman -S uhubctl android-tools
+pip install bottle   # optional, for the web UI
 ```
 
 **Debian / Ubuntu**
 ```sh
 sudo apt install uhubctl android-tools-adb
+pip install bottle   # optional, for the web UI
 ```
 
 ## Installation
@@ -159,6 +162,32 @@ Scan for ADB-connected watches and print their codename and serial. Useful for
 finding serials after a new watch is connected.
 
 ```
+asteroid-docking-bay serve [--host HOST] [--port PORT]
+```
+Start the web UI (requires `pip install bottle`). Serves a live status page at
+`http://HOST:PORT/` (default: `http://127.0.0.1:8080/`).
+
+Each configured watch is shown as a table row with three per-row buttons:
+
+- **Update** — re-reads ADB state and battery level for that watch.
+- **Cycle** — power-cycles the USB port (off → 5 s → on). Buttons are
+  re-enabled automatically after ADB is expected back (~7 s).
+- **Flash nightly** — runs a full nightly flash for that watch with live
+  streaming output (server-sent events). The log box appears inline below
+  the row and streams `fastboot` + download progress until done.
+
+The page auto-refreshes every 15 seconds. `--host 0.0.0.0` makes it
+reachable from other machines on the network.
+
+For persistent background operation, use the included systemd service:
+```sh
+# One-time setup
+pip install bottle
+systemctl --user enable --now asteroid-docking-bay-web.service
+# → http://127.0.0.1:8080/
+```
+
+```
 asteroid-docking-bay flash-all [codename|all] [--local DIR] [--dry-run]
                                 [--force-download] [--download-dir DIR]
 ```
@@ -227,8 +256,9 @@ The `check_interval_hours` field does **not** drive scheduling. Edit
 `~/.config/systemd/user/asteroid-docking-bay-charge.timer` to change the
 interval, then reload: `systemctl --user daemon-reload`.
 
-## Systemd timer
+## Systemd units
 
+### Charge timer
 ```sh
 # Enable and start
 systemctl --user enable --now asteroid-docking-bay-charge.timer
@@ -242,6 +272,29 @@ journalctl --user -u asteroid-docking-bay-charge.service -f
 
 # Disable
 systemctl --user disable --now asteroid-docking-bay-charge.timer
+```
+
+### Web UI service
+```sh
+pip install bottle   # one-time
+
+# Enable and start (serves at http://127.0.0.1:8080/)
+systemctl --user enable --now asteroid-docking-bay-web.service
+
+# View logs
+journalctl --user -u asteroid-docking-bay-web.service -f
+
+# Disable
+systemctl --user disable --now asteroid-docking-bay-web.service
+```
+
+To change the port, override the service:
+```sh
+systemctl --user edit asteroid-docking-bay-web.service
+# add:
+# [Service]
+# ExecStart=
+# ExecStart=%h/.local/bin/asteroid-docking-bay serve --port 9090
 ```
 
 ## Hardware notes

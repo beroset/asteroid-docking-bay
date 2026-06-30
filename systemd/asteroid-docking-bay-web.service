@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-FileCopyrightText: 2026 Timo Könnecke (moWerk) <mo@mowerk.net>
+# SPDX-FileCopyrightText: 2023 Ed Beroset <beroset@ieee.org>
+[Unit]
+Description=AsteroidOS Docking Bay — web UI
+Documentation=https://github.com/moWerk/asteroid-docking-bay
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/asteroid-docking-bay serve
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=asteroid-docking-bay-web
+
+[Install]
+WantedBy=default.target
