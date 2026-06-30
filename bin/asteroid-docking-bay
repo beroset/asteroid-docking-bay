@@ -778,9 +778,16 @@ const srcs={};
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;')}
 function mkpwr(v){return v===true?'<span class="dot don"></span><span class="on">ON</span>':v===false?'<span class="dot doff"></span><span class="off">OFF</span>':'<span class="dim">---</span>'}
 function mksmt(v){return v===true?'<span class="on">yes</span>':v===false?'<span class="err">NO!</span>':'<span class="warn">?</span>'}
+function mkbat(v,lo,hi){
+  if(v==null)return '<span class="dim">&mdash;</span>';
+  const cls=v<lo?'err':v<=hi?'on':'dim';
+  return `<span class="${cls}">${v}%</span>`;
+}
 function render(data){
   const tb=document.getElementById('tb');
   const hubs=(data&&data.hubs)||[];
+  const lo=(data&&data.thresholds&&data.thresholds.low)||40;
+  const hi=(data&&data.thresholds&&data.thresholds.high)||80;
   if(!hubs.length){tb.innerHTML='<tr><td colspan="8" class="dim">No watches configured. Run: asteroid-docking-bay map</td></tr>';return}
   const rows=[];
   hubs.forEach(hub=>{
@@ -804,7 +811,7 @@ function render(data){
         const busy=!!(srcs[p.codename]||p.flashing);
         const d=busy?' disabled':'';
         const adb=p.adb==='device'?'<span class="on">device</span>':p.adb?`<span class="dim">${esc(p.adb)}</span>`:'<span class="dim">&mdash;</span>';
-        const bat=p.battery!=null?p.battery+'%':'<span class="dim">&mdash;</span>';
+        const bat=mkbat(p.battery,lo,hi);
         rows.push(
           `<tr class="wr" id="wr-${esc(p.codename)}">` +
           `<td class="tc">${tree}</td>` +
@@ -1213,7 +1220,14 @@ def cmd_serve(args, cfg: dict):
     def api_status():
         resp.content_type = "application/json"
         c_cfg = load_config()
-        return json.dumps({"hubs": _web_status_data(c_cfg)})
+        charge_cfg = c_cfg.get("charge", c_cfg)
+        return json.dumps({
+            "hubs": _web_status_data(c_cfg),
+            "thresholds": {
+                "low":  charge_cfg.get("low_threshold",  40),
+                "high": charge_cfg.get("high_threshold", 80),
+            },
+        })
 
     @app.post("/api/update/<codename>")
     def api_update(codename):
