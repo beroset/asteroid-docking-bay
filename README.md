@@ -8,7 +8,7 @@ healthy mid-range (40–80% by default) without constant trickle charging or
 deep discharge while the watches are physically docked.
 
 Also automates flashing AsteroidOS nightlies to an entire docked fleet in
-one command (`flash-all`).
+one command (`flash`).
 
 ## How it works
 
@@ -31,8 +31,8 @@ ADB shell. This is the standard Linux power-supply class — `dumpsys` and
 | Python 3 | ≥ 3.9 | stdlib only; `python-systemd` optional for journald |
 | [uhubctl](https://github.com/mvp/uhubctl) | any recent | for hub power control |
 | adb | any | `android-tools` or `android-sdk-platform-tools` |
-| fastboot | any | required for `flash-all`; same package as adb |
-| wget | any | required for `flash-all` nightly downloads |
+| fastboot | any | required for `flash`; same package as adb |
+| wget | any | required for `flash` nightly downloads |
 | [bottle](https://bottlepy.org/) | any recent | optional; required for `serve` (web UI) |
 
 ### Installing dependencies
@@ -188,7 +188,7 @@ systemctl --user enable --now asteroid-docking-bay-web.service
 ```
 
 ```
-asteroid-docking-bay flash-all [codename|all] [--local DIR] [--dry-run]
+asteroid-docking-bay flash [codename|all] [--local DIR] [--dry-run]
                                 [--force-download] [--download-dir DIR]
 ```
 Flash AsteroidOS nightlies to all configured watches (or a single codename) in
@@ -341,6 +341,6 @@ GPL-3.0-only — see [LICENSE](LICENSE).
 Copyright (C) 2026 Timo Könnecke (moWerk) \<mo@mowerk.net\>  
 Copyright (C) 2023 Ed Beroset \<beroset@ieee.org\>
 
-The flashing sequence in `flash-all` is based on
+The flashing sequence in `flash` is based on
 [beroset/asteroid-hosttools](https://github.com/beroset/asteroid-hosttools)
 (`flashy`), which is also GPL-3.0-only.
