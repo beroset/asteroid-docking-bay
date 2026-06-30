@@ -53,6 +53,9 @@ log = logging.getLogger("asteroid-docking-bay")
 # Per-codename flash task state for the web UI's SSE streaming.
 _flash_tasks: dict[str, dict] = {}
 
+# Per-codename charge task state for the web UI's live countdown.
+_charge_tasks: dict[str, dict] = {}
+
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
@@ -619,6 +622,37 @@ def _flash_one_watch(
     return "ok"
 
 
+def _run_charge_for_web(codename: str, cfg: dict) -> None:
+    """Run a manual charge cycle for the web UI; updates _charge_tasks state."""
+    charge_cfg = cfg.get("charge", cfg)
+    duration_sec = charge_cfg.get("charge_duration_minutes", 30) * 60
+    loc, port = find_port_for_codename(cfg, codename)
+    if loc is None:
+        _charge_tasks[codename] = {"done": True, "error": "not mapped"}
+        return
+
+    try:
+        uhubctl_set_power(loc, port, True)
+        serial = find_serial_for_codename(cfg, codename)
+        wait_for_adb(
+            serial,
+            charge_cfg.get("adb_wait_seconds", 15),
+            charge_cfg.get("adb_wait_retries", 8),
+        )
+        end_ts = time.time() + duration_sec
+        _charge_tasks[codename]["charge_end_ts"] = end_ts
+        time.sleep(duration_sec)
+    except Exception as exc:
+        log.warning("%s: charge failed: %s", codename, exc)
+    finally:
+        try:
+            uhubctl_set_power(loc, port, False)
+        except Exception:
+            pass
+        _charge_tasks[codename]["done"] = True
+        _charge_tasks[codename].pop("charge_end_ts", None)
+
+
 def _web_status_data(cfg: dict) -> list[dict]:
     """
     Return hub-structured status including unmapped (empty) ports.
@@ -656,11 +690,17 @@ def _web_status_data(cfg: dict) -> list[dict]:
                 codename in _flash_tasks
                 and not _flash_tasks[codename].get("done", True)
             )
+            charge_end_ts = (
+                _charge_tasks[codename].get("charge_end_ts")
+                if codename in _charge_tasks
+                else None
+            )
             hub_ports.append({
                 "port": port_num, "codename": codename,
                 "power": power, "smart": smart,
                 "adb": adb_state, "battery": battery,
                 "flashing": flashing, "empty": False,
+                "charge_end_ts": charge_end_ts,
             })
 
         for port_num in empty_nums:
@@ -757,6 +797,7 @@ _WEB_TEMPLATE = """\
     .btn:hover{background:#21262d}
     .cy{border-color:#d29922;color:#d29922}.cy:hover{background:#2a2113}
     .fl{border-color:#58a6ff;color:#58a6ff}.fl:hover{background:#111d2e}
+    .ch{border-color:#3fb950;color:#3fb950}.ch:hover{background:#0f2a18}
     .btn:disabled{opacity:.35;cursor:default;pointer-events:none}
     .lr td{padding:0 12px 8px}
     .log{display:none;background:#010409;border:1px solid #21262d;border-radius:4px;padding:10px;font-size:12px;color:#8b949e;max-height:200px;overflow-y:auto;white-space:pre-wrap;word-break:break-all}
@@ -775,6 +816,7 @@ _WEB_TEMPLATE = """\
   </table>
 <script>
 const srcs={};
+const chargeEnd={};
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;')}
 function mkpwr(v){return v===true?'<span class="dot don"></span><span class="on">ON</span>':v===false?'<span class="dot doff"></span><span class="off">OFF</span>':'<span class="dim">---</span>'}
 function mksmt(v){return v===true?'<span class="on">yes</span>':v===false?'<span class="err">NO!</span>':'<span class="warn">?</span>'}
@@ -808,10 +850,12 @@ function render(data){
           `</tr>`
         );
       }else{
-        const busy=!!(srcs[p.codename]||p.flashing);
+        if(p.charge_end_ts&&!chargeEnd[p.codename])chargeEnd[p.codename]=p.charge_end_ts*1000;
+        const charging=!!(chargeEnd[p.codename]&&chargeEnd[p.codename]>Date.now());
+        const busy=!!(srcs[p.codename]||p.flashing||charging);
         const d=busy?' disabled':'';
         const adb=p.adb==='device'?'<span class="on">device</span>':p.adb?`<span class="dim">${esc(p.adb)}</span>`:'<span class="dim">&mdash;</span>';
-        const bat=mkbat(p.battery,lo,hi);
+        const bat=charging?'<span class="warn">&#9889;&hellip;</span>':mkbat(p.battery,lo,hi);
         rows.push(
           `<tr class="wr" id="wr-${esc(p.codename)}">` +
           `<td class="tc">${tree}</td>` +
@@ -824,6 +868,7 @@ function render(data){
           `<td>` +
           `<button class="btn"${d} onclick="doRefresh()">Refresh</button>` +
           `<button class="btn cy"${d} onclick="doCy('${esc(p.codename)}')">Cycle</button>` +
+          `<button class="btn ch"${d} onclick="doCharge('${esc(p.codename)}')">&#9889; Charge</button>` +
           `<button class="btn fl"${d} onclick="doFl('${esc(p.codename)}')">Flash nightly</button>` +
           `</td></tr>` +
           `<tr class="lr" id="lr-${esc(p.codename)}"><td colspan="8"><div class="log${busy?' show':''}" id="log-${esc(p.codename)}"></div></td></tr>`
@@ -842,6 +887,29 @@ function doCy(c){
   const r=document.getElementById('wr-'+c);
   if(r)r.querySelectorAll('button').forEach(b=>b.disabled=true);
   fetch('/api/cycle/'+c,{method:'POST'}).then(()=>setTimeout(refresh,7000));
+}
+function doCharge(c){
+  if(chargeEnd[c])return;
+  const r=document.getElementById('wr-'+c);
+  if(r)r.querySelectorAll('button').forEach(b=>b.disabled=true);
+  fetch('/api/charge/'+c,{method:'POST'}).then(rr=>rr.json()).then(d=>{
+    if(d.ok){chargeEnd[c]=Date.now()+d.duration_seconds*1000;tickCountdown();}
+    else{if(r)r.querySelectorAll('button').forEach(b=>b.disabled=false);}
+  });
+}
+function tickCountdown(){
+  const now=Date.now();let any=false;
+  Object.keys(chargeEnd).forEach(c=>{
+    const rem=Math.max(0,Math.round((chargeEnd[c]-now)/1000));
+    const cell=document.getElementById('bat-'+c);
+    if(!cell)return;
+    if(rem>0){
+      any=true;
+      const m=Math.floor(rem/60),s=rem%60;
+      cell.innerHTML=`<span class="warn">&#9889; ${m}m${String(s).padStart(2,'0')}s</span>`;
+    }else{delete chargeEnd[c];refresh();}
+  });
+  if(any)setTimeout(tickCountdown,1000);
 }
 function doFl(c){
   if(srcs[c])return;
@@ -1248,6 +1316,23 @@ def cmd_serve(args, cfg: dict):
         except RuntimeError as e:
             return json.dumps({"error": str(e)})
         return json.dumps({"ok": True})
+
+    @app.post("/api/charge/<codename>")
+    def api_charge(codename):
+        resp.content_type = "application/json"
+        if codename in _charge_tasks and not _charge_tasks[codename].get("done", True):
+            existing_ts = _charge_tasks[codename].get("charge_end_ts", 0)
+            return json.dumps({"ok": False, "error": "charge already running",
+                                "charge_end_ts": existing_ts})
+        c_cfg = load_config()
+        charge_cfg = c_cfg.get("charge", c_cfg)
+        duration_sec = charge_cfg.get("charge_duration_minutes", 30) * 60
+        _charge_tasks[codename] = {"done": False}
+        t = threading.Thread(
+            target=_run_charge_for_web, args=(codename, c_cfg), daemon=True
+        )
+        t.start()
+        return json.dumps({"ok": True, "duration_seconds": duration_sec})
 
     @app.get("/api/flash/<codename>")
     def api_flash(codename):
