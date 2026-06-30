@@ -193,13 +193,28 @@ def uhubctl_get_power(location: str, port: int) -> bool | None:
     return None
 
 
-def uhubctl_set_power(location: str, port: int, on: bool):
+def uhubctl_set_power(location: str, port: int, on: bool) -> bool:
+    """
+    Set hub port power.  Returns True if the port state was confirmed to have
+    changed, False if uhubctl accepted the command but a read-back shows the
+    port is still in the old state (indicates a hub that cannot actually switch
+    per-port power despite claiming to support it).
+    Raises RuntimeError on uhubctl command failure.
+    """
     action = "on" if on else "off"
     rc, _, err = _run(f"uhubctl -l {location} -p {port} -a {action}", check=False)
     if rc != 0:
         raise RuntimeError(
             f"uhubctl failed setting hub {location} port {port} {action}: {err}"
         )
+    confirmed = uhubctl_get_power(location, port) == on
+    if not confirmed:
+        log.warning(
+            "uhubctl set %s port %d %s: command succeeded but port state did not change"
+            " — hub may not support per-port power switching",
+            location, port, action,
+        )
+    return confirmed
 
 
 def test_port_power_switching(location: str, port: int) -> tuple[bool, str]:
@@ -823,6 +838,8 @@ _WEB_TEMPLATE = """\
     .wr.refreshing td{animation:rpulse 1.1s ease-in-out infinite}
     .wr.refreshing:hover td{background:transparent!important;animation:rpulse 1.1s ease-in-out infinite}
     .btn-ref.pulsing{animation:bpulse .85s ease-in-out infinite!important;border-color:#58a6ff!important;color:#58a6ff!important}
+    @keyframes pwrwarn{0%,100%{background:transparent}40%{background:rgba(248,81,73,.12)}}
+    .wr.pwr-warn td{animation:pwrwarn 1.8s ease-in-out 2}
   </style>
 </head>
 <body>
@@ -912,12 +929,28 @@ function doRefresh(c){
   if(c){refreshing.add(c);setTimeout(()=>refreshing.delete(c),10000);}
   refresh();
 }
+function _pwrFlash(c){
+  const r=document.getElementById('wr-'+c);
+  if(!r)return;
+  r.classList.add('pwr-warn');
+  setTimeout(()=>{r.classList.remove('pwr-warn');refresh();},3800);
+}
 function doOn(c){
-  fetch('/api/on/'+c,{method:'POST'}).then(()=>setTimeout(refresh,2000));
+  fetch('/api/on/'+c,{method:'POST'}).then(rr=>rr.json()).then(d=>{
+    if(d.confirmed===false)_pwrFlash(c);else setTimeout(refresh,2000);
+  });
 }
 function doOff(c){
   _haltClear(c);
-  fetch('/api/off/'+c,{method:'POST'}).then(()=>refresh());
+  fetch('/api/off/'+c,{method:'POST'}).then(rr=>rr.json()).then(d=>{
+    if(d.confirmed===false)_pwrFlash(c);else refresh();
+  });
+}
+function doPoweroff(c){
+  _haltClear(c);
+  fetch('/api/poweroff/'+c,{method:'POST'}).then(rr=>rr.json()).then(d=>{
+    if(d.confirmed===false)_pwrFlash(c);else setTimeout(refresh,4000);
+  });
 }
 const halting={};const haltTimers={};
 function _haltClear(c){delete halting[c];clearTimeout(haltTimers[c]);}
@@ -927,7 +960,7 @@ function doHalt(c){
   const cell=document.getElementById('act-'+c);
   if(!cell)return;
   cell.innerHTML=
-    `<button class="btn hcut" onclick="doOff('${c}')">Power off</button>`+
+    `<button class="btn hcut" onclick="doPoweroff('${c}')">Power off</button>`+
     `<button class="btn hrb" onclick="doReboot('${c}')">Reboot</button>`+
     `<button class="btn hbl" onclick="doBootloader('${c}')">Bootloader</button>`+
     `<button class="btn" onclick="closeHalt('${c}')">&#x2715;</button>`;
@@ -1369,10 +1402,10 @@ def cmd_serve(args, cfg: dict):
         if loc is None:
             return json.dumps({"error": "not mapped"})
         try:
-            uhubctl_set_power(loc, port, True)
+            confirmed = uhubctl_set_power(loc, port, True)
         except RuntimeError as e:
             return json.dumps({"error": str(e)})
-        return json.dumps({"ok": True})
+        return json.dumps({"ok": True, "confirmed": confirmed})
 
     @app.post("/api/off/<codename>")
     def api_off(codename):
@@ -1382,10 +1415,32 @@ def cmd_serve(args, cfg: dict):
         if loc is None:
             return json.dumps({"error": "not mapped"})
         try:
-            uhubctl_set_power(loc, port, False)
+            confirmed = uhubctl_set_power(loc, port, False)
         except RuntimeError as e:
             return json.dumps({"error": str(e)})
-        return json.dumps({"ok": True})
+        return json.dumps({"ok": True, "confirmed": confirmed})
+
+    @app.post("/api/poweroff/<codename>")
+    def api_poweroff(codename):
+        """Graceful OS shutdown: adb shell poweroff, then cut USB power."""
+        resp.content_type = "application/json"
+        c_cfg = load_config()
+        loc, port  = find_port_for_codename(c_cfg, codename)
+        serial     = find_serial_for_codename(c_cfg, codename)
+        adb_ok = False
+        if serial:
+            rc, _, _ = _run(f"adb -s {serial} shell poweroff", check=False)
+            adb_ok = (rc == 0)
+            time.sleep(3)
+        confirmed = False
+        if loc is not None:
+            try:
+                confirmed = uhubctl_set_power(loc, port, False)
+            except RuntimeError as e:
+                return json.dumps({"ok": False, "error": str(e),
+                                   "adb_shutdown": adb_ok})
+        return json.dumps({"ok": True, "adb_shutdown": adb_ok,
+                           "confirmed": confirmed})
 
     @app.post("/api/reboot/<codename>")
     def api_reboot(codename):
