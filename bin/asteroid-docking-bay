@@ -202,7 +202,7 @@ def uhubctl_set_power(location: str, port: int, on: bool) -> bool:
     Raises RuntimeError on uhubctl command failure.
     """
     action = "on" if on else "off"
-    rc, _, err = _run(f"uhubctl -l {location} -p {port} -a {action}", check=False)
+    rc, _, err = _run(f"uhubctl -S -l {location} -p {port} -a {action}", check=False)
     if rc != 0:
         raise RuntimeError(
             f"uhubctl failed setting hub {location} port {port} {action}: {err}"
