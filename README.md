@@ -10,6 +10,8 @@ deep discharge while the watches are physically docked.
 Also automates flashing AsteroidOS nightlies to an entire docked fleet in
 one command (`flash`).
 
+<img width="1501" height="631" alt="asteroid-docking-bay Web UI" src="https://github.com/user-attachments/assets/3bf9cc0e-ac0c-4aee-97b9-0624f2b92bb6" />
+
 ## How it works
 
 1. Watches are physically connected to smart USB hubs that support per-port
@@ -107,6 +109,8 @@ asteroid-docking-bay status
 # Step 3: enable the automatic charging timer
 systemctl --user enable --now asteroid-docking-bay-charge.timer
 ```
+
+<img width="999" height="907" alt="After executing asteroid-docking-bay map" src="https://github.com/user-attachments/assets/07f0756e-3188-44df-8b3e-905e868177f1" />
 
 ## Commands
 
