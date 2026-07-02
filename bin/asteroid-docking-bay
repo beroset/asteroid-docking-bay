@@ -57,6 +57,9 @@ _flash_tasks: dict[str, dict] = {}
 # Per-codename charge task state for the web UI's live countdown.
 _charge_tasks: dict[str, dict] = {}
 
+# Per-slot stop event; set to cancel a running web charge cycle early.
+_charge_stop: dict[str, threading.Event] = {}
+
 # Per-slot remap task state for the web UI's SSE streaming.
 _remap_tasks: dict[str, dict] = {}
 
@@ -764,6 +767,7 @@ def _run_charge_for_web(slot: str, loc: str, port: int, cfg: dict) -> None:
     charge_cfg = cfg.get("charge", cfg)
     duration_sec = charge_cfg.get("charge_duration_minutes", 30) * 60
     codename = find_codename_for_loc_port(cfg, loc, port) or slot
+    stop_event = _charge_stop[slot]
 
     log.info("%s: waiting for ADB bus…", codename)
     with _adb_lock:
@@ -777,10 +781,19 @@ def _run_charge_for_web(slot: str, loc: str, port: int, cfg: dict) -> None:
                     if adb_devices().get(serial) == "device":
                         break
                     log.info("%s: waiting for ADB (%s)…", codename, serial)
-                    time.sleep(wait_secs)
+                    if stop_event.wait(timeout=wait_secs):
+                        log.info("%s: charge cancelled while waiting for ADB", codename)
+                        return
+            if stop_event.is_set():
+                return
             end_ts = time.time() + duration_sec
             _charge_tasks[slot]["charge_end_ts"] = end_ts
-            time.sleep(duration_sec)
+            # Sleep in 5-second chunks so a stop request is noticed promptly.
+            while not stop_event.wait(timeout=5):
+                if time.time() >= end_ts:
+                    break
+            if stop_event.is_set():
+                log.info("%s: charge stopped by user", codename)
         except Exception as exc:
             log.warning("%s: charge failed: %s", codename, exc)
         finally:
@@ -790,6 +803,7 @@ def _run_charge_for_web(slot: str, loc: str, port: int, cfg: dict) -> None:
                 pass
             _charge_tasks[slot]["done"] = True
             _charge_tasks[slot].pop("charge_end_ts", None)
+            _charge_stop.pop(slot, None)
 
 
 def _web_status_data(cfg: dict) -> list[dict]:
@@ -1150,6 +1164,7 @@ _WEB_TEMPLATE = """\
 <script>
 const srcs={};
 const chargeEnd={};
+let countdownRunning=false;
 const refreshing=new Set();
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;')}
 function mkpwr(v){return v===true?'<span class="dot don"></span><span class="on">ON</span>':v===false?'<span class="dot doff"></span><span class="off">OFF</span>':'<span class="dim">---</span>'}
@@ -1228,7 +1243,10 @@ function render(data){
           `<td id="act-${esc(slot)}">` +
           `<button class="btn btn-ref${isRef?' pulsing':''}"${d} onclick="doRefresh('${esc(slot)}')">Refresh</button>` +
           (p.power===true&&!isFb?`<button class="btn ht"${d} onclick="doHalt('${esc(slot)}')">&#x23FB; Halt</button>`:'')+
-          (!isFb?`<button class="btn ch"${d} onclick="doCharge('${esc(slot)}')">&#9889; Charge</button>`:'')+
+          (!isFb?(charging
+            ?`<button class="btn ch" onclick="doStopCharge('${esc(slot)}')">&#9632; Stop charge</button>`
+            :`<button class="btn ch"${d} onclick="doCharge('${esc(slot)}')">&#9889; Charge</button>`
+          ):'')+
           `<button class="btn fl"${d} onclick="doFl('${esc(slot)}')">Flash nightly</button>` +
           `</td></tr>` +
           `<tr class="lr" id="lr-${esc(slot)}"><td colspan="8"><div class="log${logActive?' show':''}" id="log-${esc(slot)}"></div></td></tr>`
@@ -1238,6 +1256,7 @@ function render(data){
   });
   tb.innerHTML=rows.join('');
   Object.keys(srcs).forEach(c=>{const b=document.getElementById('log-'+c);if(b)b.classList.add('show')});
+  if(Object.keys(chargeEnd).length>0&&!countdownRunning)tickCountdown();
 }
 function refresh(){
   fetch('/api/status').then(r=>r.json()).then(d=>{render(d);document.getElementById('ts').textContent='updated '+new Date().toLocaleTimeString()}).catch(()=>{document.getElementById('ts').textContent='connection error'});
@@ -1308,6 +1327,7 @@ function doCharge(c){
   });
 }
 function tickCountdown(){
+  countdownRunning=true;
   const now=Date.now();let any=false;
   Object.keys(chargeEnd).forEach(c=>{
     const rem=Math.max(0,Math.round((chargeEnd[c]-now)/1000));
@@ -1319,7 +1339,10 @@ function tickCountdown(){
       cell.innerHTML=`<span class="warn">&#9889; ${m}m${String(s).padStart(2,'0')}s</span>`;
     }else{delete chargeEnd[c];refresh();}
   });
-  if(any)setTimeout(tickCountdown,1000);
+  if(any){setTimeout(tickCountdown,1000);}else{countdownRunning=false;}
+}
+function doStopCharge(c){
+  fetch('/api/charge/stop/'+_api(c),{method:'POST'}).then(()=>refresh());
 }
 function doFl(c){
   if(srcs[c])return;
@@ -1810,11 +1833,22 @@ def cmd_serve(args, cfg: dict):
         charge_cfg = c_cfg.get("charge", c_cfg)
         duration_sec = charge_cfg.get("charge_duration_minutes", 30) * 60
         _charge_tasks[slot] = {"done": False}
+        _charge_stop[slot] = threading.Event()
         t = threading.Thread(
             target=_run_charge_for_web, args=(slot, loc, port, c_cfg), daemon=True
         )
         t.start()
         return json.dumps({"ok": True, "duration_seconds": duration_sec})
+
+    @app.post("/api/charge/stop/<loc>/<port:int>")
+    def api_charge_stop(loc, port):
+        resp.content_type = "application/json"
+        slot = f"{loc}:{port}"
+        ev = _charge_stop.get(slot)
+        if ev:
+            ev.set()
+            return json.dumps({"ok": True})
+        return json.dumps({"ok": False, "error": "no charge running"})
 
     @app.get("/api/flash/<loc>/<port:int>")
     def api_flash(loc, port):
