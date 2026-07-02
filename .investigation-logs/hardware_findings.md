@@ -126,8 +126,10 @@ Provided by maintainer 2026-07-02. Use this to identify devices by codename from
 | sturgeon    | Huawei Watch               | 4     | |
 | anthias     | Asus Zenwatch 1            | 3     | |
 | pike        | Polar M600                 | 3     | |
-| ray/firefish| Fossil Gen 4               | 3     | |
+| ray         | Fossil Gen 4               | 3     | separate codename+image from firefish; upstream docs incorrectly list as one |
+| firefish    | Fossil Gen 4               | 3     | separate codename+image from ray; upstream docs incorrectly list as one |
 | rubyfish    | TicWatch Pro 3             | 3     | |
+| rover       | TicWatch Pro 3 LTE         | 3     | sibling of rubyfish |
 | sawfish     | Huawei Watch 2             | 3     | |
 | skipjack    | TicWatch C2/C2+            | 3     | |
 | hoki        | Fossil Gen 6               | 2     | |
