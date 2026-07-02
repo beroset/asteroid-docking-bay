@@ -1642,9 +1642,23 @@ def cmd_map(args, cfg: dict):
         print("Aborted.")
         return
 
+    # Identify cascade ports: ports on a parent hub whose child hub is in our list.
+    # e.g. hub "1-2.4" → parent hub "1-2" owns port 4 as a cascade port.
+    # We must not power off cascade ports during the all-off phase — doing so would
+    # kill the sub-hub before we can scan it.
+    cascade_ports: dict[str, set[int]] = {}  # hub_location → set of cascade port numbers
+    for hub in hubs:
+        loc = hub["location"]
+        if "." in loc:
+            parent_loc, _, parent_port_str = loc.rpartition(".")
+            cascade_ports.setdefault(parent_loc, set()).add(int(parent_port_str))
+
     print("\nPowering off all ports…")
     for hub in hubs:
+        skip = cascade_ports.get(hub["location"], set())
         for port in hub["ports"]:
+            if port in skip:
+                continue
             try:
                 uhubctl_set_power(hub["location"], port, False)
             except RuntimeError as e:
@@ -1654,14 +1668,22 @@ def cmd_map(args, cfg: dict):
     new_hubs: list[dict] = []
     no_response: list[str] = []   # ports where no watch appeared
 
-    for hub in hubs:
+    # Scan deepest child hubs first so parent cascade ports stay live throughout.
+    hubs_sorted = sorted(hubs, key=lambda h: h["location"].count("."), reverse=True)
+
+    for hub in hubs_sorted:
         loc = hub["location"]
         print(f"\n── Hub {loc}  {hub['description']} ──")
 
         port_map: dict[str, str] = {}
         port_smart: dict[str, bool] = {}
 
+        skip = cascade_ports.get(loc, set())
         for port in hub["ports"]:
+            if port in skip:
+                print(f"  Port {port}: (cascade → sub-hub {loc}.{port})")
+                continue
+
             print(f"  Port {port}: ", end="", flush=True)
 
             before = set(adb_devices().keys())
