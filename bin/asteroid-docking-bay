@@ -14,6 +14,7 @@ Logs:   journald (if python-systemd is installed) + stderr
 
 import argparse
 import copy
+import glob
 import json
 import logging
 import os
@@ -55,6 +56,9 @@ _flash_tasks: dict[str, dict] = {}
 
 # Per-codename charge task state for the web UI's live countdown.
 _charge_tasks: dict[str, dict] = {}
+
+# Cache: fastboot serial → product codename, populated on first getvar call.
+_fastboot_products: dict[str, str] = {}
 
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -103,14 +107,18 @@ def save_config(cfg: dict):
 
 # ── Shell helpers ─────────────────────────────────────────────────────────────
 
-def _run(cmd, check=True) -> tuple[int, str, str]:
+def _run(cmd, check=True, timeout=None) -> tuple[int, str, str]:
     """Run a command string or list; return (rc, stdout, stderr)."""
-    result = subprocess.run(
-        cmd,
-        shell=isinstance(cmd, str),
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            cmd,
+            shell=isinstance(cmd, str),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return 1, "", "timeout"
     if check and result.returncode != 0:
         raise RuntimeError(
             f"Command failed ({result.returncode}): {cmd!r}\n{result.stderr.strip()}"
@@ -447,6 +455,55 @@ def _fastboot_devices() -> dict[str, str]:
     return result
 
 
+def _sysfs_usb_path(serial: str) -> str | None:
+    """
+    Return the USB sysfs path (e.g. '1-2.3') for a device by its USB serial number.
+    A device on hub '1-2' port 3 lives at /sys/bus/usb/devices/1-2.3/serial.
+    """
+    for path in glob.glob("/sys/bus/usb/devices/*/serial"):
+        try:
+            with open(path) as f:
+                if f.read().strip() == serial:
+                    return os.path.basename(os.path.dirname(path))
+        except OSError:
+            pass
+    return None
+
+
+def _fastboot_list() -> dict[str, str | None]:
+    """
+    Return {serial: sysfs_usb_path} for all devices currently in fastboot mode.
+    Short timeout prevents a sluggish fastboot daemon from blocking the status poll.
+    sysfs_usb_path may be None if the device's path cannot be determined.
+    """
+    rc, out, _ = _run("fastboot devices", check=False, timeout=5)
+    result: dict[str, str | None] = {}
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[1] == "fastboot":
+            serial = parts[0]
+            result[serial] = _sysfs_usb_path(serial)
+    return result
+
+
+def _fastboot_getvar_product(serial: str) -> str | None:
+    """
+    Read the product codename from a fastboot device via 'getvar product'.
+    Result is cached in _fastboot_products so repeated status polls don't re-call fastboot.
+    fastboot writes getvar output to stderr, not stdout.
+    """
+    if serial in _fastboot_products:
+        return _fastboot_products[serial]
+    _, out, err = _run(f"fastboot -s {serial} getvar product", check=False, timeout=5)
+    for line in (err + "\n" + out).splitlines():
+        if "product:" in line.lower():
+            val = line.split("product:", 1)[1].strip()
+            if val:
+                _fastboot_products[serial] = val
+                return val
+    return None
+
+
 def _wait_for_fastboot(known_serials: set[str], timeout: int = 30) -> str | None:
     """Wait for a fastboot serial not present in known_serials."""
     deadline = time.monotonic() + timeout
@@ -676,6 +733,13 @@ def _web_status_data(cfg: dict) -> list[dict]:
     Empty ports skip the per-port uhubctl query to keep refresh time low.
     """
     devices = adb_devices()
+    fb_devices = _fastboot_list()   # {serial: sysfs_path | None}
+    # Reverse map for unknown-device lookup on empty ports: sysfs_path → serial
+    fb_by_path: dict[str, str] = {
+        path: serial
+        for serial, path in fb_devices.items()
+        if path is not None
+    }
     physical = {h["location"]: h for h in uhubctl_list()}
     result: list[dict] = []
 
@@ -700,6 +764,8 @@ def _web_status_data(cfg: dict) -> list[dict]:
             smart     = port_smart.get(port_str)
             serial    = find_serial_for_codename(cfg, codename)
             adb_state = devices.get(serial) if serial else None
+            if adb_state is None and serial and serial in fb_devices:
+                adb_state = "fastboot"
             battery   = get_battery_level(serial) if adb_state == "device" else None
             flashing  = (
                 codename in _flash_tasks
@@ -719,12 +785,20 @@ def _web_status_data(cfg: dict) -> list[dict]:
             })
 
         for port_num in empty_nums:
+            sysfs_path = f"{loc}.{port_num}"
+            fb_serial  = fb_by_path.get(sysfs_path)
+            fb_product = None
+            if fb_serial:
+                # Prefer config-known name; fall back to fastboot getvar product.
+                fb_product = cfg.get("serials", {}).get(fb_serial) or _fastboot_getvar_product(fb_serial)
             hub_ports.append({
                 "port": port_num, "codename": None,
                 "power": None,  # skip per-port query for empty slots
                 "smart": port_smart.get(str(port_num)),
-                "adb": None, "battery": None,
+                "adb": "fastboot" if fb_serial else None,
+                "battery": None,
                 "flashing": False, "empty": True,
+                "fastboot_product": fb_product,
             })
 
         result.append({
@@ -864,6 +938,12 @@ function mkbat(v,lo,hi){
   const cls=v<lo?'err':v<=hi?'on':'dim';
   return `<span class="${cls}">${v}%</span>`;
 }
+function mkadb(adb,fbprod){
+  if(adb==='device')return '<span class="on">device</span>';
+  if(adb==='fastboot'){const l=fbprod?`fastboot: ${esc(fbprod)}`:'fastboot';return `<span class="warn">${l}</span>`;}
+  if(adb)return `<span class="dim">${esc(adb)}</span>`;
+  return '<span class="dim">&mdash;</span>';
+}
 function render(data){
   const tb=document.getElementById('tb');
   const hubs=(data&&data.hubs)||[];
@@ -876,14 +956,15 @@ function render(data){
     hub.ports.forEach((p,i)=>{
       const tree=i===hub.ports.length-1?'&#x2514;&#x2500;':'&#x251c;&#x2500;';
       if(p.empty){
+        const fbLabel=p.fastboot_product?`fastboot: ${esc(p.fastboot_product)}`:(p.adb==='fastboot'?'fastboot':'');
         rows.push(
           `<tr class="wr empty">` +
           `<td class="tc">${tree}</td>` +
-          `<td class="dim">&mdash;</td>` +
+          `<td>${p.fastboot_product?`<span class="warn">${esc(p.fastboot_product)}</span>`:'<span class="dim">&mdash;</span>'}</td>` +
           `<td class="dim">p${p.port}</td>` +
           `<td>${mkpwr(p.power)}</td>` +
           `<td>${mksmt(p.smart)}</td>` +
-          `<td class="dim">&mdash;</td>` +
+          `<td>${p.adb==='fastboot'?`<span class="warn">${fbLabel}</span>`:'<span class="dim">&mdash;</span>'}</td>` +
           `<td class="dim">&mdash;</td>` +
           `<td><button class="btn" onclick="doRefresh()">Refresh</button></td>` +
           `</tr>`
@@ -891,9 +972,10 @@ function render(data){
       }else{
         if(p.charge_end_ts&&!chargeEnd[p.codename])chargeEnd[p.codename]=p.charge_end_ts*1000;
         const charging=!!(chargeEnd[p.codename]&&chargeEnd[p.codename]>Date.now());
+        const isFb=p.adb==='fastboot';
         const busy=!!(srcs[p.codename]||p.flashing||charging);
         const d=busy?' disabled':'';
-        const adb=p.adb==='device'?'<span class="on">device</span>':p.adb?`<span class="dim">${esc(p.adb)}</span>`:'<span class="dim">&mdash;</span>';
+        const adb=mkadb(p.adb,null);
         const bat=charging?'<span class="warn">&#9889;&hellip;</span>':mkbat(p.battery,lo,hi);
         const pwrFn=p.power===true?`doOff('${esc(p.codename)}')`:`doOn('${esc(p.codename)}')`;
         const pwrCls=p.power===true?'tgl tgl-on':'tgl tgl-off';
@@ -910,8 +992,8 @@ function render(data){
           `<td id="bat-${esc(p.codename)}">${bat}</td>` +
           `<td id="act-${esc(p.codename)}">` +
           `<button class="btn btn-ref${isRef?' pulsing':''}"${d} onclick="doRefresh('${esc(p.codename)}')">Refresh</button>` +
-          (p.power===true?`<button class="btn ht"${d} onclick="doHalt('${esc(p.codename)}')">&#x23FB; Halt</button>`:'')+
-          `<button class="btn ch"${d} onclick="doCharge('${esc(p.codename)}')">&#9889; Charge</button>` +
+          (p.power===true&&!isFb?`<button class="btn ht"${d} onclick="doHalt('${esc(p.codename)}')">&#x23FB; Halt</button>`:'')+
+          (!isFb?`<button class="btn ch"${d} onclick="doCharge('${esc(p.codename)}')">&#9889; Charge</button>`:'')+
           `<button class="btn fl"${d} onclick="doFl('${esc(p.codename)}')">Flash nightly</button>` +
           `</td></tr>` +
           `<tr class="lr" id="lr-${esc(p.codename)}"><td colspan="8"><div class="log${busy?' show':''}" id="log-${esc(p.codename)}"></div></td></tr>`
