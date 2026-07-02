@@ -1143,7 +1143,7 @@ _WEB_TEMPLATE = """\
   <table>
     <thead><tr>
       <th></th><th>Watch</th><th>Port</th><th>Power</th><th>Smart</th>
-      <th>ADB</th><th>Battery</th><th>Actions</th>
+      <th>ADB</th><th style="min-width:7em">Battery</th><th>Actions</th>
     </tr></thead>
     <tbody id="tb"></tbody>
   </table>
@@ -1209,7 +1209,9 @@ function render(data){
         const busy=!!(logActive||charging);
         const d=busy?' disabled':'';
         const adb=mkadb(p.adb,null);
-        const bat=charging?'<span class="warn">&#9889;&hellip;</span>':mkbat(p.battery,lo,hi);
+        let bat;
+        if(charging){const rem=Math.max(0,Math.round((chargeEnd[slot]-Date.now())/1000));const m=Math.floor(rem/60),s=rem%60;bat=`<span class="warn">&#9889; ${m}m${String(s).padStart(2,'0')}s</span>`;}
+        else{bat=mkbat(p.battery,lo,hi);}
         const pwrFn=p.power===true?`doOff('${esc(slot)}')`:`doOn('${esc(slot)}')`;
         const pwrCls=p.power===true?'tgl tgl-on':'tgl tgl-off';
         const pwrLbl=p.power===true?'<span class="dot don"></span>ON':'<span class="dot doff"></span>OFF';
