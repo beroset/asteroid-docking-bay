@@ -90,14 +90,60 @@ Running as user `mo` (systemd user service, no sudo):
 
 ## Watch inventory (as of 2026-07-02)
 
-| codename | serial           | hub | port | device              | notes |
-|----------|-----------------|-----|------|---------------------|-------|
-| sturgeon | MQB7N15C09000847 | 1-6 | 3    |                     | |
-| catfish  | 720EX8C130737    | 1-3 | 3    | Mobvoi TicWatch Pro | |
-| skipjack | 870AX0A150253    | 1-2 | 3    | Mobvoi TicWatch C2+ | |
-| narwhal  | 901KPRW0013510   | 1-1 | 2    | LG Watch W7         | was moved to mondo hub for VBUS test, may need remap |
-| sawfish  | TKQ7N17406001852 | 1-1 | 3    | HUAWEI LEO-BX9      | |
-| beluga   | 100c0a32         | —   | —    |                     | in serials dict, not currently mapped |
+Lenovo DK-1523 dock layout (current):
+
+| codename | serial           | hub   | port | device              | notes |
+|----------|-----------------|-------|------|---------------------|-------|
+| skipjack | 8605X96200684    | 1-2   | 2    | Mobvoi TicWatch C2+ | second skipjack unit |
+| narwhal  | 901KPRW0013510   | 1-2   | 3    | LG Watch W7         | |
+| catfish  | 720EX8C130737    | 1-2.4 | 1    | Mobvoi TicWatch Pro | |
+| sawfish  | TKQ7N17406001852 | 1-2.4 | 2    | Huawei Watch 2 (LEO-BX9) | |
+| lenok    | 411KPCA0121867   | 1-2.4 | 3    | LG G Watch R        | NEW — identified from uhubctl |
+| skipjack | 870AX0A150253    | 1-2.4 | 4    | Mobvoi TicWatch C2+ | |
+
+Not currently on dock:
+
+| codename | serial           | device              | notes |
+|----------|-----------------|---------------------|-------|
+| sturgeon | MQB7N15C09000847 | Huawei Watch        | was on old ALCOR hubs |
+| beluga   | 100c0a32         | OPPO Watch          | in serials dict, unmapped |
+
+## Full AsteroidOS device codename reference
+
+Provided by maintainer 2026-07-02. Use this to identify devices by codename from USB descriptors or ADB.
+
+| codename    | device                     | stars | notes |
+|-------------|----------------------------|-------|-------|
+| beluga      | OPPO Watch                 | 5     | |
+| catfish     | TicWatch Pro 2018/20       | 5     | |
+| bass        | LG Watch Urbane            | 4     | |
+| carp        | Moto 360 2015              | 4     | |
+| dory        | LG G Watch                 | 4     | |
+| lenok       | LG G Watch R               | 4     | |
+| narwhal     | LG Watch W7                | 4     | |
+| smelt       | Moto 360 2015              | 4     | |
+| sparrow     | Asus Zenwatch 2            | 4     | |
+| sturgeon    | Huawei Watch               | 4     | |
+| anthias     | Asus Zenwatch 1            | 3     | |
+| pike        | Polar M600                 | 3     | |
+| ray/firefish| Fossil Gen 4               | 3     | |
+| rubyfish    | TicWatch Pro 3             | 3     | |
+| sawfish     | Huawei Watch 2             | 3     | |
+| skipjack    | TicWatch C2/C2+            | 3     | |
+| hoki        | Fossil Gen 6               | 2     | |
+| mooneye     | TicWatch E & S             | 2     | |
+| swift       | Asus Zenwatch 3            | 2     | |
+| triggerfish | Fossil Gen 5               | 2     | |
+| koi         | Casio WSD-F10/F20          | 3     | experimental |
+| nemo        | LG Watch Urbane 2nd Ed.    | 2     | experimental — active porting target |
+| minnow      | Moto 360 2014              | 1     | experimental |
+| rinato      | Samsung Gear 2             | 1     | experimental |
+| sprat       | Samsung Gear Live          | 1     | experimental |
+| tetra       | Sony Smartwatch 3          | —     | experimental |
+| aurora      | (TBD)                      | —     | not published, expected on hub during porting |
+| eos         | (TBD)                      | —     | not published, expected on hub during porting |
+| lucky7      | (TBD)                      | —     | not published, expected on hub during porting |
+| r11         | (TBD)                      | —     | not published, expected on hub during porting |
 
 ---
 
