@@ -20,6 +20,9 @@
 
 # ── Smart USB hubs (for uhubctl) ──────────────────────────────────────────────
 
+# Vendor ID 17ef = Lenovo (ThinkPad USB 3.0 Ultra Dock DK-1523, confirmed true VBUS switching)
+SUBSYSTEM=="usb", ATTR{idVendor}=="17ef", MODE="0664", GROUP="users", TAG+="uaccess"
+
 # Vendor ID 0bda = Realtek (common in USB 3 hubs)
 # SUBSYSTEM=="usb", ATTR{idVendor}=="0bda", MODE="0664", GROUP="plugdev"
 
@@ -29,7 +32,7 @@
 # Vendor ID 0424 = Microchip/SMSC (common in Pi hats and dev-board hubs)
 # SUBSYSTEM=="usb", ATTR{idVendor}=="0424", MODE="0664", GROUP="plugdev"
 
-# Vendor ID 05e3 = Genesys Logic (common in USB 3 hubs)
+# Vendor ID 05e3 = Genesys Logic / ALCOR (data-line disconnect only — not true VBUS)
 # SUBSYSTEM=="usb", ATTR{idVendor}=="05e3", MODE="0664", GROUP="plugdev"
 
 # ── AsteroidOS watches (for adb) ──────────────────────────────────────────────
