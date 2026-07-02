@@ -1622,6 +1622,10 @@ def cmd_map(args, cfg: dict):
     print()
 
     hubs = uhubctl_list()
+    # USB 3.0 companion buses expose the same physical ports as their USB 2.0
+    # counterparts. Watches are USB 2.0 devices and only enumerate on the 2.x bus.
+    # Scanning 3.x hubs causes double-detection and incorrect PPPS results.
+    hubs = [h for h in hubs if ", USB 3." not in h.get("description", "")]
     if not hubs:
         print("No USB hubs found by uhubctl.")
         print("See udev/70-asteroid-docking-bay.rules for permission setup.")
