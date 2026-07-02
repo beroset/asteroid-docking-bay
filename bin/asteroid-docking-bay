@@ -351,6 +351,45 @@ def find_serial_for_codename(cfg: dict, codename: str) -> str | None:
     return None
 
 
+def find_codename_for_serial(cfg: dict, serial: str) -> str | None:
+    return cfg.get("serials", {}).get(serial)
+
+
+def find_port_for_serial(cfg: dict, serial: str) -> tuple[str | None, int | None]:
+    codename = find_codename_for_serial(cfg, serial)
+    if codename is None:
+        return None, None
+    return find_port_for_codename(cfg, codename)
+
+
+def find_codename_for_loc_port(cfg: dict, loc: str, port: int) -> str | None:
+    for hub in cfg.get("hubs", []):
+        if hub["location"] == loc:
+            return hub.get("ports", {}).get(str(port))
+    return None
+
+
+def find_serial_for_loc_port(cfg: dict, loc: str, port: int) -> str | None:
+    """Return the best serial for a specific hub port.
+
+    Prefers a serial that is currently connected over a config-only entry,
+    so clicking a button on one of two same-codename watches targets the
+    watch actually present at that port rather than the first config match.
+    """
+    codename = find_codename_for_loc_port(cfg, loc, port)
+    if not codename:
+        return None
+    matching = [s for s, cn in cfg.get("serials", {}).items()
+                if cn.lower() == codename.lower()]
+    if len(matching) == 1:
+        return matching[0]
+    connected = set(adb_devices().keys())
+    for s in matching:
+        if s in connected:
+            return s
+    return matching[0] if matching else None
+
+
 def all_configured_codenames(cfg: dict) -> list[str]:
     names: list[str] = []
     for hub in cfg.get("hubs", []):
@@ -694,25 +733,22 @@ def _flash_one_watch(
     return "ok"
 
 
-def _run_charge_for_web(codename: str, cfg: dict) -> None:
-    """Run a manual charge cycle for the web UI; updates _charge_tasks state."""
+def _run_charge_for_web(slot: str, loc: str, port: int, cfg: dict) -> None:
+    """Run a manual charge cycle for the web UI; updates _charge_tasks[slot]."""
     charge_cfg = cfg.get("charge", cfg)
     duration_sec = charge_cfg.get("charge_duration_minutes", 30) * 60
-    loc, port = find_port_for_codename(cfg, codename)
-    if loc is None:
-        _charge_tasks[codename] = {"done": True, "error": "not mapped"}
-        return
+    codename = find_codename_for_loc_port(cfg, loc, port) or slot
 
     try:
         uhubctl_set_power(loc, port, True)
-        serial = find_serial_for_codename(cfg, codename)
+        serial = find_serial_for_loc_port(cfg, loc, port)
         wait_for_adb(
             serial,
             charge_cfg.get("adb_wait_seconds", 15),
             charge_cfg.get("adb_wait_retries", 8),
         )
         end_ts = time.time() + duration_sec
-        _charge_tasks[codename]["charge_end_ts"] = end_ts
+        _charge_tasks[slot]["charge_end_ts"] = end_ts
         time.sleep(duration_sec)
     except Exception as exc:
         log.warning("%s: charge failed: %s", codename, exc)
@@ -721,8 +757,8 @@ def _run_charge_for_web(codename: str, cfg: dict) -> None:
             uhubctl_set_power(loc, port, False)
         except Exception:
             pass
-        _charge_tasks[codename]["done"] = True
-        _charge_tasks[codename].pop("charge_end_ts", None)
+        _charge_tasks[slot]["done"] = True
+        _charge_tasks[slot].pop("charge_end_ts", None)
 
 
 def _web_status_data(cfg: dict) -> list[dict]:
@@ -762,22 +798,27 @@ def _web_status_data(cfg: dict) -> list[dict]:
             codename  = mapped[port_str]
             power     = uhubctl_get_power(loc, port_num)
             smart     = port_smart.get(port_str)
-            serial    = find_serial_for_codename(cfg, codename)
+            slot      = f"{loc}:{port_num}"
+            # Prefer a currently-connected serial over the first config match so
+            # two same-codename watches each see their own ADB state.
+            serials_for_codename = [s for s, cn in cfg.get("serials", {}).items()
+                                    if cn.lower() == codename.lower()]
+            serial = (next((s for s in serials_for_codename if s in devices), None)
+                      or next((s for s in serials_for_codename if s in fb_devices), None)
+                      or (serials_for_codename[0] if serials_for_codename else None))
             adb_state = devices.get(serial) if serial else None
             if adb_state is None and serial and serial in fb_devices:
                 adb_state = "fastboot"
             battery   = get_battery_level(serial) if adb_state == "device" else None
-            flashing  = (
-                codename in _flash_tasks
-                and not _flash_tasks[codename].get("done", True)
-            )
+            flashing  = slot in _flash_tasks and not _flash_tasks[slot].get("done", True)
             charge_end_ts = (
-                _charge_tasks[codename].get("charge_end_ts")
-                if codename in _charge_tasks
+                _charge_tasks[slot].get("charge_end_ts")
+                if slot in _charge_tasks
                 else None
             )
             hub_ports.append({
-                "port": port_num, "codename": codename,
+                "port": port_num, "codename": codename, "serial": serial,
+                "slot_loc": loc,
                 "power": power, "smart": smart,
                 "adb": adb_state, "battery": battery,
                 "flashing": flashing, "empty": False,
@@ -810,7 +851,7 @@ def _web_status_data(cfg: dict) -> list[dict]:
     return result
 
 
-def _sse_flash_gen(codename: str, cfg: dict):
+def _sse_flash_gen(codename: str, slot: str, cfg: dict):
     """
     Generator yielding SSE-formatted strings for a flash operation.
     Runs the flash in a daemon thread; log records from that thread are
@@ -838,7 +879,7 @@ def _sse_flash_gen(codename: str, cfg: dict):
 
     t = threading.Thread(target=_run_flash, daemon=True)
     t.start()
-    _flash_tasks[codename] = {"thread": t, "done": False}
+    _flash_tasks[slot] = {"thread": t, "done": False}
 
     try:
         while True:
@@ -854,7 +895,7 @@ def _sse_flash_gen(codename: str, cfg: dict):
             yield "\n"
         yield "event: done\ndata: complete\n\n"
     finally:
-        _flash_tasks[codename]["done"] = True
+        _flash_tasks[slot]["done"] = True
 
 
 _WEB_TEMPLATE = """\
@@ -970,33 +1011,34 @@ function render(data){
           `</tr>`
         );
       }else{
-        if(p.charge_end_ts&&!chargeEnd[p.codename])chargeEnd[p.codename]=p.charge_end_ts*1000;
-        const charging=!!(chargeEnd[p.codename]&&chargeEnd[p.codename]>Date.now());
+        const slot=p.slot_loc+':'+p.port;
+        if(p.charge_end_ts&&!chargeEnd[slot])chargeEnd[slot]=p.charge_end_ts*1000;
+        const charging=!!(chargeEnd[slot]&&chargeEnd[slot]>Date.now());
         const isFb=p.adb==='fastboot';
-        const busy=!!(srcs[p.codename]||p.flashing||charging);
+        const busy=!!(srcs[slot]||p.flashing||charging);
         const d=busy?' disabled':'';
         const adb=mkadb(p.adb,null);
         const bat=charging?'<span class="warn">&#9889;&hellip;</span>':mkbat(p.battery,lo,hi);
-        const pwrFn=p.power===true?`doOff('${esc(p.codename)}')`:`doOn('${esc(p.codename)}')`;
+        const pwrFn=p.power===true?`doOff('${esc(slot)}')`:`doOn('${esc(slot)}')`;
         const pwrCls=p.power===true?'tgl tgl-on':'tgl tgl-off';
         const pwrLbl=p.power===true?'<span class="dot don"></span>ON':'<span class="dot doff"></span>OFF';
-        const isRef=refreshing.has(p.codename);
+        const isRef=refreshing.has(slot);
         rows.push(
-          `<tr class="wr${isRef?' refreshing':''}" id="wr-${esc(p.codename)}">` +
+          `<tr class="wr${isRef?' refreshing':''}" id="wr-${esc(slot)}">` +
           `<td class="tc">${tree}</td>` +
           `<td><b>${esc(p.codename)}</b></td>` +
           `<td class="dim">p${p.port}</td>` +
-          `<td><button class="${pwrCls}"${d} onclick="${pwrFn}">${pwrLbl}</button><button class="ico"${d} onclick="doCy('${esc(p.codename)}')" title="Power-cycle port">&#x21BA;</button></td>` +
+          `<td><button class="${pwrCls}"${d} onclick="${pwrFn}">${pwrLbl}</button><button class="ico"${d} onclick="doCy('${esc(slot)}')" title="Power-cycle port">&#x21BA;</button></td>` +
           `<td>${mksmt(p.smart)}</td>` +
           `<td>${adb}</td>` +
-          `<td id="bat-${esc(p.codename)}">${bat}</td>` +
-          `<td id="act-${esc(p.codename)}">` +
-          `<button class="btn btn-ref${isRef?' pulsing':''}"${d} onclick="doRefresh('${esc(p.codename)}')">Refresh</button>` +
-          (p.power===true&&!isFb?`<button class="btn ht"${d} onclick="doHalt('${esc(p.codename)}')">&#x23FB; Halt</button>`:'')+
-          (!isFb?`<button class="btn ch"${d} onclick="doCharge('${esc(p.codename)}')">&#9889; Charge</button>`:'')+
-          `<button class="btn fl"${d} onclick="doFl('${esc(p.codename)}')">Flash nightly</button>` +
+          `<td id="bat-${esc(slot)}">${bat}</td>` +
+          `<td id="act-${esc(slot)}">` +
+          `<button class="btn btn-ref${isRef?' pulsing':''}"${d} onclick="doRefresh('${esc(slot)}')">Refresh</button>` +
+          (p.power===true&&!isFb?`<button class="btn ht"${d} onclick="doHalt('${esc(slot)}')">&#x23FB; Halt</button>`:'')+
+          (!isFb?`<button class="btn ch"${d} onclick="doCharge('${esc(slot)}')">&#9889; Charge</button>`:'')+
+          `<button class="btn fl"${d} onclick="doFl('${esc(slot)}')">Flash nightly</button>` +
           `</td></tr>` +
-          `<tr class="lr" id="lr-${esc(p.codename)}"><td colspan="8"><div class="log${busy?' show':''}" id="log-${esc(p.codename)}"></div></td></tr>`
+          `<tr class="lr" id="lr-${esc(slot)}"><td colspan="8"><div class="log${busy?' show':''}" id="log-${esc(slot)}"></div></td></tr>`
         );
       }
     });
@@ -1007,6 +1049,7 @@ function render(data){
 function refresh(){
   fetch('/api/status').then(r=>r.json()).then(d=>{render(d);document.getElementById('ts').textContent='updated '+new Date().toLocaleTimeString()}).catch(()=>{document.getElementById('ts').textContent='connection error'});
 }
+function _api(s){return s.replace(':','/');}
 function doRefresh(c){
   if(c){refreshing.add(c);setTimeout(()=>refreshing.delete(c),10000);}
   refresh();
@@ -1018,19 +1061,19 @@ function _pwrFlash(c){
   setTimeout(()=>{r.classList.remove('pwr-warn');refresh();},3800);
 }
 function doOn(c){
-  fetch('/api/on/'+c,{method:'POST'}).then(rr=>rr.json()).then(d=>{
+  fetch('/api/on/'+_api(c),{method:'POST'}).then(rr=>rr.json()).then(d=>{
     if(d.confirmed===false)_pwrFlash(c);else setTimeout(refresh,2000);
   });
 }
 function doOff(c){
   _haltClear(c);
-  fetch('/api/off/'+c,{method:'POST'}).then(rr=>rr.json()).then(d=>{
+  fetch('/api/off/'+_api(c),{method:'POST'}).then(rr=>rr.json()).then(d=>{
     if(d.confirmed===false)_pwrFlash(c);else refresh();
   });
 }
 function doPoweroff(c){
   _haltClear(c);
-  fetch('/api/poweroff/'+c,{method:'POST'}).then(rr=>rr.json()).then(d=>{
+  fetch('/api/poweroff/'+_api(c),{method:'POST'}).then(rr=>rr.json()).then(d=>{
     if(d.confirmed===false)_pwrFlash(c);else setTimeout(refresh,4000);
   });
 }
@@ -1051,22 +1094,22 @@ function doHalt(c){
 function closeHalt(c){_haltClear(c);refresh();}
 function doReboot(c){
   _haltClear(c);
-  fetch('/api/reboot/'+c,{method:'POST'}).then(()=>setTimeout(refresh,3000));
+  fetch('/api/reboot/'+_api(c),{method:'POST'}).then(()=>setTimeout(refresh,3000));
 }
 function doBootloader(c){
   _haltClear(c);
-  fetch('/api/bootloader/'+c,{method:'POST'}).then(()=>setTimeout(refresh,3000));
+  fetch('/api/bootloader/'+_api(c),{method:'POST'}).then(()=>setTimeout(refresh,3000));
 }
 function doCy(c){
   const r=document.getElementById('wr-'+c);
   if(r)r.querySelectorAll('button').forEach(b=>b.disabled=true);
-  fetch('/api/cycle/'+c,{method:'POST'}).then(()=>setTimeout(refresh,7000));
+  fetch('/api/cycle/'+_api(c),{method:'POST'}).then(()=>setTimeout(refresh,7000));
 }
 function doCharge(c){
   if(chargeEnd[c])return;
   const r=document.getElementById('wr-'+c);
   if(r)r.querySelectorAll('button').forEach(b=>b.disabled=true);
-  fetch('/api/charge/'+c,{method:'POST'}).then(rr=>rr.json()).then(d=>{
+  fetch('/api/charge/'+_api(c),{method:'POST'}).then(rr=>rr.json()).then(d=>{
     if(d.ok){chargeEnd[c]=Date.now()+d.duration_seconds*1000;tickCountdown();}
     else{if(r)r.querySelectorAll('button').forEach(b=>b.disabled=false);}
   });
@@ -1092,7 +1135,7 @@ function doFl(c){
   box.textContent='';box.classList.add('show');
   const r=document.getElementById('wr-'+c);
   if(r)r.querySelectorAll('button').forEach(b=>b.disabled=true);
-  const es=new EventSource('/api/flash/'+c);
+  const es=new EventSource('/api/flash/'+_api(c));
   srcs[c]=es;
   es.onmessage=ev=>{box.textContent+=ev.data+'\\n';box.scrollTop=box.scrollHeight};
   es.addEventListener('done',()=>{box.textContent+='\\n\\u2500\\u2500 done \\u2500\\u2500\\n';box.scrollTop=box.scrollHeight;es.close();delete srcs[c];refresh()});
@@ -1471,90 +1514,76 @@ def cmd_serve(args, cfg: dict):
             },
         })
 
-    @app.post("/api/update/<codename>")
-    def api_update(codename):
+    @app.post("/api/update/<loc>/<port:int>")
+    def api_update(loc, port):
         resp.content_type = "application/json"
         return json.dumps({"ok": True})
 
-    @app.post("/api/on/<codename>")
-    def api_on(codename):
+    @app.post("/api/on/<loc>/<port:int>")
+    def api_on(loc, port):
         resp.content_type = "application/json"
-        c_cfg = load_config()
-        loc, port = find_port_for_codename(c_cfg, codename)
-        if loc is None:
-            return json.dumps({"error": "not mapped"})
         try:
             confirmed = uhubctl_set_power(loc, port, True)
         except RuntimeError as e:
             return json.dumps({"error": str(e)})
         return json.dumps({"ok": True, "confirmed": confirmed})
 
-    @app.post("/api/off/<codename>")
-    def api_off(codename):
+    @app.post("/api/off/<loc>/<port:int>")
+    def api_off(loc, port):
         resp.content_type = "application/json"
-        c_cfg = load_config()
-        loc, port = find_port_for_codename(c_cfg, codename)
-        if loc is None:
-            return json.dumps({"error": "not mapped"})
         try:
             confirmed = uhubctl_set_power(loc, port, False)
         except RuntimeError as e:
             return json.dumps({"error": str(e)})
         return json.dumps({"ok": True, "confirmed": confirmed})
 
-    @app.post("/api/poweroff/<codename>")
-    def api_poweroff(codename):
+    @app.post("/api/poweroff/<loc>/<port:int>")
+    def api_poweroff(loc, port):
         """Graceful OS shutdown: adb shell poweroff, then cut USB power."""
         resp.content_type = "application/json"
         c_cfg = load_config()
-        loc, port  = find_port_for_codename(c_cfg, codename)
-        serial     = find_serial_for_codename(c_cfg, codename)
+        serial = find_serial_for_loc_port(c_cfg, loc, port)
         adb_ok = False
         if serial:
             rc, _, _ = _run(f"adb -s {serial} shell poweroff", check=False)
             adb_ok = (rc == 0)
             time.sleep(3)
         confirmed = False
-        if loc is not None:
-            try:
-                confirmed = uhubctl_set_power(loc, port, False)
-            except RuntimeError as e:
-                return json.dumps({"ok": False, "error": str(e),
-                                   "adb_shutdown": adb_ok})
+        try:
+            confirmed = uhubctl_set_power(loc, port, False)
+        except RuntimeError as e:
+            return json.dumps({"ok": False, "error": str(e),
+                               "adb_shutdown": adb_ok})
         return json.dumps({"ok": True, "adb_shutdown": adb_ok,
                            "confirmed": confirmed})
 
-    @app.post("/api/reboot/<codename>")
-    def api_reboot(codename):
+    @app.post("/api/reboot/<loc>/<port:int>")
+    def api_reboot(loc, port):
         resp.content_type = "application/json"
         c_cfg = load_config()
-        serial = find_serial_for_codename(c_cfg, codename)
+        serial = find_serial_for_loc_port(c_cfg, loc, port)
         if not serial:
-            return json.dumps({"error": "no serial for codename"})
+            return json.dumps({"error": "no serial found for port"})
         rc, _, err = _run(f"adb -s {serial} reboot", check=False)
         if rc != 0:
             return json.dumps({"error": err or "adb reboot failed"})
         return json.dumps({"ok": True})
 
-    @app.post("/api/bootloader/<codename>")
-    def api_bootloader(codename):
+    @app.post("/api/bootloader/<loc>/<port:int>")
+    def api_bootloader(loc, port):
         resp.content_type = "application/json"
         c_cfg = load_config()
-        serial = find_serial_for_codename(c_cfg, codename)
+        serial = find_serial_for_loc_port(c_cfg, loc, port)
         if not serial:
-            return json.dumps({"error": "no serial for codename"})
+            return json.dumps({"error": "no serial found for port"})
         rc, _, err = _run(f"adb -s {serial} reboot bootloader", check=False)
         if rc != 0:
             return json.dumps({"error": err or "adb reboot bootloader failed"})
         return json.dumps({"ok": True})
 
-    @app.post("/api/cycle/<codename>")
-    def api_cycle(codename):
+    @app.post("/api/cycle/<loc>/<port:int>")
+    def api_cycle(loc, port):
         resp.content_type = "application/json"
-        c_cfg = load_config()
-        loc, port = find_port_for_codename(c_cfg, codename)
-        if loc is None:
-            return json.dumps({"error": "not mapped"})
         try:
             uhubctl_set_power(loc, port, False)
             time.sleep(5)
@@ -1563,33 +1592,41 @@ def cmd_serve(args, cfg: dict):
             return json.dumps({"error": str(e)})
         return json.dumps({"ok": True})
 
-    @app.post("/api/charge/<codename>")
-    def api_charge(codename):
+    @app.post("/api/charge/<loc>/<port:int>")
+    def api_charge(loc, port):
         resp.content_type = "application/json"
-        if codename in _charge_tasks and not _charge_tasks[codename].get("done", True):
-            existing_ts = _charge_tasks[codename].get("charge_end_ts", 0)
+        slot = f"{loc}:{port}"
+        if slot in _charge_tasks and not _charge_tasks[slot].get("done", True):
+            existing_ts = _charge_tasks[slot].get("charge_end_ts", 0)
             return json.dumps({"ok": False, "error": "charge already running",
                                 "charge_end_ts": existing_ts})
         c_cfg = load_config()
         charge_cfg = c_cfg.get("charge", c_cfg)
         duration_sec = charge_cfg.get("charge_duration_minutes", 30) * 60
-        _charge_tasks[codename] = {"done": False}
+        _charge_tasks[slot] = {"done": False}
         t = threading.Thread(
-            target=_run_charge_for_web, args=(codename, c_cfg), daemon=True
+            target=_run_charge_for_web, args=(slot, loc, port, c_cfg), daemon=True
         )
         t.start()
         return json.dumps({"ok": True, "duration_seconds": duration_sec})
 
-    @app.get("/api/flash/<codename>")
-    def api_flash(codename):
+    @app.get("/api/flash/<loc>/<port:int>")
+    def api_flash(loc, port):
         resp.content_type = "text/event-stream"
         resp.headers["Cache-Control"] = "no-cache"
         resp.headers["X-Accel-Buffering"] = "no"
-        if codename in _flash_tasks and not _flash_tasks[codename].get("done", True):
+        slot = f"{loc}:{port}"
+        if slot in _flash_tasks and not _flash_tasks[slot].get("done", True):
             def _busy():
                 yield "data: flash already in progress\n\nevent: done\ndata: \n\n"
             return _busy()
-        return _sse_flash_gen(codename, load_config())
+        c_cfg = load_config()
+        codename = find_codename_for_loc_port(c_cfg, loc, port)
+        if not codename:
+            def _no_codename():
+                yield "data: ERROR: port not mapped to any codename\n\nevent: done\ndata: \n\n"
+            return _no_codename()
+        return _sse_flash_gen(codename, slot, c_cfg)
 
     class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
         daemon_threads = True
