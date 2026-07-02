@@ -64,6 +64,11 @@ _remap_tasks: dict[str, dict] = {}
 # (flash, charge, remap) don't corrupt config.json.
 _config_lock = threading.Lock()
 
+# Ensures only one watch is powered on and ADB-active at a time.
+# Charge, flash, and remap all acquire this before powering a port on
+# and release it only after powering the port back off.
+_adb_lock = threading.Lock()
+
 # Cache: fastboot serial → product codename, populated on first getvar call.
 _fastboot_products: dict[str, str] = {}
 
@@ -760,26 +765,31 @@ def _run_charge_for_web(slot: str, loc: str, port: int, cfg: dict) -> None:
     duration_sec = charge_cfg.get("charge_duration_minutes", 30) * 60
     codename = find_codename_for_loc_port(cfg, loc, port) or slot
 
-    try:
-        uhubctl_set_power(loc, port, True)
-        serial = find_serial_for_loc_port(cfg, loc, port)
-        wait_for_adb(
-            serial,
-            charge_cfg.get("adb_wait_seconds", 15),
-            charge_cfg.get("adb_wait_retries", 8),
-        )
-        end_ts = time.time() + duration_sec
-        _charge_tasks[slot]["charge_end_ts"] = end_ts
-        time.sleep(duration_sec)
-    except Exception as exc:
-        log.warning("%s: charge failed: %s", codename, exc)
-    finally:
+    log.info("%s: waiting for ADB bus…", codename)
+    with _adb_lock:
         try:
-            uhubctl_set_power(loc, port, False)
-        except Exception:
-            pass
-        _charge_tasks[slot]["done"] = True
-        _charge_tasks[slot].pop("charge_end_ts", None)
+            uhubctl_set_power(loc, port, True)
+            serial = find_serial_for_loc_port(cfg, loc, port)
+            if serial:
+                wait_secs = charge_cfg.get("adb_wait_seconds", 15)
+                retries = charge_cfg.get("adb_wait_retries", 8)
+                for _ in range(retries):
+                    if adb_devices().get(serial) == "device":
+                        break
+                    log.info("%s: waiting for ADB (%s)…", codename, serial)
+                    time.sleep(wait_secs)
+            end_ts = time.time() + duration_sec
+            _charge_tasks[slot]["charge_end_ts"] = end_ts
+            time.sleep(duration_sec)
+        except Exception as exc:
+            log.warning("%s: charge failed: %s", codename, exc)
+        finally:
+            try:
+                uhubctl_set_power(loc, port, False)
+            except Exception:
+                pass
+            _charge_tasks[slot]["done"] = True
+            _charge_tasks[slot].pop("charge_end_ts", None)
 
 
 def _web_status_data(cfg: dict) -> list[dict]:
@@ -834,6 +844,8 @@ def _web_status_data(cfg: dict) -> list[dict]:
             battery   = get_battery_level(serial) if adb_state == "device" else None
             flashing  = ((slot in _flash_tasks and not _flash_tasks[slot].get("done", True))
                          or (slot in _remap_tasks and not _remap_tasks[slot].get("done", True)))
+            charging_active = (slot in _charge_tasks
+                                and not _charge_tasks[slot].get("done", True))
             charge_end_ts = (
                 _charge_tasks[slot].get("charge_end_ts")
                 if slot in _charge_tasks
@@ -845,6 +857,7 @@ def _web_status_data(cfg: dict) -> list[dict]:
                 "power": power, "smart": smart,
                 "adb": adb_state, "battery": battery,
                 "flashing": flashing, "empty": False,
+                "charging_active": charging_active,
                 "charge_end_ts": charge_end_ts,
             })
 
@@ -897,7 +910,9 @@ def _sse_flash_gen(codename: str, slot: str, cfg: dict):
         h.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
         logging.root.addHandler(h)
         try:
-            _flash_one_watch(codename, cfg_copy, flash_cfg)
+            q.put("INFO: waiting for ADB bus (another operation in progress)…")
+            with _adb_lock:
+                _flash_one_watch(codename, cfg_copy, flash_cfg)
         except Exception as exc:
             try:
                 q.put(f"ERROR: {exc}")
@@ -951,94 +966,96 @@ def _sse_remap_gen(loc: str, port: int):
         q.put(msg)
 
     def _run() -> None:
-        try:
-            _emit(f"Powering on {loc} p{port}…")
+        _emit("Waiting for ADB bus…")
+        with _adb_lock:
             try:
-                uhubctl_set_power(loc, port, True)
-            except RuntimeError as e:
-                _emit(f"WARNING: {e}")
-
-            _emit("Waiting for watch (10 s)…")
-            found_serial: str | None = None
-            deadline = time.monotonic() + 10
-            while time.monotonic() < deadline:
-                cur = adb_devices()
-                path_map = _sysfs_path_to_serial_map(set(cur.keys()))
-                s = path_map.get(sysfs_path)
-                if s and cur.get(s) == "device":
-                    found_serial = s
-                    break
-                time.sleep(0.8)
-
-            if found_serial:
-                _emit(f"ADB: {found_serial}")
-                with _config_lock:
-                    cfg = load_config()
-                    codename = cfg.get("serials", {}).get(found_serial)
-
-                if not codename:
-                    _emit("Reading codename from watch…")
-                    codename = get_watch_codename(found_serial) or found_serial
-                _emit(f"Watch: {codename}")
-
-                with _config_lock:
-                    cfg = load_config()
-                    cfg.setdefault("serials", {})[found_serial] = codename
-                    # Remove old mapping for this codename from every other port.
-                    for hub in cfg.get("hubs", []):
-                        hub_ports = hub.get("ports", {})
-                        stale = [k for k, v in hub_ports.items()
-                                 if v == codename
-                                 and not (hub["location"] == loc and k == str(port))]
-                        for k in stale:
-                            del hub_ports[k]
-                            _emit(f"Removed stale mapping: {hub['location']}:p{k} → {codename}")
-                    # Add/update this port.
-                    hub_entry = next((h for h in cfg.get("hubs", [])
-                                      if h["location"] == loc), None)
-                    if hub_entry is not None:
-                        hub_entry.setdefault("ports", {})[str(port)] = codename
-                    save_config(cfg)
-
-                _emit(f"Mapped {loc}:p{port} → {codename}")
-
-                _emit("Testing port switching (PPPS, ~3 s)…")
+                _emit(f"Powering on {loc} p{port}…")
                 try:
-                    smart, msg = test_port_power_switching(loc, port)
+                    uhubctl_set_power(loc, port, True)
+                except RuntimeError as e:
+                    _emit(f"WARNING: {e}")
+
+                _emit("Waiting for watch (10 s)…")
+                found_serial: str | None = None
+                deadline = time.monotonic() + 10
+                while time.monotonic() < deadline:
+                    cur = adb_devices()
+                    path_map = _sysfs_path_to_serial_map(set(cur.keys()))
+                    s = path_map.get(sysfs_path)
+                    if s and cur.get(s) == "device":
+                        found_serial = s
+                        break
+                    time.sleep(0.8)
+
+                if found_serial:
+                    _emit(f"ADB: {found_serial}")
                     with _config_lock:
                         cfg = load_config()
+                        codename = cfg.get("serials", {}).get(found_serial)
+
+                    if not codename:
+                        _emit("Reading codename from watch…")
+                        codename = get_watch_codename(found_serial) or found_serial
+                    _emit(f"Watch: {codename}")
+
+                    with _config_lock:
+                        cfg = load_config()
+                        cfg.setdefault("serials", {})[found_serial] = codename
+                        # Remove old mapping for this codename from every other port.
+                        for hub in cfg.get("hubs", []):
+                            hub_ports = hub.get("ports", {})
+                            stale = [k for k, v in hub_ports.items()
+                                     if v == codename
+                                     and not (hub["location"] == loc and k == str(port))]
+                            for k in stale:
+                                del hub_ports[k]
+                                _emit(f"Removed stale mapping: {hub['location']}:p{k} → {codename}")
+                        # Add/update this port.
+                        hub_entry = next((h for h in cfg.get("hubs", [])
+                                          if h["location"] == loc), None)
+                        if hub_entry is not None:
+                            hub_entry.setdefault("ports", {})[str(port)] = codename
+                        save_config(cfg)
+
+                    _emit(f"Mapped {loc}:p{port} → {codename}")
+
+                    _emit("Testing port switching (PPPS, ~3 s)…")
+                    try:
+                        smart, msg = test_port_power_switching(loc, port)
+                        with _config_lock:
+                            cfg = load_config()
+                            for hub in cfg.get("hubs", []):
+                                if hub["location"] == loc:
+                                    hub.setdefault("port_smart", {})[str(port)] = smart
+                                    break
+                            save_config(cfg)
+                        _emit(f"Port: {'SMART ✓' if smart else 'NOT SMART'} — {msg}")
+                    except RuntimeError as e:
+                        _emit(f"PPPS test error: {e}")
+
+                else:
+                    _emit("No watch detected.")
+                    with _config_lock:
+                        cfg = load_config()
+                        was_mapped = False
                         for hub in cfg.get("hubs", []):
                             if hub["location"] == loc:
-                                hub.setdefault("port_smart", {})[str(port)] = smart
-                                break
-                        save_config(cfg)
-                    _emit(f"Port: {'SMART ✓' if smart else 'NOT SMART'} — {msg}")
-                except RuntimeError as e:
-                    _emit(f"PPPS test error: {e}")
+                                if str(port) in hub.get("ports", {}):
+                                    was_mapped = True
+                                    del hub["ports"][str(port)]
+                        if was_mapped:
+                            save_config(cfg)
+                            _emit("Cleared stale port mapping.")
+                    try:
+                        uhubctl_set_power(loc, port, False)
+                    except Exception:
+                        pass
 
-            else:
-                _emit("No watch detected.")
-                with _config_lock:
-                    cfg = load_config()
-                    was_mapped = False
-                    for hub in cfg.get("hubs", []):
-                        if hub["location"] == loc:
-                            if str(port) in hub.get("ports", {}):
-                                was_mapped = True
-                                del hub["ports"][str(port)]
-                    if was_mapped:
-                        save_config(cfg)
-                        _emit("Cleared stale port mapping.")
-                try:
-                    uhubctl_set_power(loc, port, False)
-                except Exception:
-                    pass
-
-        except Exception as exc:
-            _emit(f"ERROR: {exc}")
-        finally:
-            _remap_tasks[slot]["done"] = True
-            q.put(None)
+            except Exception as exc:
+                _emit(f"ERROR: {exc}")
+            finally:
+                _remap_tasks[slot]["done"] = True
+                q.put(None)
 
     _remap_tasks[slot] = {"done": False}
     t = threading.Thread(target=_run, daemon=True)
@@ -1185,9 +1202,11 @@ function render(data){
       }else{
         const slot=p.slot_loc+':'+p.port;
         if(p.charge_end_ts&&!chargeEnd[slot])chargeEnd[slot]=p.charge_end_ts*1000;
+        if(!p.charging_active&&chargeEnd[slot])delete chargeEnd[slot];
         const charging=!!(chargeEnd[slot]&&chargeEnd[slot]>Date.now());
         const isFb=p.adb==='fastboot';
-        const busy=!!(srcs[slot]||p.flashing||charging);
+        const logActive=!!(srcs[slot]||p.flashing);
+        const busy=!!(logActive||charging);
         const d=busy?' disabled':'';
         const adb=mkadb(p.adb,null);
         const bat=charging?'<span class="warn">&#9889;&hellip;</span>':mkbat(p.battery,lo,hi);
@@ -1210,7 +1229,7 @@ function render(data){
           (!isFb?`<button class="btn ch"${d} onclick="doCharge('${esc(slot)}')">&#9889; Charge</button>`:'')+
           `<button class="btn fl"${d} onclick="doFl('${esc(slot)}')">Flash nightly</button>` +
           `</td></tr>` +
-          `<tr class="lr" id="lr-${esc(slot)}"><td colspan="8"><div class="log${busy?' show':''}" id="log-${esc(slot)}"></div></td></tr>`
+          `<tr class="lr" id="lr-${esc(slot)}"><td colspan="8"><div class="log${logActive?' show':''}" id="log-${esc(slot)}"></div></td></tr>`
         );
       }
     });
