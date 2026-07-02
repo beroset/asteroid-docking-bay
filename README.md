@@ -60,6 +60,12 @@ cd asteroid-docking-bay
 The binary is installed to `~/.local/bin/asteroid-docking-bay`. The systemd
 user units go to `~/.config/systemd/user/`.
 
+`~/.local/bin` must be on your `PATH` for the short form to work. Most
+distros add it automatically; if yours doesn't (the installer will warn you):
+```sh
+export PATH="$HOME/.local/bin:$PATH"   # add to ~/.bashrc or ~/.zshrc
+```
+
 ### Rootless setup (recommended)
 
 By default uhubctl requires root. To run without sudo:
