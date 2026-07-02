@@ -101,20 +101,33 @@ Running as user `mo` (systemd user service, no sudo):
 
 ---
 
-## Found / pending power-up
+## Found / powered up
 
-### Lenovo ThinkPad USB 3.0 Ultra Dock DK-1523 — needs slim tip PSU
-Old Lenovo dock, back panel says model DK-1523. Has USB 3.0 ports that may expose
-internal hubs to uhubctl. Unknown whether internal hub chip supports true VBUS switching —
-needs `uhubctl -l` once powered to find out.
+### Lenovo ThinkPad USB 3.0 Ultra Dock DK-1523 — CONFIRMED TRUE VBUS SWITCHING ✓
+Found in cellar, powered with a recovered slim tip Lenovo charger. Connected to w541 on
+a USB 3.0 port (Bus 003, 5000M confirmed).
 
-**Blocker:** requires slim tip DC connector (old Lenovo rectangular barrel, 20V, likely 90W).
-Hard to source. Not yet powered.
+**VID:PIDs:**
+- `17ef:1014` — Lenovo TP USB 3.0 Ultra Dock (root hub, 4 ports, **ppps**)
+- `17ef:1015` — Lenovo TP USB 3.0 Ultra Dock (sub-hub, 4 ports, **ppps**)
+- `17e9:4340` — DisplayLink ThinkPad USB 3.0 Ultra Dock (video, not relevant for hubs)
 
-**On power-up:**
-1. `lsusb` / `uhubctl` to identify internal hub chip(s) and VID:PID
-2. Check uhubctl supported list for those VID:PIDs
-3. If ppps: VBUS test with a charging watch before mapping anything
+**Topology:**
+```
+1-2 / 3-2  [17ef:1014, ppps, 4 ports]
+  Port 1: DisplayLink video chip
+  Port 2: free (watch here → 1-2 port 2)
+  Port 3: free
+  Port 4: sub-hub →
+           1-2.4 / 3-2.4  [17ef:1015, ppps, 4 ports — all free]
+```
+6 free ports total (2 on root + 4 on sub). Watches enumerate on USB 2.0 companion
+buses (1-2 / 1-2.4) since they are USB 2.0 devices.
+
+**VBUS test (2026-07-02, PASSED):**
+Narwhal (LG Watch W7, USB-C) was plugged in via a cable with a blue LED power indicator.
+`uhubctl -l 1-2 -p 2 -a off` — blue LED went off instantly. VBUS confirmed cut.
+First hub in the fleet to do true per-port VBUS switching.
 
 ---
 
