@@ -57,6 +57,13 @@ _flash_tasks: dict[str, dict] = {}
 # Per-codename charge task state for the web UI's live countdown.
 _charge_tasks: dict[str, dict] = {}
 
+# Per-slot remap task state for the web UI's SSE streaming.
+_remap_tasks: dict[str, dict] = {}
+
+# Serialises all config read-modify-save cycles so concurrent web requests
+# (flash, charge, remap) don't corrupt config.json.
+_config_lock = threading.Lock()
+
 # Cache: fastboot serial → product codename, populated on first getvar call.
 _fastboot_products: dict[str, str] = {}
 
@@ -825,7 +832,8 @@ def _web_status_data(cfg: dict) -> list[dict]:
             if adb_state is None and serial and serial in fb_devices:
                 adb_state = "fastboot"
             battery   = get_battery_level(serial) if adb_state == "device" else None
-            flashing  = slot in _flash_tasks and not _flash_tasks[slot].get("done", True)
+            flashing  = ((slot in _flash_tasks and not _flash_tasks[slot].get("done", True))
+                         or (slot in _remap_tasks and not _remap_tasks[slot].get("done", True)))
             charge_end_ts = (
                 _charge_tasks[slot].get("charge_end_ts")
                 if slot in _charge_tasks
@@ -849,6 +857,9 @@ def _web_status_data(cfg: dict) -> list[dict]:
                 # Prefer config-known name; fall back to fastboot getvar product.
                 fb_product = cfg.get("serials", {}).get(fb_serial) or _fastboot_getvar_product(fb_serial)
             adb_codename = find_codename_for_serial(cfg, adb_serial) if adb_serial else None
+            empty_slot = f"{loc}:{port_num}"
+            remapping = (empty_slot in _remap_tasks
+                         and not _remap_tasks[empty_slot].get("done", True))
             hub_ports.append({
                 "port": port_num, "codename": adb_codename,
                 "slot_loc": loc,
@@ -856,7 +867,7 @@ def _web_status_data(cfg: dict) -> list[dict]:
                 "smart": port_smart.get(str(port_num)),
                 "adb": devices.get(adb_serial) if adb_serial else ("fastboot" if fb_serial else None),
                 "battery": None,
-                "flashing": False, "empty": True,
+                "flashing": remapping, "empty": True,
                 "fastboot_product": fb_product,
                 "unmapped": adb_codename is not None,
             })
@@ -915,6 +926,139 @@ def _sse_flash_gen(codename: str, slot: str, cfg: dict):
         yield "event: done\ndata: complete\n\n"
     finally:
         _flash_tasks[slot]["done"] = True
+
+
+def _sse_remap_gen(loc: str, port: int):
+    """
+    SSE generator for per-port remap triggered from the web UI.
+
+    Steps:
+      1. Power the port on.
+      2. Wait up to 10 s for an ADB device to appear at this port's sysfs path.
+      3. Identify codename (config lookup → ADB shell → serial fallback).
+      4. Update config under _config_lock:
+           • record serial → codename in cfg["serials"]
+           • remove old mapping for this codename from every other port
+           • set this port's mapping
+      5. Run PPPS test and save result.
+      If no device appears: remove any stale mapping for this port, power off.
+    """
+    slot = f"{loc}:{port}"
+    sysfs_path = f"{loc}.{port}"
+    q: "queue.Queue[str | None]" = queue.Queue()
+
+    def _emit(msg: str) -> None:
+        q.put(msg)
+
+    def _run() -> None:
+        try:
+            _emit(f"Powering on {loc} p{port}…")
+            try:
+                uhubctl_set_power(loc, port, True)
+            except RuntimeError as e:
+                _emit(f"WARNING: {e}")
+
+            _emit("Waiting for watch (10 s)…")
+            found_serial: str | None = None
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                cur = adb_devices()
+                path_map = _sysfs_path_to_serial_map(set(cur.keys()))
+                s = path_map.get(sysfs_path)
+                if s and cur.get(s) == "device":
+                    found_serial = s
+                    break
+                time.sleep(0.8)
+
+            if found_serial:
+                _emit(f"ADB: {found_serial}")
+                with _config_lock:
+                    cfg = load_config()
+                    codename = cfg.get("serials", {}).get(found_serial)
+
+                if not codename:
+                    _emit("Reading codename from watch…")
+                    codename = get_watch_codename(found_serial) or found_serial
+                _emit(f"Watch: {codename}")
+
+                with _config_lock:
+                    cfg = load_config()
+                    cfg.setdefault("serials", {})[found_serial] = codename
+                    # Remove old mapping for this codename from every other port.
+                    for hub in cfg.get("hubs", []):
+                        hub_ports = hub.get("ports", {})
+                        stale = [k for k, v in hub_ports.items()
+                                 if v == codename
+                                 and not (hub["location"] == loc and k == str(port))]
+                        for k in stale:
+                            del hub_ports[k]
+                            _emit(f"Removed stale mapping: {hub['location']}:p{k} → {codename}")
+                    # Add/update this port.
+                    hub_entry = next((h for h in cfg.get("hubs", [])
+                                      if h["location"] == loc), None)
+                    if hub_entry is not None:
+                        hub_entry.setdefault("ports", {})[str(port)] = codename
+                    save_config(cfg)
+
+                _emit(f"Mapped {loc}:p{port} → {codename}")
+
+                _emit("Testing port switching (PPPS, ~3 s)…")
+                try:
+                    smart, msg = test_port_power_switching(loc, port)
+                    with _config_lock:
+                        cfg = load_config()
+                        for hub in cfg.get("hubs", []):
+                            if hub["location"] == loc:
+                                hub.setdefault("port_smart", {})[str(port)] = smart
+                                break
+                        save_config(cfg)
+                    _emit(f"Port: {'SMART ✓' if smart else 'NOT SMART'} — {msg}")
+                except RuntimeError as e:
+                    _emit(f"PPPS test error: {e}")
+
+            else:
+                _emit("No watch detected.")
+                with _config_lock:
+                    cfg = load_config()
+                    was_mapped = False
+                    for hub in cfg.get("hubs", []):
+                        if hub["location"] == loc:
+                            if str(port) in hub.get("ports", {}):
+                                was_mapped = True
+                                del hub["ports"][str(port)]
+                    if was_mapped:
+                        save_config(cfg)
+                        _emit("Cleared stale port mapping.")
+                try:
+                    uhubctl_set_power(loc, port, False)
+                except Exception:
+                    pass
+
+        except Exception as exc:
+            _emit(f"ERROR: {exc}")
+        finally:
+            _remap_tasks[slot]["done"] = True
+            q.put(None)
+
+    _remap_tasks[slot] = {"done": False}
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+
+    try:
+        while True:
+            try:
+                msg = q.get(timeout=15)
+            except queue.Empty:
+                yield ": heartbeat\n\n"
+                continue
+            if msg is None:
+                break
+            for line in (msg.splitlines() or [""]):
+                yield f"data: {line}\n"
+            yield "\n"
+        yield "event: done\ndata: complete\n\n"
+    finally:
+        _remap_tasks[slot]["done"] = True
 
 
 _WEB_TEMPLATE = """\
@@ -1017,15 +1161,16 @@ function render(data){
       const tree=i===hub.ports.length-1?'&#x2514;&#x2500;':'&#x251c;&#x2500;';
       if(p.empty){
         const slot=p.slot_loc+':'+p.port;
-        const isRef=refreshing.has(slot);
+        const busy=!!(srcs[slot]||p.flashing);
+        const d=busy?' disabled':'';
         const fbLabel=p.fastboot_product?`fastboot: ${esc(p.fastboot_product)}`:(p.adb==='fastboot'?'fastboot':'');
         const nameCell=p.unmapped
-          ?`<span class="dim">${esc(p.codename)} <span style="font-size:.8em;opacity:.6">(run map)</span></span>`
+          ?`<span class="dim">${esc(p.codename)} <span style="font-size:.8em;opacity:.6">(click Refresh)</span></span>`
           :(p.fastboot_product?`<span class="warn">${esc(p.fastboot_product)}</span>`:'<span class="dim">&mdash;</span>');
         const adbCell=p.adb==='fastboot'?`<span class="warn">${fbLabel}</span>`
           :(p.adb?mkadb(p.adb,null):'<span class="dim">&mdash;</span>');
         rows.push(
-          `<tr class="wr empty${isRef?' refreshing':''}">` +
+          `<tr class="wr empty" id="wr-${esc(slot)}">` +
           `<td class="tc">${tree}</td>` +
           `<td>${nameCell}</td>` +
           `<td class="dim">p${p.port}</td>` +
@@ -1033,8 +1178,9 @@ function render(data){
           `<td>${mksmt(p.smart)}</td>` +
           `<td>${adbCell}</td>` +
           `<td class="dim">&mdash;</td>` +
-          `<td><button class="btn btn-ref${isRef?' pulsing':''}" onclick="doRefresh('${esc(slot)}')">Refresh</button></td>` +
-          `</tr>`
+          `<td><button class="btn btn-ref"${d} onclick="doRemap('${esc(slot)}')">Refresh</button></td>` +
+          `</tr>` +
+          `<tr class="lr" id="lr-${esc(slot)}"><td colspan="8"><div class="log${busy?' show':''}" id="log-${esc(slot)}"></div></td></tr>`
         );
       }else{
         const slot=p.slot_loc+':'+p.port;
@@ -1165,6 +1311,19 @@ function doFl(c){
   srcs[c]=es;
   es.onmessage=ev=>{box.textContent+=ev.data+'\\n';box.scrollTop=box.scrollHeight};
   es.addEventListener('done',()=>{box.textContent+='\\n\\u2500\\u2500 done \\u2500\\u2500\\n';box.scrollTop=box.scrollHeight;es.close();delete srcs[c];refresh()});
+  es.onerror=()=>{box.textContent+='\\n\\u2500\\u2500 connection lost \\u2500\\u2500\\n';es.close();delete srcs[c];refresh()};
+}
+function doRemap(c){
+  if(srcs[c])return;
+  const box=document.getElementById('log-'+c);
+  if(!box)return;
+  box.textContent='';box.classList.add('show');
+  const r=document.getElementById('wr-'+c);
+  if(r)r.querySelectorAll('button').forEach(b=>b.disabled=true);
+  const es=new EventSource('/api/remap/'+_api(c));
+  srcs[c]=es;
+  es.onmessage=ev=>{box.textContent+=ev.data+'\\n';box.scrollTop=box.scrollHeight};
+  es.addEventListener('done',()=>{box.textContent+='\\n\\u2500\\u2500 done \\u2500\\u2500\\n';box.scrollTop=box.scrollHeight;es.close();delete srcs[c];setTimeout(refresh,1000)});
   es.onerror=()=>{box.textContent+='\\n\\u2500\\u2500 connection lost \\u2500\\u2500\\n';es.close();delete srcs[c];refresh()};
 }
 refresh();setInterval(refresh,15000);
@@ -1653,6 +1812,18 @@ def cmd_serve(args, cfg: dict):
                 yield "data: ERROR: port not mapped to any codename\n\nevent: done\ndata: \n\n"
             return _no_codename()
         return _sse_flash_gen(codename, slot, c_cfg)
+
+    @app.get("/api/remap/<loc>/<port:int>")
+    def api_remap(loc, port):
+        resp.content_type = "text/event-stream"
+        resp.headers["Cache-Control"] = "no-cache"
+        resp.headers["X-Accel-Buffering"] = "no"
+        slot = f"{loc}:{port}"
+        if slot in _remap_tasks and not _remap_tasks[slot].get("done", True):
+            def _busy():
+                yield "data: remap already in progress\n\nevent: done\ndata: \n\n"
+            return _busy()
+        return _sse_remap_gen(loc, port)
 
     class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
         daemon_threads = True
