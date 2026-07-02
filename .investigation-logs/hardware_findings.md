@@ -101,6 +101,23 @@ Running as user `mo` (systemd user service, no sudo):
 
 ---
 
+## Found / pending power-up
+
+### Lenovo ThinkPad USB 3.0 Ultra Dock DK-1523 — needs slim tip PSU
+Old Lenovo dock, back panel says model DK-1523. Has USB 3.0 ports that may expose
+internal hubs to uhubctl. Unknown whether internal hub chip supports true VBUS switching —
+needs `uhubctl -l` once powered to find out.
+
+**Blocker:** requires slim tip DC connector (old Lenovo rectangular barrel, 20V, likely 90W).
+Hard to source. Not yet powered.
+
+**On power-up:**
+1. `lsusb` / `uhubctl` to identify internal hub chip(s) and VID:PID
+2. Check uhubctl supported list for those VID:PIDs
+3. If ppps: VBUS test with a charging watch before mapping anything
+
+---
+
 ## Ordered / incoming hardware
 
 ### RSHTECH A-16 (16-port) — arriving ~2026-07-06
