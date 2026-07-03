@@ -159,7 +159,8 @@ asteroid-docking-bay map
 One-time hub setup wizard:
 1. Discovers all connected smart hubs.
 2. Powers each port on in sequence and identifies the watch via ADB.
-3. **Tests per-port power switching (PPPS)** with a live toggle (~3 s per port).
+3. **Tests per-port power switching (PPPS)** with a live toggle (up to ~30 s
+   per port — see `test-ports` below for what is verified).
 4. Saves hub topology, port assignments, and serial numbers to config.
 
 Run once when you first connect a hub, and again only if the hub itself
@@ -171,8 +172,22 @@ The switching test can be run independently with `test-ports`.
 asteroid-docking-bay test-ports [codename]
 ```
 Re-test per-port power switching for all configured ports (or a specific watch).
-Updates the config and reports smart vs. non-smart results. Run this after
-moving a watch to a different hub port, or if you skipped the test during `map`.
+Updates the config and reports the verdict per port. Run this after moving a
+watch to a different hub port, or if you skipped the test during `map`.
+
+The test verifies that VBUS is **actually cut**, not just that the hub's
+status register toggles (many hubs ACK the command while power stays live).
+Evidence, strongest first: the device dropping off ADB within seconds of the
+cut; if it keeps responding, the watch itself is asked whether it still sees
+external power. Verdicts are three-way:
+
+- `SMART` — VBUS cut confirmed by a live device
+- `NOT SMART` — the device demonstrably kept external power through "off"
+- `UNVERIFIED` — no device on the port to test against (empty port, or a
+  watch that can't enumerate); re-run once a working watch is attached
+
+A definitive verdict therefore requires a booted, ADB-visible watch on the
+port. Expect up to ~30 s per port.
 
 ```
 asteroid-docking-bay discover
@@ -197,8 +212,21 @@ config — all streamed live into an inline log below the row.
 - **ON / OFF toggle** — switches hub port power; confirms the state changed.
 - **⟳** — power-cycles the port (off → 5 s → on).
 - **⏻ Halt** — submenu: graceful OS shutdown, reboot, or reboot to bootloader.
-- **⚡ Charge** — manual one-shot charge cycle with a live countdown.
+- **⚡ Charge** — manual one-shot charge cycle with a live countdown, and a
+  **◼ Stop charge** button while it runs.
+- **📉 Drain test** — standby battery drain measurement: powers the port off
+  and lets the watch run on battery, waking it every 30 minutes for a battery
+  reading until it reaches 15% or you press **◼ Stop test**. The battery
+  column shows the current level, drain rate (%/h), and estimated time to the
+  floor. Results are saved as JSON to
+  `~/.local/share/asteroid-docking-bay/drain-tests/`.
 - **Flash nightly** — full nightly flash streamed live into the inline log.
+
+Charge and drain state live in the server, not the browser — reloading the
+page (or opening it from another machine) picks up running operations and
+their countdowns. On ports recorded as not power-switchable, the power
+toggle, cycle, Charge and Drain buttons are disabled (Refresh, Halt and
+Flash still work — they only need ADB).
 
 The page auto-refreshes every 15 seconds. `--host 0.0.0.0` makes it
 reachable from other machines on the network.
@@ -348,8 +376,12 @@ stops enumerating on USB (`adb devices` drops, port shows `0000 off`), but
 VBUS stays live and the watch keeps charging. This is what many cheap hubs
 do, including ALCOR 05e3:0606 units.
 
-To tell which you have: switch a port off with `uhubctl`, then check whether
-the watch is still charging. If it is, the hub only controls data lines.
+`test-ports` distinguishes these automatically: it requires the device to
+actually drop off the bus (or to report loss of external power over ADB)
+before recording a port as smart — a toggling status register alone is not
+accepted as evidence. To check manually: switch a port off with `uhubctl`,
+then check whether the watch is still charging. If it is, the hub only
+controls data lines.
 
 Data-line-only hubs are still useful for ADB operations (flash, reboot,
 bootloader) since those require a live USB data connection. They cannot
