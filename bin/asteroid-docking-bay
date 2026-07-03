@@ -598,6 +598,38 @@ def _wait_for_new_adb_device(known_serials: set[str], timeout: int = 10) -> str 
     return None
 
 
+def wait_serial_online(serial: str, wait_secs: int, retries: int,
+                       stop_event: "threading.Event | None" = None,
+                       recover_loc_port: "tuple[str, int] | None" = None) -> bool:
+    """
+    Poll until the serial is ADB-online. False on timeout or stop request
+    (callers distinguish the two via stop_event.is_set()).
+
+    Samples from a failed adb invocation are discarded — a crashed server's
+    freshly-started replacement briefly reports an empty device list.  With
+    recover_loc_port the port is power-cycled once after the first exhausted
+    wait: the stale-dark-node recovery this dock needs (see uhubctl_cycle),
+    after which the full wait runs once more.
+    """
+    attempts = 2 if recover_loc_port else 1
+    for attempt in range(attempts):
+        for _ in range(retries):
+            devs = adb_devices_checked()
+            if devs is not None and devs.get(serial) == "device":
+                return True
+            if stop_event is not None:
+                if stop_event.wait(timeout=wait_secs):
+                    return False
+            else:
+                time.sleep(wait_secs)
+        if recover_loc_port is not None and attempt == 0:
+            loc, port = recover_loc_port
+            log.info("%s: not enumerating on %s:%s — power-cycling once",
+                     serial, loc, port)
+            uhubctl_cycle(loc, port)
+    return False
+
+
 def wait_for_adb(codename: str, cfg: dict, charge_cfg: dict) -> str | None:
     """
     Poll ADB until the watch with the given codename appears as 'device'.
@@ -910,16 +942,14 @@ def _run_charge_for_web(slot: str, loc: str, port: int, cfg: dict) -> None:
             uhubctl_set_power(loc, port, True)
             serial = find_serial_for_loc_port(cfg, loc, port)
             if serial:
-                wait_secs = charge_cfg.get("adb_wait_seconds", 15)
-                retries = charge_cfg.get("adb_wait_retries", 8)
-                for _ in range(retries):
-                    if adb_devices().get(serial) == "device":
-                        break
-                    log.info("%s: waiting for ADB (%s)…", codename, serial)
-                    if stop_event.wait(timeout=wait_secs):
-                        log.info("%s: charge cancelled while waiting for ADB", codename)
-                        return
+                # Charging works without enumeration (VBUS is on either way),
+                # so a timeout here is logged by the helper and charge proceeds.
+                wait_serial_online(serial,
+                                   charge_cfg.get("adb_wait_seconds", 15),
+                                   charge_cfg.get("adb_wait_retries", 8),
+                                   stop_event, recover_loc_port=(loc, port))
             if stop_event.is_set():
+                log.info("%s: charge cancelled while waiting for ADB", codename)
                 return
             end_ts = time.time() + duration_sec
             _charge_tasks[slot]["charge_end_ts"] = end_ts
@@ -959,21 +989,13 @@ def _adb_read_battery(loc: str, port: int, serial: str | None,
         return None
     try:
         uhubctl_set_power(loc, port, True)
-        wait_secs = charge_cfg.get("adb_wait_seconds", 15)
-        retries   = charge_cfg.get("adb_wait_retries", 8)
-        for attempt in range(2):
-            for _ in range(retries):
-                if adb_devices().get(serial) == "device":
-                    return get_battery_level(serial)
-                if stop_event.wait(timeout=wait_secs):
-                    return None
-            if attempt == 0:
-                # Stale dark node from the last power-off can block
-                # re-enumeration; a power cycle raises a proper connect event.
-                log.info("drain: %s not enumerating on %s:%s — power-cycling once",
-                         serial, loc, port)
-                uhubctl_cycle(loc, port)
-        log.warning("drain: ADB timeout for %s on %s:%s", serial, loc, port)
+        if wait_serial_online(serial,
+                              charge_cfg.get("adb_wait_seconds", 15),
+                              charge_cfg.get("adb_wait_retries", 8),
+                              stop_event, recover_loc_port=(loc, port)):
+            return get_battery_level(serial)
+        if not stop_event.is_set():
+            log.warning("drain: ADB timeout for %s on %s:%s", serial, loc, port)
         return None
     finally:
         try:
