@@ -222,7 +222,10 @@ config — all streamed live into an inline log below the row.
   reading until it reaches 15% or you press **◼ Stop test**. The battery
   column shows the current level, drain rate (%/h), and estimated time to the
   floor. Results are saved as JSON to
-  `~/.local/share/asteroid-docking-bay/drain-tests/`.
+  `~/.local/share/asteroid-docking-bay/drain-tests/`, and the **📉 drain
+  history** link in the page header lists every recorded test — per-watch
+  drain rate and estimated 100→15% standby life. A rate that rises across
+  months means battery wear.
 - **Flash nightly** — full nightly flash streamed live into the inline log.
 
 The ADB column shows the AsteroidOS logo next to `device` when the watch is

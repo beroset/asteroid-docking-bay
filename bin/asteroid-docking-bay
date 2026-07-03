@@ -1685,7 +1685,7 @@ _WEB_TEMPLATE = """\
 </head>
 <body>
   <h1><span class="hdim">&#x2728;  &#x22C6;  &#x02DA; </span>&#x2726;<span class="htxt">  asteroid-docking-bay  </span>&#x2726;<span class="hdim"> &#x02DA;  &#x22C6;  &#x2728;</span></h1>
-  <p class="meta">USB hub power manager for AsteroidOS &nbsp;&middot;&nbsp; <span id="ts">loading&hellip;</span></p>
+  <p class="meta">USB hub power manager for AsteroidOS &nbsp;&middot;&nbsp; <span id="ts">loading&hellip;</span> &nbsp;&middot;&nbsp; <a href="#" id="histlink" onclick="toggleHistory();return false" style="color:#388bfd;text-decoration:none">&#x1F4C9; drain history</a></p>
   <table>
     <thead><tr>
       <th></th><th>Watch</th><th>Port</th><th>Power</th><th>Smart</th>
@@ -1693,6 +1693,7 @@ _WEB_TEMPLATE = """\
     </tr></thead>
     <tbody id="tb"></tbody>
   </table>
+  <div id="hist" style="display:none"></div>
 <script>
 const srcs={};
 const chargeEnd={};
@@ -1922,6 +1923,35 @@ function fmtDur(h){
 }
 function doDrain(c){
   fetch('/api/drain/'+_api(c),{method:'POST'}).then(()=>refresh());
+}
+let histShown=false;
+function toggleHistory(){
+  const el=document.getElementById('hist');
+  histShown=!histShown;
+  if(!histShown){el.style.display='none';return;}
+  el.style.display='block';
+  el.innerHTML='<p class="dim" style="margin-top:14px">loading&hellip;</p>';
+  fetch('/api/drain/history').then(r=>r.json()).then(d=>{
+    if(!d.tests.length){
+      el.innerHTML='<p class="dim" style="margin-top:14px">No drain tests recorded yet &mdash; results land here after the first &#x1F4C9; Drain test finishes.</p>';
+      return;
+    }
+    const rows=d.tests.map(t=>{
+      const dur=(t.end_ts&&t.start_ts&&t.end_ts>t.start_ts)?fmtDur((t.end_ts-t.start_ts)/3600):'&mdash;';
+      const rate=t.rate!=null?t.rate.toFixed(2)+'%/h':'&mdash;';
+      const est=(t.rate!=null&&t.rate>0)?'~'+fmtDur(85/t.rate):'&mdash;';
+      const dt=t.start_ts?new Date(t.start_ts*1000).toLocaleString([],{dateStyle:'medium',timeStyle:'short'}):'&mdash;';
+      return `<tr><td><b>${esc(t.codename)}</b></td><td class="dim">${dt}</td>`+
+        `<td>${t.start_pct}% &rarr; ${t.end_pct!=null?t.end_pct+'%':'?'}</td>`+
+        `<td class="dim">${dur}</td><td>${rate}</td><td class="dim">${est}</td>`+
+        `<td class="dim">${t.stopped?'stopped':'done'} (${t.samples} samples)</td></tr>`;
+    }).join('');
+    el.innerHTML=
+      `<h1 style="font-size:15px;margin:24px 0 4px">&#x1F4C9; drain test history</h1>`+
+      `<p class="meta">standby drain per test &mdash; a rising rate across months means battery wear</p>`+
+      `<table><thead><tr><th>Watch</th><th>Date</th><th>Charge</th><th>Duration</th>`+
+      `<th>Rate</th><th>Est. 100&rarr;15%</th><th>Result</th></tr></thead><tbody>${rows}</tbody></table>`;
+  });
 }
 function doStopDrain(c){
   fetch('/api/drain/stop/'+_api(c),{method:'POST'}).then(()=>refresh());
@@ -2453,6 +2483,32 @@ def cmd_serve(args, cfg: dict):
             ev.set()
             return json.dumps({"ok": True})
         return json.dumps({"ok": False, "error": "no charge running"})
+
+    @app.get("/api/drain/history")
+    def api_drain_history():
+        """All recorded drain test results, newest first."""
+        resp.content_type = "application/json"
+        tests = []
+        for f in _DRAIN_RESULTS_DIR.glob("*.json"):
+            try:
+                with f.open() as fh:
+                    d = json.load(fh)
+            except Exception:
+                continue
+            readings = d.get("readings") or []
+            tests.append({
+                "codename":  d.get("codename"),
+                "slot":      d.get("slot"),
+                "start_ts":  d.get("start_ts"),
+                "end_ts":    readings[-1].get("ts") if readings else d.get("start_ts"),
+                "start_pct": d.get("start_pct"),
+                "end_pct":   d.get("end_pct"),
+                "rate":      d.get("drain_rate_pct_per_hour"),
+                "stopped":   d.get("stopped_by_user", False),
+                "samples":   len(readings),
+            })
+        tests.sort(key=lambda t: t.get("start_ts") or 0, reverse=True)
+        return json.dumps({"tests": tests})
 
     @app.post("/api/drain/<loc>/<port:int>")
     def api_drain(loc, port):
