@@ -14,6 +14,7 @@ Logs:   journald (if python-systemd is installed) + stderr
 
 import argparse
 import copy
+import fcntl
 import glob
 import json
 import logging
@@ -84,6 +85,28 @@ _fastboot_products: dict[str, str] = {}
 # contend with adb's libusb use during device churn.  RLock because
 # uhubctl_set_power read-backs via uhubctl_get_power.
 _uhubctl_lock = threading.RLock()
+
+# Cross-process companion to _uhubctl_lock: the web UI and the periodic
+# charge timer are separate processes, and their concurrent uhubctl bus
+# scans have been observed to glitch dock ports (a port dropped power
+# mid-charge during a parallel check-charge run).
+_UHUBCTL_LOCKFILE = Path.home() / ".local/state/asteroid-docking-bay/uhubctl.lock"
+_uhubctl_lock_fd: "int | None" = None
+
+
+def _uhubctl_exec(cmd: str) -> tuple[int, str, str]:
+    """Run one uhubctl command holding the in-process and cross-process locks."""
+    global _uhubctl_lock_fd
+    with _uhubctl_lock:
+        if _uhubctl_lock_fd is None:
+            _UHUBCTL_LOCKFILE.parent.mkdir(parents=True, exist_ok=True)
+            _uhubctl_lock_fd = os.open(_UHUBCTL_LOCKFILE,
+                                       os.O_CREAT | os.O_RDWR, 0o644)
+        fcntl.flock(_uhubctl_lock_fd, fcntl.LOCK_EX)
+        try:
+            return _run(cmd, check=False)
+        finally:
+            fcntl.flock(_uhubctl_lock_fd, fcntl.LOCK_UN)
 
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -174,8 +197,7 @@ def uhubctl_list() -> list[dict]:
     many ports should use "power" instead of per-port uhubctl_get_power calls.
     """
     _require_uhubctl()
-    with _uhubctl_lock:
-        rc, out, err = _run("uhubctl -S", check=False)
+    rc, out, err = _uhubctl_exec("uhubctl -S")
     if rc != 0:
         if "Permission denied" in err or "Operation not permitted" in err:
             log.error(
@@ -219,8 +241,7 @@ def uhubctl_list() -> list[dict]:
 
 def uhubctl_get_power(location: str, port: int) -> bool | None:
     """Return True = powered on, False = powered off, None = unknown."""
-    with _uhubctl_lock:
-        rc, out, err = _run(f"uhubctl -S -l {location} -p {port}", check=False)
+    rc, out, err = _uhubctl_exec(f"uhubctl -S -l {location} -p {port}")
     if rc != 0:
         if "Permission denied" in err or "Operation not permitted" in err:
             log.warning("uhubctl: permission denied querying %s port %d", location, port)
@@ -245,7 +266,7 @@ def uhubctl_set_power(location: str, port: int, on: bool) -> bool:
     """
     action = "on" if on else "off"
     with _uhubctl_lock:
-        rc, _, err = _run(f"uhubctl -S -l {location} -p {port} -a {action}", check=False)
+        rc, _, err = _uhubctl_exec(f"uhubctl -S -l {location} -p {port} -a {action}")
         if rc != 0:
             raise RuntimeError(
                 f"uhubctl failed setting hub {location} port {port} {action}: {err}"
@@ -264,8 +285,7 @@ def uhubctl_cycle(location: str, port: int, delay: int = 3) -> None:
     """Power-cycle a port in a single uhubctl invocation (off → delay → on).
     Used as the stale-node recovery primitive: unlike a plain off→on pair,
     the cycle makes this dock raise a proper connect event."""
-    with _uhubctl_lock:
-        _run(f"uhubctl -S -l {location} -p {port} -a cycle -d {delay}", check=False)
+    _uhubctl_exec(f"uhubctl -S -l {location} -p {port} -a cycle -d {delay}")
 
 
 def _port_device_present(location: str, port: int) -> bool:
@@ -940,15 +960,33 @@ def _flash_one_watch(
 _CHARGE_POLL_SEC = 120  # battery poll interval in charge-to-target mode
 
 
-def charge_to_target(codename: str, serial: "str | None",
-                     charge_cfg: dict) -> "int | None":
+def _ensure_port_powered(codename: str, loc: "str | None",
+                         port: "int | None") -> None:
+    """Re-assert port power if something external cut it mid-charge
+    (concurrent process, dock glitch)."""
+    if loc is None or port is None:
+        return
+    if uhubctl_get_power(loc, port) is False:
+        log.warning("%s: port %s:%s lost power during charge — re-powering",
+                    codename, loc, port)
+        try:
+            uhubctl_set_power(loc, port, True)
+        except RuntimeError as e:
+            log.warning("%s: re-power failed: %s", codename, e)
+
+
+def charge_to_target(codename: str, serial: "str | None", charge_cfg: dict,
+                     loc: "str | None" = None,
+                     port: "int | None" = None) -> "int | None":
     """
     Charge a watch whose port is already powered until high_threshold,
     polling the battery every _CHARGE_POLL_SEC and hard-capped by
     charge_max_minutes.  Falls back to a blind charge_duration_minutes sleep
     when the battery can't be read.  Returns the final battery level (None
-    in blind mode).  Used by the CLI charge command and the periodic timer;
-    the web UI has its own loop with stop-event and live task state.
+    in blind mode).  With loc/port given, port power is re-asserted each
+    poll in case something external cut it.  Used by the CLI charge command
+    and the periodic timer; the web UI has its own loop with stop-event and
+    live task state.
     """
     target  = charge_cfg.get("high_threshold", 80)
     max_sec = charge_cfg.get("charge_max_minutes", 240) * 60
@@ -967,6 +1005,7 @@ def charge_to_target(codename: str, serial: "str | None",
     deadline = time.time() + max_sec
     while time.time() < deadline:
         time.sleep(_CHARGE_POLL_SEC)
+        _ensure_port_powered(codename, loc, port)
         lvl = get_battery_level(serial)
         if lvl is None:
             continue  # transient read failure — keep charging
@@ -1028,6 +1067,7 @@ def _run_charge_for_web(slot: str, loc: str, port: int, cfg: dict) -> None:
                                     "charge_max_minutes — stopping at %s%%",
                                     codename, target, task.get("pct"))
                         break
+                    _ensure_port_powered(codename, loc, port)
                     lvl = get_battery_level(serial)
                     if lvl is None:
                         continue  # transient read failure — keep charging
@@ -1042,9 +1082,13 @@ def _run_charge_for_web(slot: str, loc: str, port: int, cfg: dict) -> None:
                 log.info("%s: battery unreadable — charging blind for %d min",
                          codename, duration_sec // 60)
                 # Sleep in 5-second chunks so a stop is noticed promptly.
+                ticks = 0
                 while not stop_event.wait(timeout=5):
                     if time.time() >= end_ts:
                         break
+                    ticks += 1
+                    if ticks % 12 == 0:  # every ~60 s
+                        _ensure_port_powered(codename, loc, port)
             if stop_event.is_set():
                 log.info("%s: charge stopped by user", codename)
         except Exception as exc:
@@ -2231,7 +2275,7 @@ def _charge_one(
                 if level_after is not None:
                     log.info("%s: battery now at %d%% after charging", codename, level_after)
         else:
-            charge_to_target(codename, serial, charge_cfg)
+            charge_to_target(codename, serial, charge_cfg, loc, port)
 
         uhubctl_set_power(loc, port, False)
         log.info("%s: port powered off, charge cycle complete", codename)
@@ -2304,7 +2348,7 @@ def cmd_check_charge(args, cfg: dict):
                 uhubctl_set_power(loc, port, False)
             elif level < low:
                 log.info("%s: at %d%% (<%d%%), charging to %d%%", codename, level, low, high)
-                charge_to_target(codename, serial, charge_cfg)
+                charge_to_target(codename, serial, charge_cfg, loc, port)
                 uhubctl_set_power(loc, port, False)
                 log.info("%s: port powered off", codename)
             else:
