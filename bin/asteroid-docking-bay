@@ -543,6 +543,14 @@ def is_port_smart(cfg: dict, codename: str) -> bool | None:
     return None
 
 
+def is_slot_smart(cfg: dict, loc: str, port: int) -> bool | None:
+    """Per-port variant of is_port_smart — unambiguous with duplicate codenames."""
+    for hub in cfg.get("hubs", []):
+        if hub["location"] == loc:
+            return hub.get("port_smart", {}).get(str(port))
+    return None
+
+
 def _resolve_targets(codename_arg: str, cfg: dict) -> list[str]:
     if codename_arg == "all":
         return all_configured_codenames(cfg)
@@ -1468,7 +1476,7 @@ function render(data){
         const adbCell=p.adb==='fastboot'?`<span class="warn">${fbLabel}</span>`
           :(p.adb?mkadb(p.adb,null):'<span class="dim">&mdash;</span>');
         rows.push(
-          `<tr class="wr empty" id="wr-${esc(slot)}">` +
+          `<tr class="wr empty" id="wr-${slot}">` +
           `<td class="tc">${tree}</td>` +
           `<td>${nameCell}</td>` +
           `<td class="dim">p${p.port}</td>` +
@@ -1476,9 +1484,9 @@ function render(data){
           `<td>${mksmt(p.smart)}</td>` +
           `<td>${adbCell}</td>` +
           `<td class="dim">&mdash;</td>` +
-          `<td><button class="btn btn-ref"${d} onclick="doRemap('${esc(slot)}')">Refresh</button></td>` +
+          `<td><button class="btn btn-ref"${d} onclick="doRemap('${slot}')">Refresh</button></td>` +
           `</tr>` +
-          `<tr class="lr" id="lr-${esc(slot)}"><td colspan="8"><div class="log${busy?' show':''}" id="log-${esc(slot)}"></div></td></tr>`
+          `<tr class="lr" id="lr-${slot}"><td colspan="8"><div class="log${busy?' show':''}" id="log-${slot}"></div></td></tr>`
         );
       }else{
         const slot=p.slot_loc+':'+p.port;
@@ -1490,6 +1498,9 @@ function render(data){
         const logActive=!!(srcs[slot]||p.flashing);
         const busy=!!(logActive||charging||draining);
         const d=busy?' disabled':'';
+        const noSw=p.smart===false;
+        const dp=(busy||noSw)?' disabled':'';
+        const noSwT=noSw?' title="port cannot switch power (not smart)"':'';
         const adb=mkadb(p.adb,null);
         let bat;
         if(charging){const rem=Math.max(0,Math.round((chargeEnd[slot]-Date.now())/1000));const m=Math.floor(rem/60),s=rem%60;bat=`<span class="warn">&#9889; ${m}m${String(s).padStart(2,'0')}s</span>`;}
@@ -1502,44 +1513,44 @@ function render(data){
             if(dr.last_pct>floor){const estH=(dr.last_pct-floor)/dr.drain_rate;txt+=` (~${fmtDur(estH)})`;}
           }
           bat=`<span class="warn">${txt}</span>`;
-        }else if(p.drain&&p.drain.done&&!p.drain.active){
+        }else if(p.drain&&p.drain.done&&p.drain.last_pct!==null){
           const dr=p.drain;
           const summary=dr.drain_rate!==null?` &minus;${dr.drain_rate.toFixed(1)}%/h`:'';
           bat=`${mkbat(p.battery,lo,hi)}<span class="dim" style="font-size:10px"> (test: ${dr.last_pct}%${summary})</span>`;
         }else{bat=mkbat(p.battery,lo,hi);}
-        const pwrFn=p.power===true?`doOff('${esc(slot)}')`:`doOn('${esc(slot)}')`;
+        const pwrFn=p.power===true?`doOff('${slot}')`:`doOn('${slot}')`;
         const pwrCls=p.power===true?'tgl tgl-on':'tgl tgl-off';
         const pwrLbl=p.power===true?'<span class="dot don"></span>ON':'<span class="dot doff"></span>OFF';
         const isRef=refreshing.has(slot);
         rows.push(
-          `<tr class="wr${isRef?' refreshing':''}" id="wr-${esc(slot)}">` +
+          `<tr class="wr${isRef?' refreshing':''}" id="wr-${slot}">` +
           `<td class="tc">${tree}</td>` +
           `<td><b>${esc(p.codename)}</b></td>` +
           `<td class="dim">p${p.port}</td>` +
-          `<td><button class="${pwrCls}"${d} onclick="${pwrFn}">${pwrLbl}</button><button class="ico"${d} onclick="doCy('${esc(slot)}')" title="Power-cycle port">&#x21BA;</button></td>` +
+          `<td><button class="${pwrCls}"${dp}${noSwT} onclick="${pwrFn}">${pwrLbl}</button><button class="ico"${dp} onclick="doCy('${slot}')" title="Power-cycle port">&#x21BA;</button></td>` +
           `<td>${mksmt(p.smart)}</td>` +
           `<td>${adb}</td>` +
-          `<td id="bat-${esc(slot)}">${bat}</td>` +
-          `<td id="act-${esc(slot)}">` +
-          `<button class="btn btn-ref${isRef?' pulsing':''}"${d} onclick="doRefresh('${esc(slot)}')">Refresh</button>` +
-          (p.power===true&&!isFb?`<button class="btn ht"${d} onclick="doHalt('${esc(slot)}')">&#x23FB; Halt</button>`:'')+
+          `<td id="bat-${slot}">${bat}</td>` +
+          `<td id="act-${slot}">` +
+          `<button class="btn btn-ref${isRef?' pulsing':''}"${d} onclick="doRefresh('${slot}')">Refresh</button>` +
+          (p.power===true&&!isFb?`<button class="btn ht"${d} onclick="doHalt('${slot}')">&#x23FB; Halt</button>`:'')+
           (!isFb?(charging
-            ?`<button class="btn ch" onclick="doStopCharge('${esc(slot)}')">&#9632; Stop charge</button>`
-            :`<button class="btn ch"${d} onclick="doCharge('${esc(slot)}')">&#9889; Charge</button>`
+            ?`<button class="btn ch" onclick="doStopCharge('${slot}')">&#9632; Stop charge</button>`
+            :`<button class="btn ch"${dp}${noSwT} onclick="doCharge('${slot}')">&#9889; Charge</button>`
           ):'')+
           (!isFb?(draining
-            ?`<button class="btn dr" onclick="doStopDrain('${esc(slot)}')">&#9632; Stop test</button>`
-            :`<button class="btn dr"${d} onclick="doDrain('${esc(slot)}')">&#x1F4C9; Drain test</button>`
+            ?`<button class="btn dr" onclick="doStopDrain('${slot}')">&#9632; Stop test</button>`
+            :`<button class="btn dr"${dp}${noSwT} onclick="doDrain('${slot}')">&#x1F4C9; Drain test</button>`
           ):'')+
-          `<button class="btn fl"${d} onclick="doFl('${esc(slot)}')">Flash nightly</button>` +
+          `<button class="btn fl"${d} onclick="doFl('${slot}')">Flash nightly</button>` +
           `</td></tr>` +
-          `<tr class="lr" id="lr-${esc(slot)}"><td colspan="8"><div class="log${logActive?' show':''}" id="log-${esc(slot)}"></div></td></tr>`
+          `<tr class="lr" id="lr-${slot}"><td colspan="8"><div class="log${logActive?' show':''}" id="log-${slot}"></div></td></tr>`
         );
       }
     });
   });
   tb.innerHTML=rows.join('');
-  Object.keys(srcs).forEach(c=>{const b=document.getElementById('log-'+c);if(b)b.classList.add('show')});
+  Object.keys(srcs).forEach(c=>{const b=document.getElementById('log-'+c);if(b)b.classList.add('show');});
   if(Object.keys(chargeEnd).length>0&&!countdownRunning)tickCountdown();
 }
 function refresh(){
@@ -2125,6 +2136,9 @@ def cmd_serve(args, cfg: dict):
             return json.dumps({"ok": False, "error": "charge already running",
                                 "charge_end_ts": existing_ts})
         c_cfg = load_config()
+        if is_slot_smart(c_cfg, loc, port) is False:
+            return json.dumps({"ok": False,
+                               "error": "non-smart port — power cannot be switched"})
         charge_cfg = c_cfg.get("charge", c_cfg)
         duration_sec = charge_cfg.get("charge_duration_minutes", 30) * 60
         _charge_tasks[slot] = {"done": False}
@@ -2152,6 +2166,9 @@ def cmd_serve(args, cfg: dict):
         if slot in _drain_tasks and not _drain_tasks[slot].get("done", True):
             return json.dumps({"ok": False, "error": "drain test already running"})
         c_cfg = load_config()
+        if is_slot_smart(c_cfg, loc, port) is False:
+            return json.dumps({"ok": False,
+                               "error": "non-smart port — power cannot be switched"})
         _drain_tasks[slot] = {"done": False}
         _drain_stop[slot]  = threading.Event()
         t = threading.Thread(
