@@ -469,22 +469,25 @@ def get_watch_codename(serial: str) -> str | None:
     return None
 
 
+_BATTERY_SYSFS_PATHS = (
+    "/sys/class/power_supply/battery/capacity",
+    "/sys/class/power_supply/Battery/capacity",
+    "/sys/class/power_supply/max170xx_battery/capacity",
+)
+
+
 def get_battery_level(serial: str) -> int | None:
     """
     Read battery percentage from sysfs.
 
     AsteroidOS exposes battery state via standard Linux power_supply class.
-    dumpsys is Android-only and not available here.
+    dumpsys is Android-only and not available here.  All candidate paths are
+    read in one shell invocation — at most one exists on any given watch.
     """
-    candidate_paths = [
-        "/sys/class/power_supply/battery/capacity",
-        "/sys/class/power_supply/Battery/capacity",
-        "/sys/class/power_supply/max170xx_battery/capacity",
-    ]
-    for path in candidate_paths:
-        rc, out, _ = adb_shell(serial, f"cat {path} 2>/dev/null")
-        if rc == 0 and out.strip().isdigit():
-            return int(out.strip())
+    paths = " ".join(_BATTERY_SYSFS_PATHS)
+    rc, out, _ = adb_shell(serial, f"cat {paths} 2>/dev/null | head -1")
+    if rc == 0 and out.strip().isdigit():
+        return int(out.strip())
     return None
 
 
