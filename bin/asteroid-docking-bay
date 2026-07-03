@@ -202,13 +202,14 @@ def uhubctl_list() -> list[dict]:
             # at the hub level.  We still do a live per-port test in 'map'.
             ppps = "ppps" in desc.lower()
             current = {"location": loc, "description": desc, "ppps": ppps,
-                       "ports": [], "power": {}}
+                       "ports": [], "power": {}, "connect": {}}
         elif stripped.startswith("Port ") and current is not None:
             try:
                 parts = stripped.split()
                 port_num = int(parts[1].rstrip(":"))
                 current["ports"].append(port_num)
-                current["power"][port_num] = "power" in parts[2:]
+                current["power"][port_num]   = "power" in parts[2:]
+                current["connect"][port_num] = "connect" in parts[2:]
             except (ValueError, IndexError):
                 pass
     if current is not None:
@@ -1118,6 +1119,13 @@ def _parse_hub_port_path(path: str) -> "tuple[str, int] | None":
 # Serials that could not be identified via ADB — don't re-probe every refresh.
 _soft_remap_unknown: set[str] = set()
 
+# slot → first time the port was seen powered+connected but not enumerating.
+# That combination persisting is the signature of a flat/bootlooping watch
+# (or a bad cable): the hub sees the device chirp, but enumeration never
+# completes — the kernel logs -110/-62 errors while the UI showed nothing.
+_enum_stuck_since: dict[str, float] = {}
+_ENUM_STUCK_GRACE_SEC = 60  # normal boots enumerate well within this
+
 # Cache: serial → detected OS ("asteroidos", "WearOS", or an os-release NAME).
 # Entries are dropped when the watch goes offline, so a reflash is re-detected
 # on its next boot.
@@ -1303,6 +1311,17 @@ def _web_status_data(cfg: dict) -> list[dict]:
                 adb_state = "fastboot"
             battery   = get_battery_level(serial) if adb_state == "device" else None
             watch_os  = _watch_os_for(serial) if adb_state == "device" else None
+            # Powered + hub sees a connection + nothing ever enumerates:
+            # flat-battery bootloop or bad cable. Flag after a boot grace.
+            connect = phys.get("connect", {}).get(port_num)
+            if (power and connect and adb_state is None
+                    and not _port_device_present(loc, port_num)):
+                _enum_stuck_since.setdefault(slot, time.time())
+            else:
+                _enum_stuck_since.pop(slot, None)
+            not_enumerating = (slot in _enum_stuck_since
+                               and time.time() - _enum_stuck_since[slot]
+                                   > _ENUM_STUCK_GRACE_SEC)
             flashing  = ((slot in _flash_tasks and not _flash_tasks[slot].get("done", True))
                          or (slot in _remap_tasks and not _remap_tasks[slot].get("done", True)))
             charging_active = (slot in _charge_tasks
@@ -1328,6 +1347,7 @@ def _web_status_data(cfg: dict) -> list[dict]:
                 "slot_loc": loc,
                 "power": power, "smart": smart,
                 "adb": adb_state, "battery": battery, "os": watch_os,
+                "not_enumerating": not_enumerating,
                 "flashing": flashing, "empty": False,
                 "charging_active": charging_active,
                 "charge_end_ts": charge_end_ts,
@@ -1658,6 +1678,11 @@ function mkadb(adb,fbprod,os){
   if(adb)return `<span class="dim">${esc(adb)}</span>`;
   return '<span class="dim">&mdash;</span>';
 }
+function mkadbrow(p){
+  if(p.adb===null&&p.not_enumerating)
+    return '<span class="err" title="port is powered and the hub sees a connection, but the device never enumerates — flat battery bootloop or bad cable. Tip: holding the watch in fastboot draws less than booting and lets a flat battery charge past the boot threshold.">&#9888; not enumerating</span>';
+  return mkadb(p.adb,null,p.os);
+}
 function render(data){
   const tb=document.getElementById('tb');
   const hubs=(data&&data.hubs)||[];
@@ -1706,7 +1731,7 @@ function render(data){
         const noSw=p.smart===false;
         const dp=(busy||noSw)?' disabled':'';
         const noSwT=noSw?' title="port cannot switch power (not smart)"':'';
-        const adb=mkadb(p.adb,null,p.os);
+        const adb=mkadbrow(p);
         let bat;
         if(charging){const rem=Math.max(0,Math.round((chargeEnd[slot]-Date.now())/1000));const m=Math.floor(rem/60),s=rem%60;bat=`<span class="warn">&#9889; ${m}m${String(s).padStart(2,'0')}s</span>`;}
         else if(draining){
