@@ -660,21 +660,6 @@ def _fastboot_devices() -> dict[str, str]:
     return result
 
 
-def _sysfs_usb_path(serial: str) -> str | None:
-    """
-    Return the USB sysfs path (e.g. '1-2.3') for a device by its USB serial number.
-    A device on hub '1-2' port 3 lives at /sys/bus/usb/devices/1-2.3/serial.
-    """
-    for path in glob.glob("/sys/bus/usb/devices/*/serial"):
-        try:
-            with open(path) as f:
-                if f.read().strip() == serial:
-                    return os.path.basename(os.path.dirname(path))
-        except OSError:
-            pass
-    return None
-
-
 def _sysfs_path_to_serial_map(serials: set[str]) -> dict[str, str]:
     """Single-pass sysfs scan: return {sysfs_path: serial} for the given serials."""
     result: dict[str, str] = {}
@@ -696,13 +681,12 @@ def _fastboot_list() -> dict[str, str | None]:
     sysfs_usb_path may be None if the device's path cannot be determined.
     """
     rc, out, _ = _run("fastboot devices", check=False, timeout=5)
-    result: dict[str, str | None] = {}
-    for line in out.splitlines():
-        parts = line.split()
-        if len(parts) >= 2 and parts[1] == "fastboot":
-            serial = parts[0]
-            result[serial] = _sysfs_usb_path(serial)
-    return result
+    serials = {parts[0] for line in out.splitlines()
+               if len(parts := line.split()) >= 2 and parts[1] == "fastboot"}
+    if not serials:
+        return {}
+    path_by_serial = {s: p for p, s in _sysfs_path_to_serial_map(serials).items()}
+    return {s: path_by_serial.get(s) for s in serials}
 
 
 def _fastboot_getvar_product(serial: str) -> str | None:
@@ -1233,27 +1217,29 @@ def _sse_flash_gen(codename: str, slot: str, cfg: dict):
                 pass
         finally:
             logging.root.removeHandler(h)
+            # The worker owns the done flag: setting it from the generator
+            # would mark a still-running flash as finished the moment the
+            # browser disconnects from the event stream.
+            _flash_tasks[slot]["done"] = True
             q.put(None)
 
+    _flash_tasks[slot] = {"done": False}
     t = threading.Thread(target=_run_flash, daemon=True)
     t.start()
-    _flash_tasks[slot] = {"thread": t, "done": False}
+    _flash_tasks[slot]["thread"] = t
 
-    try:
-        while True:
-            try:
-                msg = q.get(timeout=25)
-            except queue.Empty:
-                yield ": heartbeat\n\n"
-                continue
-            if msg is None:
-                break
-            for line in (msg.splitlines() or [""]):
-                yield f"data: {line}\n"
-            yield "\n"
-        yield "event: done\ndata: complete\n\n"
-    finally:
-        _flash_tasks[slot]["done"] = True
+    while True:
+        try:
+            msg = q.get(timeout=25)
+        except queue.Empty:
+            yield ": heartbeat\n\n"
+            continue
+        if msg is None:
+            break
+        for line in (msg.splitlines() or [""]):
+            yield f"data: {line}\n"
+        yield "\n"
+    yield "event: done\ndata: complete\n\n"
 
 
 def _sse_remap_gen(loc: str, port: int):
@@ -1376,21 +1362,20 @@ def _sse_remap_gen(loc: str, port: int):
     t = threading.Thread(target=_run, daemon=True)
     t.start()
 
-    try:
-        while True:
-            try:
-                msg = q.get(timeout=15)
-            except queue.Empty:
-                yield ": heartbeat\n\n"
-                continue
-            if msg is None:
-                break
-            for line in (msg.splitlines() or [""]):
-                yield f"data: {line}\n"
-            yield "\n"
-        yield "event: done\ndata: complete\n\n"
-    finally:
-        _remap_tasks[slot]["done"] = True
+    # The worker thread's finally owns the done flag — setting it here too
+    # would mark a still-running remap as finished on client disconnect.
+    while True:
+        try:
+            msg = q.get(timeout=15)
+        except queue.Empty:
+            yield ": heartbeat\n\n"
+            continue
+        if msg is None:
+            break
+        for line in (msg.splitlines() or [""]):
+            yield f"data: {line}\n"
+        yield "\n"
+    yield "event: done\ndata: complete\n\n"
 
 
 _WEB_TEMPLATE = """\
@@ -1487,6 +1472,7 @@ function render(data){
   const hubs=(data&&data.hubs)||[];
   const lo=(data&&data.thresholds&&data.thresholds.low)||40;
   const hi=(data&&data.thresholds&&data.thresholds.high)||80;
+  const floor=(data&&data.drain_floor)||15;
   if(!hubs.length){tb.innerHTML='<tr><td colspan="8" class="dim">No watches configured. Run: asteroid-docking-bay map</td></tr>';return}
   const rows=[];
   hubs.forEach(hub=>{
@@ -1537,7 +1523,6 @@ function render(data){
           let txt=(dr.last_pct!==null?dr.last_pct+'%':'?%')+' &#x2193;';
           if(dr.drain_rate!==null&&dr.drain_rate>0){
             txt=`${dr.last_pct}% &minus;${dr.drain_rate.toFixed(1)}%/h`;
-            const floor=15;
             if(dr.last_pct>floor){const estH=(dr.last_pct-floor)/dr.drain_rate;txt+=` (~${fmtDur(estH)})`;}
           }
           bat=`<span class="warn">${txt}</span>`;
@@ -2083,14 +2068,10 @@ def cmd_serve(args, cfg: dict):
                         "low":  charge_cfg.get("low_threshold",  40),
                         "high": charge_cfg.get("high_threshold", 80),
                     },
+                    "drain_floor": _DRAIN_FLOOR_PCT,
                 })
                 status_cache["ts"] = now
             return status_cache["body"]
-
-    @app.post("/api/update/<loc>/<port:int>")
-    def api_update(loc, port):
-        resp.content_type = "application/json"
-        return json.dumps({"ok": True})
 
     @app.post("/api/on/<loc>/<port:int>")
     def api_on(loc, port):
