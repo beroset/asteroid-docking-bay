@@ -222,6 +222,15 @@ config — all streamed live into an inline log below the row.
   `~/.local/share/asteroid-docking-bay/drain-tests/`.
 - **Flash nightly** — full nightly flash streamed live into the inline log.
 
+**Physical moves are followed automatically for booted watches.** Every
+status refresh compares each ADB-online watch's real hub port (from sysfs)
+against the config; when a watch has demonstrably moved — relocated to
+another port, or swapped with another watch — the mapping updates itself
+within one refresh cycle. Only booted, ADB-visible watches can be followed:
+relocating a powered-off watch still needs a click on **Refresh** at its new
+port. Each port also remembers the exact serial last seen there, so two
+units of the same codename never answer for each other.
+
 Charge and drain state live in the server, not the browser — reloading the
 page (or opening it from another machine) picks up running operations and
 their countdowns. On ports recorded as not power-switchable, the power

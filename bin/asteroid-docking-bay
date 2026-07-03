@@ -530,10 +530,17 @@ def find_codename_for_loc_port(cfg: dict, loc: str, port: int) -> str | None:
 def find_serial_for_loc_port(cfg: dict, loc: str, port: int) -> str | None:
     """Return the best serial for a specific hub port.
 
-    Prefers a serial that is currently connected over a config-only entry,
-    so clicking a button on one of two same-codename watches targets the
-    watch actually present at that port rather than the first config match.
+    An exact per-port serial binding (port_serials, maintained by remap and
+    the live soft-remap) wins.  Otherwise fall back to the codename, and
+    prefer a currently-connected serial over a config-only entry, so two
+    same-codename watches don't answer for each other.
     """
+    for hub in cfg.get("hubs", []):
+        if hub["location"] == loc:
+            bound = hub.get("port_serials", {}).get(str(port))
+            if bound:
+                return bound
+            break
     codename = find_codename_for_loc_port(cfg, loc, port)
     if not codename:
         return None
@@ -1096,6 +1103,110 @@ def _save_drain_results(slot: str, codename: str) -> None:
         log.warning("%s: could not save drain test results: %s", codename, exc)
 
 
+def _parse_hub_port_path(path: str) -> "tuple[str, int] | None":
+    """'1-6.4.1' → ('1-6.4', 1); '1-6.2' → ('1-6', 2).
+    Direct host ports ('1-3') have no hub in the path → None."""
+    if "." not in path:
+        return None
+    loc, _, port_str = path.rpartition(".")
+    try:
+        return loc, int(port_str)
+    except ValueError:
+        return None
+
+
+# Serials that could not be identified via ADB — don't re-probe every refresh.
+_soft_remap_unknown: set[str] = set()
+
+
+def _soft_remap(cfg: dict, online_by_path: dict[str, str]) -> "dict | None":
+    """
+    Follow physical relocations of ADB-online watches.
+
+    sysfs tells us each online watch's real hub port; when that disagrees
+    with the config mapping, the watch was demonstrably moved — update the
+    mapping. Only booted, ADB-online watches can be followed; relocating a
+    powered-off watch still needs a manual Refresh on the new port.
+
+    Also maintains hub["port_serials"] ({port: serial}), so two units of the
+    same codename stay distinguishable. The old seat is cleared only on
+    positive evidence: an exact serial binding, or an unambiguous single
+    codename match — with duplicate codenames and no serial bindings the old
+    mapping is left alone rather than guessed at.
+
+    Returns the updated config, or None if nothing changed.
+    """
+    hub_locs = {h["location"] for h in cfg.get("hubs", [])}
+    moves: list[tuple[str, str, str]] = []
+    for path, serial in online_by_path.items():
+        parsed = _parse_hub_port_path(path)
+        if parsed is None or parsed[0] not in hub_locs or serial in _soft_remap_unknown:
+            continue
+        loc, port = parsed
+        hub = next(h for h in cfg["hubs"] if h["location"] == loc)
+        port_str = str(port)
+        codename = cfg.get("serials", {}).get(serial)
+        if (codename is not None
+                and hub.get("ports", {}).get(port_str) == codename
+                and hub.get("port_serials", {}).get(port_str) == serial):
+            continue  # mapping already correct
+        moves.append((loc, port_str, serial))
+    if not moves:
+        return None
+
+    with _config_lock:
+        cfg = load_config()
+        changed = False
+        for loc, port_str, serial in moves:
+            codename = (cfg.get("serials", {}).get(serial)
+                        or get_watch_codename(serial))
+            if not codename:
+                _soft_remap_unknown.add(serial)
+                continue
+            hub = next((h for h in cfg.get("hubs", [])
+                        if h["location"] == loc), None)
+            if hub is None:
+                continue
+            ports        = hub.setdefault("ports", {})
+            port_serials = hub.setdefault("port_serials", {})
+            if (ports.get(port_str) == codename
+                    and port_serials.get(port_str) == serial):
+                continue  # already correct after reload
+
+            # Clear the watch's previous seat — exact serial binding first,
+            # otherwise a single unambiguous codename match.
+            old_seats = [(h2, k) for h2 in cfg["hubs"]
+                         for k, s in h2.get("port_serials", {}).items()
+                         if s == serial
+                         and not (h2["location"] == loc and k == port_str)]
+            if not old_seats:
+                named = [(h2, k) for h2 in cfg["hubs"]
+                         for k, cn in h2.get("ports", {}).items()
+                         if cn.lower() == codename.lower()
+                         and not (h2["location"] == loc and k == port_str)
+                         and h2.get("port_serials", {}).get(k) is None]
+                if len(named) == 1:
+                    old_seats = named
+            for h2, k in old_seats:
+                old = h2.get("ports", {}).pop(k, None)
+                h2.get("port_serials", {}).pop(k, None)
+                log.info("soft-remap: cleared %s:p%s (was %s)",
+                         h2["location"], k, old)
+
+            prev = ports.get(port_str)
+            ports[port_str] = codename
+            port_serials[port_str] = serial
+            cfg.setdefault("serials", {})[serial] = codename
+            changed = True
+            log.info("soft-remap: %s (%s) now at %s:p%s%s",
+                     codename, serial, loc, port_str,
+                     f" (replacing {prev})" if prev and prev != codename else "")
+        if changed:
+            save_config(cfg)
+            return cfg
+    return None
+
+
 def _web_status_data(cfg: dict) -> list[dict]:
     """
     Return hub-structured status including unmapped (empty) ports.
@@ -1112,6 +1223,10 @@ def _web_status_data(cfg: dict) -> list[dict]:
         if path is not None
     }
     adb_by_path: dict[str, str] = _sysfs_path_to_serial_map(set(devices.keys()))
+    # Live soft-remap: follow booted watches that were physically moved.
+    online_by_path = {p: s for p, s in adb_by_path.items()
+                      if devices.get(s) == "device"}
+    cfg = _soft_remap(cfg, online_by_path) or cfg
     physical = {h["location"]: h for h in uhubctl_list()}
     result: list[dict] = []
 
@@ -1138,13 +1253,16 @@ def _web_status_data(cfg: dict) -> list[dict]:
             power     = phys.get("power", {}).get(port_num)
             smart     = port_smart.get(port_str)
             slot      = f"{loc}:{port_num}"
-            # Prefer a currently-connected serial over the first config match so
-            # two same-codename watches each see their own ADB state.
-            serials_for_codename = [s for s, cn in cfg.get("serials", {}).items()
-                                    if cn.lower() == codename.lower()]
-            serial = (next((s for s in serials_for_codename if s in devices), None)
-                      or next((s for s in serials_for_codename if s in fb_devices), None)
-                      or (serials_for_codename[0] if serials_for_codename else None))
+            # Exact per-port serial binding wins; otherwise prefer a
+            # currently-connected serial over the first config match so two
+            # same-codename watches each see their own ADB state.
+            serial = cfg_hub.get("port_serials", {}).get(port_str)
+            if not serial:
+                serials_for_codename = [s for s, cn in cfg.get("serials", {}).items()
+                                        if cn.lower() == codename.lower()]
+                serial = (next((s for s in serials_for_codename if s in devices), None)
+                          or next((s for s in serials_for_codename if s in fb_devices), None)
+                          or (serials_for_codename[0] if serials_for_codename else None))
             adb_state = devices.get(serial) if serial else None
             if adb_state is None and serial and serial in fb_devices:
                 adb_state = "fastboot"
@@ -1322,20 +1440,27 @@ def _sse_remap_gen(loc: str, port: int):
                     with _config_lock:
                         cfg = load_config()
                         cfg.setdefault("serials", {})[found_serial] = codename
-                        # Remove old mapping for this codename from every other port.
+                        # Remove old mapping for this watch from every other
+                        # port: exact serial binding first, codename fallback.
                         for hub in cfg.get("hubs", []):
-                            hub_ports = hub.get("ports", {})
-                            stale = [k for k, v in hub_ports.items()
-                                     if v == codename
+                            hub_ports   = hub.get("ports", {})
+                            hub_serials = hub.get("port_serials", {})
+                            stale = [k for k, s in hub_serials.items()
+                                     if s == found_serial
                                      and not (hub["location"] == loc and k == str(port))]
+                            stale += [k for k, v in hub_ports.items()
+                                      if v == codename and k not in hub_serials
+                                      and not (hub["location"] == loc and k == str(port))]
                             for k in stale:
-                                del hub_ports[k]
+                                hub_ports.pop(k, None)
+                                hub_serials.pop(k, None)
                                 _emit(f"Removed stale mapping: {hub['location']}:p{k} → {codename}")
                         # Add/update this port.
                         hub_entry = next((h for h in cfg.get("hubs", [])
                                           if h["location"] == loc), None)
                         if hub_entry is not None:
                             hub_entry.setdefault("ports", {})[str(port)] = codename
+                            hub_entry.setdefault("port_serials", {})[str(port)] = found_serial
                         save_config(cfg)
 
                     _emit(f"Mapped {loc}:p{port} → {codename}")
@@ -1366,6 +1491,7 @@ def _sse_remap_gen(loc: str, port: int):
                                 if str(port) in hub.get("ports", {}):
                                     was_mapped = True
                                     del hub["ports"][str(port)]
+                                hub.get("port_serials", {}).pop(str(port), None)
                         if was_mapped:
                             save_config(cfg)
                             _emit("Cleared stale port mapping.")
@@ -2364,6 +2490,7 @@ def cmd_map(args, cfg: dict):
 
         port_map: dict[str, str] = {}
         port_smart: dict[str, bool] = {}
+        port_serials: dict[str, str] = {}
 
         skip = cascade_ports.get(loc, set())
         for port in hub["ports"]:
@@ -2384,6 +2511,7 @@ def cmd_map(args, cfg: dict):
                 codename = get_watch_codename(serial) or serial
                 print(f"{codename}  ({serial})", end="", flush=True)
                 port_map[str(port)] = codename
+                port_serials[str(port)] = serial
                 cfg.setdefault("serials", {})[serial] = codename
                 known_serials.add(serial)
 
@@ -2405,6 +2533,7 @@ def cmd_map(args, cfg: dict):
             "ppps": hub.get("ppps", False),
             "port_smart": port_smart,
             "ports": port_map,
+            "port_serials": port_serials,
         })
 
     touched_locs = {h["location"] for h in new_hubs}
