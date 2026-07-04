@@ -1594,7 +1594,7 @@ def _web_status_data(cfg: dict) -> list[dict]:
             hub_ports.append({
                 "port": port_num, "codename": codename, "serial": serial,
                 "slot_loc": loc,
-                "power": power, "smart": smart,
+                "power": power, "smart": smart, "connected": connect,
                 "adb": adb_state, "battery": battery, "os": watch_os,
                 "not_enumerating": not_enumerating,
                 "flashing": flashing, "empty": False,
@@ -1934,6 +1934,8 @@ function mkadb(adb,fbprod,os){
 function mkadbrow(p){
   if(p.adb===null&&p.not_enumerating)
     return '<span class="err" title="port is powered and the hub sees a connection, but the device never enumerates — flat battery bootloop or bad cable. Tip: holding the watch in fastboot draws less than booting and lets a flat battery charge past the boot threshold.">&#9888; not enumerating</span>';
+  if(p.adb===null&&p.power===true&&p.connected===false)
+    return '<span class="warn" title="port is powered but nothing is electrically connected — watch not docked, or dead cable/contact">&#9888; not docked</span>';
   return mkadb(p.adb,null,p.os);
 }
 function render(data){
@@ -2590,6 +2592,12 @@ def cmd_serve(args, cfg: dict):
     status_cache = {"ts": 0.0, "body": ""}
     status_lock = threading.Lock()
 
+    def _bust_status_cache():
+        """Call after any state-changing action so the next status reflects
+        it — otherwise a post-action refresh can serve the pre-action state
+        for up to the cache TTL, showing rows that never matched reality."""
+        status_cache["ts"] = 0.0
+
     @app.get("/api/status")
     def api_status():
         resp.content_type = "application/json"
@@ -2617,6 +2625,7 @@ def cmd_serve(args, cfg: dict):
             confirmed = uhubctl_set_power(loc, port, True)
         except RuntimeError as e:
             return json.dumps({"error": str(e)})
+        _bust_status_cache()
         return json.dumps({"ok": True, "confirmed": confirmed})
 
     @app.post("/api/off/<loc>/<port:int>")
@@ -2626,6 +2635,7 @@ def cmd_serve(args, cfg: dict):
             confirmed = uhubctl_set_power(loc, port, False)
         except RuntimeError as e:
             return json.dumps({"error": str(e)})
+        _bust_status_cache()
         return json.dumps({"ok": True, "confirmed": confirmed})
 
     @app.post("/api/poweroff/<loc>/<port:int>")
@@ -2658,6 +2668,7 @@ def cmd_serve(args, cfg: dict):
         except RuntimeError as e:
             return json.dumps({"ok": False, "error": str(e),
                                "adb_shutdown": adb_ok})
+        _bust_status_cache()
         return json.dumps({"ok": True, "adb_shutdown": adb_ok,
                            "confirmed": confirmed})
 
@@ -2694,6 +2705,7 @@ def cmd_serve(args, cfg: dict):
             uhubctl_set_power(loc, port, True)
         except RuntimeError as e:
             return json.dumps({"error": str(e)})
+        _bust_status_cache()
         return json.dumps({"ok": True})
 
     @app.post("/api/charge/<loc>/<port:int>")
@@ -2718,6 +2730,7 @@ def cmd_serve(args, cfg: dict):
             target=_run_charge_for_web, args=(slot, loc, port, c_cfg), daemon=True
         )
         t.start()
+        _bust_status_cache()
         return json.dumps({"ok": True, "duration_seconds": duration_sec})
 
     @app.post("/api/charge/stop/<loc>/<port:int>")
@@ -2727,6 +2740,7 @@ def cmd_serve(args, cfg: dict):
         ev = _charge_stop.get(slot)
         if ev:
             ev.set()
+            _bust_status_cache()
             return json.dumps({"ok": True})
         return json.dumps({"ok": False, "error": "no charge running"})
 
@@ -2750,6 +2764,7 @@ def cmd_serve(args, cfg: dict):
             target=_run_workbench_for_web, args=(slot, loc, port, c_cfg), daemon=True
         )
         t.start()
+        _bust_status_cache()
         return json.dumps({"ok": True})
 
     @app.post("/api/workbench/stop/<loc>/<port:int>")
@@ -2758,6 +2773,7 @@ def cmd_serve(args, cfg: dict):
         ev = _workbench_stop.get(f"{loc}:{port}")
         if ev:
             ev.set()
+            _bust_status_cache()
             return json.dumps({"ok": True})
         return json.dumps({"ok": False, "error": "no workbench active"})
 
@@ -2807,6 +2823,7 @@ def cmd_serve(args, cfg: dict):
             target=_run_drain_for_web, args=(slot, loc, port, c_cfg), daemon=True
         )
         t.start()
+        _bust_status_cache()
         return json.dumps({"ok": True})
 
     @app.post("/api/drain/stop/<loc>/<port:int>")
@@ -2816,6 +2833,7 @@ def cmd_serve(args, cfg: dict):
         ev = _drain_stop.get(slot)
         if ev:
             ev.set()
+            _bust_status_cache()
             return json.dumps({"ok": True})
         return json.dumps({"ok": False, "error": "no drain test running"})
 
