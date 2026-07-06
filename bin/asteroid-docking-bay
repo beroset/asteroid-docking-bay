@@ -1510,6 +1510,12 @@ def _web_status_data(cfg: dict) -> list[dict]:
         if devices.get(s) != "device":
             _watch_os.pop(s)
     physical = {h["location"]: h for h in uhubctl_list()}
+    # Every hub location, used to spot cascade ports: a port whose child is
+    # itself a hub (e.g. 1-2 port 3 feeds sub-hub 1-2.3). Those are internal
+    # chip-to-chip links, not watch sockets — powering one off cuts the whole
+    # sub-hub and every watch below it, so they must never appear as
+    # toggleable/refreshable rows.
+    hub_locs = set(physical.keys())
     drain_summaries = _latest_drain_summaries()
     result: list[dict] = []
 
@@ -1523,7 +1529,9 @@ def _web_status_data(cfg: dict) -> list[dict]:
         description = phys.get("description", "")
 
         mapped_nums = sorted(int(p) for p in mapped)
-        empty_nums  = sorted(n for n in all_ports if str(n) not in mapped)
+        empty_nums  = sorted(n for n in all_ports
+                             if str(n) not in mapped
+                             and f"{loc}.{n}" not in hub_locs)
 
         hub_ports: list[dict] = []
 
