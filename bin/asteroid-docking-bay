@@ -1162,6 +1162,7 @@ def _run_charge_for_web(slot: str, loc: str, port: int, cfg: dict) -> None:
             elif level is not None:
                 task["pct"], task["target"] = level, target
                 _persist_task("charge", slot, loc, port, task)
+                _log_event(serial, codename, "charge_start", pct=level, target=target)
                 log.info("%s: charging %d%% → %d%%", codename, level, target)
                 deadline = time.time() + max_sec
                 while not stop_event.wait(timeout=_CHARGE_POLL_SEC):
@@ -1180,6 +1181,7 @@ def _run_charge_for_web(slot: str, loc: str, port: int, cfg: dict) -> None:
                         log.info("%s: reached %d%% (target %d%%)",
                                  codename, lvl, target)
                         break
+                _log_event(serial, codename, "charge_end", pct=task.get("pct"))
             else:
                 end_ts = time.time() + duration_sec
                 task["charge_end_ts"] = end_ts
@@ -1212,6 +1214,59 @@ def _run_charge_for_web(slot: str, loc: str, port: int, cfg: dict) -> None:
 _DRAIN_FLOOR_PCT   = 15   # stop test when battery reaches this level
 _DRAIN_POLL_SEC    = 30 * 60  # poll interval: 30 minutes
 _DRAIN_RESULTS_DIR = Path.home() / ".local/share/asteroid-docking-bay/drain-tests"
+
+# ── Per-watch event log ───────────────────────────────────────────────────────
+# One append-only JSONL per physical watch (keyed by serial so two units of the
+# same codename stay distinct), recording every battery observation and power
+# event. This is the single history feeding wear trending, the hover sparkline,
+# and adaptive charge cadence.
+_EVENTS_DIR = Path.home() / ".local/share/asteroid-docking-bay/events"
+
+
+def _event_key(serial: "str | None", codename: "str | None") -> "str | None":
+    key = serial or codename
+    if not key:
+        return None
+    return "".join(c if c.isalnum() or c in "-_" else "_" for c in key)
+
+
+def _log_event(serial: "str | None", codename: "str | None",
+               event: str, **fields) -> None:
+    """Append one event record to the watch's JSONL timeline. Best-effort."""
+    key = _event_key(serial, codename)
+    if key is None:
+        return
+    try:
+        _EVENTS_DIR.mkdir(parents=True, exist_ok=True)
+        rec = {"ts": round(time.time(), 1), "event": event,
+               "codename": codename, "serial": serial, **fields}
+        with (_EVENTS_DIR / f"{key}.jsonl").open("a") as fh:
+            fh.write(json.dumps(rec) + "\n")
+    except Exception as exc:
+        log.debug("event log write failed for %s: %s", key, exc)
+
+
+def _read_events(serial: "str | None", codename: "str | None" = None) -> "list[dict]":
+    """Read a watch's event timeline (oldest first). Empty if none."""
+    key = _event_key(serial, codename)
+    if key is None:
+        return []
+    f = _EVENTS_DIR / f"{key}.jsonl"
+    if not f.is_file():
+        return []
+    out: list[dict] = []
+    try:
+        with f.open() as fh:
+            for line in fh:
+                line = line.strip()
+                if line:
+                    try:
+                        out.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        pass
+    except OSError:
+        pass
+    return out
 
 
 def _adb_read_battery(loc: str, port: int, serial: str | None,
@@ -1361,6 +1416,7 @@ def _run_drain_for_web(slot: str, loc: str, port: int, cfg: dict) -> None:
                 "readings":   [{"ts": now, "pct": start_pct}],
             })
             _persist_task("drain", slot, loc, port, task)
+            _log_event(serial, codename, "drain_reading", pct=start_pct)
             log.info("%s: drain test started at %d%%", codename, start_pct)
 
         while not stop_event.wait(timeout=_DRAIN_POLL_SEC):
@@ -1382,6 +1438,8 @@ def _run_drain_for_web(slot: str, loc: str, port: int, cfg: dict) -> None:
             if elapsed_h > 0:
                 task["drain_rate"] = (task["start_pct"] - new_pct) / elapsed_h
             _persist_task("drain", slot, loc, port, task)
+            _log_event(task.get("serial"), codename, "drain_reading",
+                       pct=new_pct, rate=task.get("drain_rate"))
             log.info("%s: drain test: %d%% (%.2f%%/h)", codename,
                      new_pct, task["drain_rate"] or 0)
 
@@ -2146,7 +2204,7 @@ function render(data){
       if(p.empty){
         const slot=p.slot_loc+':'+p.port;
         const busy=!!(srcs[slot]||p.flashing);
-        const d=busy?' disabled':'';
+        const d=(busy||p.excluded)?' disabled':'';
         const fbLabel=p.fastboot_product?`fastboot: ${esc(p.fastboot_product)}`:(p.adb==='fastboot'?'fastboot':'');
         const nameCell=p.unmapped
           ?`<span class="dim">${esc(p.codename)} <span style="font-size:.8em;opacity:.6">(click Onboard)</span></span>`
@@ -2180,9 +2238,9 @@ function render(data){
         const isFb=p.adb==='fastboot';
         const logActive=!!(srcs[slot]||p.flashing);
         const busy=!!(logActive||charging||draining||wb);
-        const d=busy?' disabled':'';
+        const d=(busy||p.excluded)?' disabled':'';
         const noSw=p.smart===false;
-        const dp=(busy||noSw)?' disabled':'';
+        const dp=(busy||noSw||p.excluded)?' disabled':'';
         const noSwT=noSw?' title="port cannot switch power (not smart)"':'';
         const adb=mkadbrow(p);
         let bat;
@@ -2714,6 +2772,7 @@ def cmd_check_charge(args, cfg: dict):
                 continue
 
             log.info("%s: battery at %d%%", codename, level)
+            _log_event(serial, codename, "check_reading", pct=level)
 
             if level >= high and power_was_on:
                 log.info("%s: at %d%% (≥%d%%), powering off", codename, level, high)
