@@ -180,29 +180,36 @@ _fastboot_products: dict[str, str] = {}
 # libusb, and concurrent scans (parallel web requests, background tasks)
 # contend with adb's libusb use during device churn.  RLock because
 # uhubctl_set_power read-backs via uhubctl_get_power.
-_uhubctl_lock = threading.RLock()
+# ── The USB bus lock ──────────────────────────────────────────────────────────
+# USB is fragile under concurrency: a port power change (device connect/
+# disconnect) that overlaps an adb bus enumeration throws LIBUSB_ERROR and can
+# wedge the adb daemon. So EVERY command that touches the USB bus — uhubctl,
+# adb and fastboot — serializes through one lock, and a power change is
+# followed by a short settle before anything else scans the bus. RLock because
+# uhubctl_set_power reads back via uhubctl_get_power. The flock extends the
+# same exclusion across processes (web service + the periodic charge timer).
+_bus_lock = threading.RLock()
+_BUS_LOCKFILE = Path.home() / ".local/state/asteroid-docking-bay/bus.lock"
+_bus_lock_fd: "int | None" = None
+_BUS_SETTLE_SEC = 1.0  # pause after a power change before the bus is scanned
 
-# Cross-process companion to _uhubctl_lock: the web UI and the periodic
-# charge timer are separate processes, and their concurrent uhubctl bus
-# scans have been observed to glitch dock ports (a port dropped power
-# mid-charge during a parallel check-charge run).
-_UHUBCTL_LOCKFILE = Path.home() / ".local/state/asteroid-docking-bay/uhubctl.lock"
-_uhubctl_lock_fd: "int | None" = None
 
-
-def _uhubctl_exec(cmd: str) -> tuple[int, str, str]:
-    """Run one uhubctl command holding the in-process and cross-process locks."""
-    global _uhubctl_lock_fd
-    with _uhubctl_lock:
-        if _uhubctl_lock_fd is None:
-            _UHUBCTL_LOCKFILE.parent.mkdir(parents=True, exist_ok=True)
-            _uhubctl_lock_fd = os.open(_UHUBCTL_LOCKFILE,
-                                       os.O_CREAT | os.O_RDWR, 0o644)
-        fcntl.flock(_uhubctl_lock_fd, fcntl.LOCK_EX)
+def _bus_exec(cmd: str, check: bool = False, timeout=None) -> tuple[int, str, str]:
+    """Run one USB-bus command (uhubctl/adb/fastboot) holding the in-process
+    and cross-process bus locks, settling after a power change."""
+    global _bus_lock_fd
+    with _bus_lock:
+        if _bus_lock_fd is None:
+            _BUS_LOCKFILE.parent.mkdir(parents=True, exist_ok=True)
+            _bus_lock_fd = os.open(_BUS_LOCKFILE, os.O_CREAT | os.O_RDWR, 0o644)
+        fcntl.flock(_bus_lock_fd, fcntl.LOCK_EX)
         try:
-            return _run(cmd, check=False)
+            r = _run_raw(cmd, check=check, timeout=timeout)
+            if cmd.startswith("uhubctl") and " -a " in cmd:
+                time.sleep(_BUS_SETTLE_SEC)   # let the bus settle post power change
+            return r
         finally:
-            fcntl.flock(_uhubctl_lock_fd, fcntl.LOCK_UN)
+            fcntl.flock(_bus_lock_fd, fcntl.LOCK_UN)
 
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -252,6 +259,16 @@ def save_config(cfg: dict):
 # ── Shell helpers ─────────────────────────────────────────────────────────────
 
 def _run(cmd, check=True, timeout=None) -> tuple[int, str, str]:
+    """Run a command. USB-bus commands (uhubctl/adb/fastboot) are funnelled
+    through the bus lock so a power change never overlaps an adb enumeration —
+    the race that wedges the adb daemon."""
+    if isinstance(cmd, str) and cmd.strip():
+        if cmd.split(None, 1)[0] in ("uhubctl", "adb", "fastboot"):
+            return _bus_exec(cmd, check=check, timeout=timeout)
+    return _run_raw(cmd, check=check, timeout=timeout)
+
+
+def _run_raw(cmd, check=True, timeout=None) -> tuple[int, str, str]:
     """Run a command string or list; return (rc, stdout, stderr)."""
     try:
         result = subprocess.run(
@@ -293,7 +310,7 @@ def uhubctl_list() -> list[dict]:
     many ports should use "power" instead of per-port uhubctl_get_power calls.
     """
     _require_uhubctl()
-    rc, out, err = _uhubctl_exec("uhubctl -S")
+    rc, out, err = _run("uhubctl -S", check=False)
     if rc != 0:
         if "Permission denied" in err or "Operation not permitted" in err:
             log.error(
@@ -337,7 +354,7 @@ def uhubctl_list() -> list[dict]:
 
 def uhubctl_get_power(location: str, port: int) -> bool | None:
     """Return True = powered on, False = powered off, None = unknown."""
-    rc, out, err = _uhubctl_exec(f"uhubctl -S -l {location} -p {port}")
+    rc, out, err = _run(f"uhubctl -S -l {location} -p {port}", check=False)
     if rc != 0:
         if "Permission denied" in err or "Operation not permitted" in err:
             log.warning("uhubctl: permission denied querying %s port %d", location, port)
@@ -361,8 +378,8 @@ def uhubctl_set_power(location: str, port: int, on: bool) -> bool:
     Raises RuntimeError on uhubctl command failure.
     """
     action = "on" if on else "off"
-    with _uhubctl_lock:
-        rc, _, err = _uhubctl_exec(f"uhubctl -S -l {location} -p {port} -a {action}")
+    with _bus_lock:
+        rc, _, err = _run(f"uhubctl -S -l {location} -p {port} -a {action}", check=False)
         if rc != 0:
             raise RuntimeError(
                 f"uhubctl failed setting hub {location} port {port} {action}: {err}"
@@ -381,7 +398,7 @@ def uhubctl_cycle(location: str, port: int, delay: int = 3) -> None:
     """Power-cycle a port in a single uhubctl invocation (off → delay → on).
     Used as the stale-node recovery primitive: unlike a plain off→on pair,
     the cycle makes this dock raise a proper connect event."""
-    _uhubctl_exec(f"uhubctl -S -l {location} -p {port} -a cycle -d {delay}")
+    _run(f"uhubctl -S -l {location} -p {port} -a cycle -d {delay}", check=False)
 
 
 def _port_device_present(location: str, port: int) -> bool:
@@ -1089,20 +1106,30 @@ def _ensure_port_powered(codename: str, loc: "str | None",
 
 def _end_port(loc: str, port: int, serial: "str | None", charge_cfg: dict,
               reason: str = "") -> None:
-    """End a powered-on operation by returning the watch to rest: shut it
-    down gracefully over ADB (so it doesn't keep draining), then cut the
-    port. Falls back to a plain power-off if graceful poweroff is disabled or
-    the watch isn't reachable. Always leaves the port off."""
+    """End a powered-on operation: shut the watch down over ADB, then cut
+    VBUS immediately — the exact proven sequence of the manual Power-off
+    button (adb shell poweroff is synchronous, so cutting right after leaves
+    the watch halting on battery with no power to bounce back on). Always
+    leaves the port off.
+
+    Never powers a port on or blocks when ADB is unhealthy: doing so during a
+    bus wedge just keeps watches powered and feeds the churn. If ADB is down,
+    it just cuts VBUS."""
+    graceful = charge_cfg.get("graceful_poweroff", True) and bool(serial)
+    if graceful and adb_devices_checked() is None:
+        log.warning("%s: ADB unavailable — cutting power without graceful "
+                    "shutdown (%s)", serial, reason or "op end")
+        graceful = False
     try:
-        if charge_cfg.get("graceful_poweroff", True) and serial:
-            # The watch may be off (drain: on battery, port off) — power it so
-            # ADB comes up, then tell it to shut down.
-            uhubctl_set_power(loc, port, True)
-            if wait_serial_online(serial,
-                                  charge_cfg.get("adb_wait_seconds", 15), 4):
-                log.info("%s: graceful poweroff (%s)", serial, reason or "op end")
-                _run(f"adb -s {serial} shell poweroff", check=False, timeout=10)
-                time.sleep(3)   # let it halt before VBUS is cut
+        if graceful:
+            # During a charge the watch is already powered + on ADB; after a
+            # drain it's on battery with the port off, so bring it up briefly
+            # (it's already booted, so ADB returns in a few seconds).
+            if uhubctl_get_power(loc, port) is not True:
+                uhubctl_set_power(loc, port, True)
+                wait_serial_online(serial, 5, 4)
+            log.info("%s: graceful poweroff (%s)", serial, reason or "op end")
+            _run(f"adb -s {serial} shell poweroff", check=False, timeout=10)
     except Exception as exc:
         log.debug("graceful poweroff of %s failed: %s", serial, exc)
     finally:
