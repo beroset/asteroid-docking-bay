@@ -292,9 +292,13 @@ relocating a powered-off watch still needs a click on **Refresh** at its new
 port. Each port also remembers the exact serial last seen there, so two
 units of the same codename never answer for each other.
 
-Charge and drain state live in the server, not the browser — reloading the
-page (or opening it from another machine) picks up running operations and
-their countdowns. On ports recorded as not power-switchable, the power
+Charge, drain and workbench state live in the server, not the browser —
+reloading the page (or opening it from another machine) picks up running
+operations and their countdowns. They also survive a service restart, crash
+or reboot: each running operation is persisted to
+`~/.local/state/asteroid-docking-bay/tasks/` and resumed automatically when
+the service comes back (a drain test keeps its readings and start time, a
+charge continues toward its target). On ports recorded as not power-switchable, the power
 toggle, cycle, Charge and Drain buttons are disabled (Refresh, Halt and
 Flash still work — they only need ADB).
 
