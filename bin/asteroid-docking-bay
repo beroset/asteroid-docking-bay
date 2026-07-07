@@ -49,6 +49,10 @@ DEFAULT_CONFIG = {
         "adaptive_cadence": True,
         "adaptive_margin_pct": 10,        # wake when projected to reach low+this
         "adaptive_max_interval_days": 14, # never skip a watch longer than this
+        # Ideal rest state is 40-80% AND powered off. After a charge or drain
+        # test, shut the watch down over ADB before cutting the port so it
+        # doesn't sit silently draining.
+        "graceful_poweroff": True,
     },
     "flash": {
         "nightly_url": "https://release.asteroidos.org/nightlies",
@@ -1083,6 +1087,31 @@ def _ensure_port_powered(codename: str, loc: "str | None",
             log.warning("%s: re-power failed: %s", codename, e)
 
 
+def _end_port(loc: str, port: int, serial: "str | None", charge_cfg: dict,
+              reason: str = "") -> None:
+    """End a powered-on operation by returning the watch to rest: shut it
+    down gracefully over ADB (so it doesn't keep draining), then cut the
+    port. Falls back to a plain power-off if graceful poweroff is disabled or
+    the watch isn't reachable. Always leaves the port off."""
+    try:
+        if charge_cfg.get("graceful_poweroff", True) and serial:
+            # The watch may be off (drain: on battery, port off) — power it so
+            # ADB comes up, then tell it to shut down.
+            uhubctl_set_power(loc, port, True)
+            if wait_serial_online(serial,
+                                  charge_cfg.get("adb_wait_seconds", 15), 4):
+                log.info("%s: graceful poweroff (%s)", serial, reason or "op end")
+                _run(f"adb -s {serial} shell poweroff", check=False, timeout=10)
+                time.sleep(3)   # let it halt before VBUS is cut
+    except Exception as exc:
+        log.debug("graceful poweroff of %s failed: %s", serial, exc)
+    finally:
+        try:
+            uhubctl_set_power(loc, port, False)
+        except Exception:
+            pass
+
+
 def charge_to_target(codename: str, serial: "str | None", charge_cfg: dict,
                      loc: "str | None" = None,
                      port: "int | None" = None) -> "int | None":
@@ -1207,10 +1236,7 @@ def _run_charge_for_web(slot: str, loc: str, port: int, cfg: dict) -> None:
         except Exception as exc:
             log.warning("%s: charge failed: %s", codename, exc)
         finally:
-            try:
-                uhubctl_set_power(loc, port, False)
-            except Exception:
-                pass
+            _end_port(loc, port, serial, charge_cfg, "charge ended")
             task["done"] = True
             task.pop("charge_end_ts", None)
             _charge_stop.pop(slot, None)
@@ -1524,6 +1550,9 @@ def _run_drain_for_web(slot: str, loc: str, port: int, cfg: dict) -> None:
         task["stopped"] = stop_event.is_set()
         _drain_stop.pop(slot, None)
         _unpersist_task("drain", slot)
+        # Return the watch to rest: shut it down instead of leaving it
+        # draining at the floor.
+        _end_port(loc, port, task.get("serial"), charge_cfg, "drain ended")
         _save_drain_results(slot, codename)
 
 
