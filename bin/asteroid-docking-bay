@@ -724,6 +724,22 @@ def _fastboot_devices() -> dict[str, str]:
     return result
 
 
+def _sysfs_usb_mode(sysfs_path: str) -> "str | None":
+    """Detect an AsteroidOS watch's USB gadget mode from the idProduct at a
+    hub port's sysfs path: adb_mode reports 0a03, developer_mode (SSH) reports
+    0a02 (from usb-moded dyn-modes). Returns "adb", "ssh", or None (no device
+    or not an AsteroidOS gadget)."""
+    base = Path(f"/sys/bus/usb/devices/{sysfs_path}")
+    try:
+        vid = (base / "idVendor").read_text().strip().lower()
+        pid = (base / "idProduct").read_text().strip().lower()
+    except OSError:
+        return None
+    if vid != "18d1":
+        return None
+    return {"0a03": "adb", "0a02": "ssh"}.get(pid)
+
+
 def _sysfs_path_to_serial_map(serials: set[str]) -> dict[str, str]:
     """Single-pass sysfs scan: return {sysfs_path: serial} for the given serials."""
     result: dict[str, str] = {}
@@ -1559,6 +1575,8 @@ def _web_status_data(cfg: dict) -> list[dict]:
             adb_state = devices.get(serial) if serial else None
             if adb_state is None and serial and serial in fb_devices:
                 adb_state = "fastboot"
+            if adb_state is None and _sysfs_usb_mode(f"{loc}.{port_num}") == "ssh":
+                adb_state = "ssh"
             battery   = get_battery_level(serial) if adb_state == "device" else None
             watch_os  = _watch_os_for(serial) if adb_state == "device" else None
             # Powered + hub sees a connection + nothing ever enumerates:
@@ -1632,9 +1650,13 @@ def _web_status_data(cfg: dict) -> list[dict]:
             hub_ports.append({
                 "port": port_num, "codename": adb_codename,
                 "slot_loc": loc,
-                "power": None,  # skip per-port query for empty slots
+                # power state is free from the single full scan above
+                "power": phys.get("power", {}).get(port_num),
                 "smart": port_smart.get(str(port_num)),
-                "adb": devices.get(adb_serial) if adb_serial else ("fastboot" if fb_serial else None),
+                "adb": (devices.get(adb_serial) if adb_serial
+                        else ("fastboot" if fb_serial
+                              else ("ssh" if _sysfs_usb_mode(sysfs_path) == "ssh"
+                                    else None))),
                 "os": (_watch_os_for(adb_serial)
                        if adb_serial and devices.get(adb_serial) == "device" else None),
                 "battery": None,
@@ -1654,6 +1676,7 @@ def _web_status_data(cfg: dict) -> list[dict]:
             "location": loc,
             "description": description,
             "ports": hub_ports,
+            "hidden": cfg_hub.get("hidden", False),
         })
 
     # Group the cascaded chips of one physical hub together (by root location,
@@ -1749,17 +1772,40 @@ def _sse_remap_gen(loc: str, port: int):
                 except RuntimeError as e:
                     _emit(f"WARNING: {e}")
 
-                _emit("Waiting for watch (10 s)…")
-                found_serial: str | None = None
-                deadline = time.monotonic() + 10
-                while time.monotonic() < deadline:
-                    cur = adb_devices()
-                    path_map = _sysfs_path_to_serial_map(set(cur.keys()))
-                    s = path_map.get(sysfs_path)
-                    if s and cur.get(s) == "device":
-                        found_serial = s
-                        break
-                    time.sleep(0.8)
+                # A watch attached powered-off has to cold-boot before it
+                # exposes ADB. And on this hardware a watch often fails to
+                # enumerate on its first boot (stale-node / enumeration
+                # hiccup), only appearing after a power cycle. So wait a boot
+                # window, and if nothing shows, cycle the port once and wait
+                # again — this is what made the manual "Refresh twice" work.
+                wait_each = load_config().get("charge", {}).get(
+                    "onboard_wait_seconds", 30)
+
+                def _wait_for_watch(secs: int) -> "str | None":
+                    st = time.monotonic()
+                    nxt = 15
+                    while time.monotonic() - st < secs:
+                        cur = adb_devices()
+                        path_map = _sysfs_path_to_serial_map(set(cur.keys()))
+                        s = path_map.get(sysfs_path)
+                        if s and cur.get(s) == "device":
+                            return s
+                        el = time.monotonic() - st
+                        if el >= nxt:
+                            _emit(f"…waiting ({int(el)} / {secs} s)")
+                            nxt += 15
+                        time.sleep(1.0)
+                    return None
+
+                _emit(f"Waiting for the watch to boot and expose ADB "
+                      f"(up to {wait_each} s)…")
+                found_serial: str | None = _wait_for_watch(wait_each)
+                if not found_serial:
+                    _emit("No ADB yet — power-cycling the port to retry "
+                          "enumeration…")
+                    uhubctl_cycle(loc, port)
+                    _emit(f"Waiting again after the cycle (up to {wait_each} s)…")
+                    found_serial = _wait_for_watch(wait_each)
 
                 if found_serial:
                     _emit(f"ADB: {found_serial}")
@@ -1910,6 +1956,10 @@ _WEB_TEMPLATE = """\
     .btn:disabled{opacity:.35;cursor:default;pointer-events:none}
     .btn.dr{border-color:#388bfd;color:#388bfd}
     .btn.wb{border-color:#bc8cff;color:#bc8cff}.btn.wb:hover{background:#1d1430}
+    .btn.ob{border-color:#3fb950;color:#3fb950}.btn.ob:hover{background:#0f2a18}
+    .hidebtn{color:#4d5561;text-decoration:none;font-size:11px;margin-left:6px;opacity:.6;cursor:pointer}
+    .hidebtn:hover{opacity:1;color:#8b949e}
+    tr.hiddenrow td,.wr.excl td{opacity:.5}
     .lr td{padding:0 12px 8px}
     .log{display:none;background:#010409;border:1px solid #21262d;border-radius:4px;padding:10px;font-size:12px;color:#8b949e;max-height:200px;overflow-y:auto;white-space:pre-wrap;word-break:break-all}
     .log.show{display:block}
@@ -1924,11 +1974,11 @@ _WEB_TEMPLATE = """\
 </head>
 <body>
   <h1><span class="hdim">&#x2728;  &#x22C6;  &#x02DA; </span>&#x2726;<span class="htxt">  asteroid-docking-bay  </span>&#x2726;<span class="hdim"> &#x02DA;  &#x22C6;  &#x2728;</span></h1>
-  <p class="meta">USB hub power manager for AsteroidOS &nbsp;&middot;&nbsp; <span id="ts">loading&hellip;</span> &nbsp;&middot;&nbsp; <a href="#" id="histlink" onclick="toggleHistory();return false" style="color:#388bfd;text-decoration:none">&#x1F4C9; drain history</a></p>
+  <p class="meta">USB hub power manager for AsteroidOS &nbsp;&middot;&nbsp; <span id="ts">loading&hellip;</span> &nbsp;&middot;&nbsp; <a href="#" id="histlink" onclick="toggleHistory();return false" style="color:#388bfd;text-decoration:none">&#x1F4C9; drain history</a> &nbsp;&middot;&nbsp; <a href="#" id="hidlink" onclick="toggleShowHidden();return false" style="color:#6e7681;text-decoration:none">&#x1F648; show hidden</a></p>
   <table>
     <thead><tr>
       <th></th><th>Watch</th><th>Port</th><th>Power</th><th>Smart</th>
-      <th>ADB</th><th style="min-width:7em">Battery</th><th>Actions</th>
+      <th>Connection</th><th style="min-width:7em">Battery</th><th>Actions</th>
     </tr></thead>
     <tbody id="tb"></tbody>
   </table>
@@ -1937,7 +1987,11 @@ _WEB_TEMPLATE = """\
 const srcs={};
 const chargeEnd={};
 let countdownRunning=false;
+let showHidden=false;
 const refreshing=new Set();
+function mkhide(slot,excluded){
+  return `<a href="#" class="hidebtn" onclick="doHidePort('${slot}');return false" title="${excluded?'un-hide this row':'hide this row'}">${excluded?'&#x1F441; unhide':'&#x1F648;'}</a>`;
+}
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;')}
 function mkpwr(v){return v===true?'<span class="dot don"></span><span class="on">ON</span>':v===false?'<span class="dot doff"></span><span class="off">OFF</span>':'<span class="dim">---</span>'}
 function mksmt(v){return v===true?'<span class="on">yes</span>':v===false?'<span class="err">NO!</span>':'<span class="warn">?</span>'}
@@ -1956,10 +2010,11 @@ function mkport(p){
 const AOSLOGO='<svg viewBox="0 0 2000 2000" width="13" height="13" style="vertical-align:-2px;margin-right:5px" shape-rendering="crispEdges" xmlns="http://www.w3.org/2000/svg"><defs><rect id="T" width="2" height="2"/></defs><g transform="matrix(100 100 -100 100 1000 0)"><g><use href="#T" style="fill:#be3729"/><use href="#T" id="b" x="2" style="fill:#dc2919"/><use href="#T" id="c" x="4" style="fill:#e54b3a"/><use href="#T" id="d" x="6" style="fill:#e56934"/><use href="#T" id="e" x="8" style="fill:#e57c21"/></g><g transform="translate(-2,2)"><use href="#b"/><use href="#c"/><use href="#T" id="f" x="10" style="fill:#e58a21"/></g><g transform="translate(-4,4)"><use href="#c"/><use href="#e"/><use href="#T" id="g" x="12" style="fill:#f19a11"/></g><g transform="translate(-6,6)"><use href="#d"/><use href="#e"/><use href="#f"/><use href="#T" id="h" x="14" style="fill:#f0ae0e"/></g><g transform="translate(-8,8)"><use href="#e"/><use href="#f"/><use href="#g"/><use href="#h"/><use href="#T" x="16" style="fill:#f0c30e"/></g></g></svg>';
 function mkadb(adb,fbprod,os){
   if(adb==='device'){
-    if(os==='asteroidos')return `${AOSLOGO}<span class="on" title="AsteroidOS">device</span>`;
-    if(os&&os!=='unknown')return `<span class="on">${esc(os)}</span>`;
-    return '<span class="on">device</span>';
+    if(os==='asteroidos')return `${AOSLOGO}<span class="on" title="AsteroidOS on ADB">ADB</span>`;
+    if(os&&os!=='unknown')return `<span class="on" title="${esc(os)} on ADB">ADB <span class="dim">${esc(os)}</span></span>`;
+    return '<span class="on">ADB</span>';
   }
+  if(adb==='ssh')return `${os==='asteroidos'?AOSLOGO:''}<span class="warn" title="watch is in SSH/developer USB mode — reachable over SSH, no ADB functions">SSH</span>`;
   if(adb==='fastboot'){const l=fbprod?`fastboot: ${esc(fbprod)}`:'fastboot';return `<span class="warn">${l}</span>`;}
   if(adb)return `<span class="dim">${esc(adb)}</span>`;
   return '<span class="dim">&mdash;</span>';
@@ -1981,29 +2036,36 @@ function render(data){
   if(!hubs.length){tb.innerHTML='<tr><td colspan="8" class="dim">No watches configured. Run: asteroid-docking-bay map</td></tr>';return}
   const rows=[];
   hubs.forEach(hub=>{
-    rows.push(`<tr class="hub-hdr"><td colspan="8"><span class="hl">${esc(hub.location)}</span><span class="dim">${esc(hub.description)}</span></td></tr>`);
-    hub.ports.forEach((p,i)=>{
-      const tree=i===hub.ports.length-1?'&#x2514;&#x2500;':'&#x251c;&#x2500;';
+    if(hub.hidden&&!showHidden)return;
+    const hubHideBtn=`<a href="#" class="hidebtn" onclick="doHideHub('${esc(hub.location)}');return false" title="${hub.hidden?'un-hide this hub':'hide this whole hub'}">${hub.hidden?'&#x1F441; show':'&#x1F648; hide'}</a>`;
+    rows.push(`<tr class="hub-hdr${hub.hidden?' hiddenrow':''}"><td colspan="8"><span class="hl">${esc(hub.location)}</span><span class="dim">${esc(hub.description)}</span> ${hubHideBtn}</td></tr>`);
+    const visPorts=hub.ports.filter(p=>showHidden||!p.excluded);
+    visPorts.forEach((p,i)=>{
+      const tree=i===visPorts.length-1?'&#x2514;&#x2500;':'&#x251c;&#x2500;';
       if(p.empty){
         const slot=p.slot_loc+':'+p.port;
         const busy=!!(srcs[slot]||p.flashing);
         const d=busy?' disabled':'';
         const fbLabel=p.fastboot_product?`fastboot: ${esc(p.fastboot_product)}`:(p.adb==='fastboot'?'fastboot':'');
         const nameCell=p.unmapped
-          ?`<span class="dim">${esc(p.codename)} <span style="font-size:.8em;opacity:.6">(click Refresh)</span></span>`
+          ?`<span class="dim">${esc(p.codename)} <span style="font-size:.8em;opacity:.6">(click Onboard)</span></span>`
           :(p.fastboot_product?`<span class="warn">${esc(p.fastboot_product)}</span>`:'<span class="dim">&mdash;</span>');
         const adbCell=p.adb==='fastboot'?`<span class="warn">${fbLabel}</span>`
-          :(p.adb?mkadb(p.adb,null,p.os):'<span class="dim">&mdash;</span>');
+          :mkadbrow(p);
+        const pwrCls=p.power===true?'tgl tgl-on':'tgl tgl-off';
+        const pwrLbl=p.power===true?'<span class="dot don"></span>ON':'<span class="dot doff"></span>OFF';
+        const pwrFn=p.power===true?`doOff('${slot}')`:`doOn('${slot}')`;
+        const onboardBtn=p.excluded?'':`<button class="btn ob"${d} onclick="doRemap('${slot}')" title="power the port on, wait for the watch to boot (cycles once if it fails to enumerate), then identify and map it">&#x2795; Onboard</button>`;
         rows.push(
-          `<tr class="wr empty" id="wr-${slot}">` +
+          `<tr class="wr empty${p.excluded?' excl':''}" id="wr-${slot}">` +
           `<td class="tc">${tree}</td>` +
           `<td>${nameCell}</td>` +
           `<td>${mkport(p)}</td>` +
-          `<td>${mkpwr(p.power)}</td>` +
+          `<td><button class="${pwrCls}"${d} onclick="${pwrFn}">${pwrLbl}</button><button class="ico"${d} onclick="doCy('${slot}')" title="Power-cycle port">&#x21BA;</button></td>` +
           `<td>${mksmt(p.smart)}</td>` +
           `<td>${adbCell}</td>` +
           `<td class="dim">&mdash;</td>` +
-          `<td><button class="btn btn-ref"${d} onclick="doRemap('${slot}')">Refresh</button></td>` +
+          `<td><button class="btn btn-ref"${d} onclick="doRefresh('${slot}')">Refresh</button>`+onboardBtn+mkhide(slot,p.excluded)+`</td>` +
           `</tr>` +
           `<tr class="lr" id="lr-${slot}"><td colspan="8"><div class="log${busy?' show':''}" id="log-${slot}"></div></td></tr>`
         );
@@ -2060,7 +2122,7 @@ function render(data){
         const pwrLbl=p.power===true?'<span class="dot don"></span>ON':'<span class="dot doff"></span>OFF';
         const isRef=refreshing.has(slot);
         rows.push(
-          `<tr class="wr${isRef?' refreshing':''}" id="wr-${slot}">` +
+          `<tr class="wr${isRef?' refreshing':''}${p.excluded?' excl':''}" id="wr-${slot}">` +
           `<td class="tc">${tree}</td>` +
           `<td><b>${esc(p.codename)}</b></td>` +
           `<td>${mkport(p)}</td>` +
@@ -2084,6 +2146,7 @@ function render(data){
             :`<button class="btn wb"${dp}${noSwT} onclick="doWb('${slot}')" title="check out for hands-on work: battery held ${lo}&ndash;${hi}% while you work over WiFi/SSH">&#128295; Workbench</button>`
           ):'')+
           `<button class="btn fl"${d} onclick="doFl('${slot}')">Flash nightly</button>` +
+          mkhide(slot,p.excluded) +
           `</td></tr>` +
           `<tr class="lr" id="lr-${slot}"><td colspan="8"><div class="log${logActive?' show':''}" id="log-${slot}"></div></td></tr>`
         );
@@ -2230,6 +2293,18 @@ function toggleHistory(){
 }
 function doStopDrain(c){
   fetch('/api/drain/stop/'+_api(c),{method:'POST'}).then(()=>refresh());
+}
+function toggleShowHidden(){
+  showHidden=!showHidden;
+  const l=document.getElementById('hidlink');
+  if(l)l.innerHTML=showHidden?'&#x1F441; hide avoided':'&#x1F648; show hidden';
+  refresh();
+}
+function doHidePort(c){
+  fetch('/api/hide/'+_api(c),{method:'POST'}).then(()=>refresh());
+}
+function doHideHub(loc){
+  fetch('/api/hide-hub/'+loc,{method:'POST'}).then(()=>refresh());
 }
 function doWb(c){
   fetch('/api/workbench/'+_api(c),{method:'POST'}).then(()=>setTimeout(refresh,2200));
@@ -2740,6 +2815,43 @@ def cmd_serve(args, cfg: dict):
             return json.dumps({"error": str(e)})
         _bust_status_cache()
         return json.dumps({"ok": True})
+
+    @app.post("/api/hide/<loc>/<port:int>")
+    def api_hide(loc, port):
+        """Toggle a port's avoid/hidden flag (user-set). Stored in the hub's
+        'exclude' map, same as auto-detected excludes."""
+        resp.content_type = "application/json"
+        with _config_lock:
+            c_cfg = load_config()
+            hub = next((h for h in c_cfg.get("hubs", []) if h["location"] == loc), None)
+            if hub is None:
+                return json.dumps({"ok": False, "error": "hub not found"})
+            excl = hub.setdefault("exclude", {})
+            ps = str(port)
+            if ps in excl:
+                del excl[ps]
+                state = False
+            else:
+                excl[ps] = "hidden by user"
+                state = True
+            save_config(c_cfg)
+        _bust_status_cache()
+        return json.dumps({"ok": True, "hidden": state})
+
+    @app.post("/api/hide-hub/<loc>")
+    def api_hide_hub(loc):
+        """Toggle a whole hub's hidden flag (for silly/unused sub-hubs)."""
+        resp.content_type = "application/json"
+        with _config_lock:
+            c_cfg = load_config()
+            hub = next((h for h in c_cfg.get("hubs", []) if h["location"] == loc), None)
+            if hub is None:
+                return json.dumps({"ok": False, "error": "hub not found"})
+            hub["hidden"] = not hub.get("hidden", False)
+            state = hub["hidden"]
+            save_config(c_cfg)
+        _bust_status_cache()
+        return json.dumps({"ok": True, "hidden": state})
 
     @app.post("/api/charge/<loc>/<port:int>")
     def api_charge(loc, port):
