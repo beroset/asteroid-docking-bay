@@ -180,36 +180,29 @@ _fastboot_products: dict[str, str] = {}
 # libusb, and concurrent scans (parallel web requests, background tasks)
 # contend with adb's libusb use during device churn.  RLock because
 # uhubctl_set_power read-backs via uhubctl_get_power.
-# ── The USB bus lock ──────────────────────────────────────────────────────────
-# USB is fragile under concurrency: a port power change (device connect/
-# disconnect) that overlaps an adb bus enumeration throws LIBUSB_ERROR and can
-# wedge the adb daemon. So EVERY command that touches the USB bus — uhubctl,
-# adb and fastboot — serializes through one lock, and a power change is
-# followed by a short settle before anything else scans the bus. RLock because
-# uhubctl_set_power reads back via uhubctl_get_power. The flock extends the
-# same exclusion across processes (web service + the periodic charge timer).
-_bus_lock = threading.RLock()
-_BUS_LOCKFILE = Path.home() / ".local/state/asteroid-docking-bay/bus.lock"
-_bus_lock_fd: "int | None" = None
-_BUS_SETTLE_SEC = 1.0  # pause after a power change before the bus is scanned
+_uhubctl_lock = threading.RLock()
+
+# Cross-process companion to _uhubctl_lock: the web UI and the periodic
+# charge timer are separate processes, and their concurrent uhubctl bus
+# scans have been observed to glitch dock ports (a port dropped power
+# mid-charge during a parallel check-charge run).
+_UHUBCTL_LOCKFILE = Path.home() / ".local/state/asteroid-docking-bay/uhubctl.lock"
+_uhubctl_lock_fd: "int | None" = None
 
 
-def _bus_exec(cmd: str, check: bool = False, timeout=None) -> tuple[int, str, str]:
-    """Run one USB-bus command (uhubctl/adb/fastboot) holding the in-process
-    and cross-process bus locks, settling after a power change."""
-    global _bus_lock_fd
-    with _bus_lock:
-        if _bus_lock_fd is None:
-            _BUS_LOCKFILE.parent.mkdir(parents=True, exist_ok=True)
-            _bus_lock_fd = os.open(_BUS_LOCKFILE, os.O_CREAT | os.O_RDWR, 0o644)
-        fcntl.flock(_bus_lock_fd, fcntl.LOCK_EX)
+def _uhubctl_exec(cmd: str) -> tuple[int, str, str]:
+    """Run one uhubctl command holding the in-process and cross-process locks."""
+    global _uhubctl_lock_fd
+    with _uhubctl_lock:
+        if _uhubctl_lock_fd is None:
+            _UHUBCTL_LOCKFILE.parent.mkdir(parents=True, exist_ok=True)
+            _uhubctl_lock_fd = os.open(_UHUBCTL_LOCKFILE,
+                                       os.O_CREAT | os.O_RDWR, 0o644)
+        fcntl.flock(_uhubctl_lock_fd, fcntl.LOCK_EX)
         try:
-            r = _run_raw(cmd, check=check, timeout=timeout)
-            if cmd.startswith("uhubctl") and " -a " in cmd:
-                time.sleep(_BUS_SETTLE_SEC)   # let the bus settle post power change
-            return r
+            return _run(cmd, check=False)
         finally:
-            fcntl.flock(_bus_lock_fd, fcntl.LOCK_UN)
+            fcntl.flock(_uhubctl_lock_fd, fcntl.LOCK_UN)
 
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -259,16 +252,6 @@ def save_config(cfg: dict):
 # ── Shell helpers ─────────────────────────────────────────────────────────────
 
 def _run(cmd, check=True, timeout=None) -> tuple[int, str, str]:
-    """Run a command. USB-bus commands (uhubctl/adb/fastboot) are funnelled
-    through the bus lock so a power change never overlaps an adb enumeration —
-    the race that wedges the adb daemon."""
-    if isinstance(cmd, str) and cmd.strip():
-        if cmd.split(None, 1)[0] in ("uhubctl", "adb", "fastboot"):
-            return _bus_exec(cmd, check=check, timeout=timeout)
-    return _run_raw(cmd, check=check, timeout=timeout)
-
-
-def _run_raw(cmd, check=True, timeout=None) -> tuple[int, str, str]:
     """Run a command string or list; return (rc, stdout, stderr)."""
     try:
         result = subprocess.run(
@@ -310,7 +293,7 @@ def uhubctl_list() -> list[dict]:
     many ports should use "power" instead of per-port uhubctl_get_power calls.
     """
     _require_uhubctl()
-    rc, out, err = _run("uhubctl -S", check=False)
+    rc, out, err = _uhubctl_exec("uhubctl -S")
     if rc != 0:
         if "Permission denied" in err or "Operation not permitted" in err:
             log.error(
@@ -354,7 +337,7 @@ def uhubctl_list() -> list[dict]:
 
 def uhubctl_get_power(location: str, port: int) -> bool | None:
     """Return True = powered on, False = powered off, None = unknown."""
-    rc, out, err = _run(f"uhubctl -S -l {location} -p {port}", check=False)
+    rc, out, err = _uhubctl_exec(f"uhubctl -S -l {location} -p {port}")
     if rc != 0:
         if "Permission denied" in err or "Operation not permitted" in err:
             log.warning("uhubctl: permission denied querying %s port %d", location, port)
@@ -378,8 +361,8 @@ def uhubctl_set_power(location: str, port: int, on: bool) -> bool:
     Raises RuntimeError on uhubctl command failure.
     """
     action = "on" if on else "off"
-    with _bus_lock:
-        rc, _, err = _run(f"uhubctl -S -l {location} -p {port} -a {action}", check=False)
+    with _uhubctl_lock:
+        rc, _, err = _uhubctl_exec(f"uhubctl -S -l {location} -p {port} -a {action}")
         if rc != 0:
             raise RuntimeError(
                 f"uhubctl failed setting hub {location} port {port} {action}: {err}"
@@ -398,7 +381,7 @@ def uhubctl_cycle(location: str, port: int, delay: int = 3) -> None:
     """Power-cycle a port in a single uhubctl invocation (off → delay → on).
     Used as the stale-node recovery primitive: unlike a plain off→on pair,
     the cycle makes this dock raise a proper connect event."""
-    _run(f"uhubctl -S -l {location} -p {port} -a cycle -d {delay}", check=False)
+    _uhubctl_exec(f"uhubctl -S -l {location} -p {port} -a cycle -d {delay}")
 
 
 def _port_device_present(location: str, port: int) -> bool:
