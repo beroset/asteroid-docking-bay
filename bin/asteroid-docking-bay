@@ -284,6 +284,149 @@ def _require_uhubctl():
         sys.exit(1)
 
 
+# ── Direct sysfs port control ─────────────────────────────────────────────────
+# uhubctl re-enumerates the whole USB tree via libusb on every command (~5-13s
+# on this cascade) — the source of the "snail" UI and the churn that raced adb.
+# The kernel exposes each port's power directly:
+#   /sys/bus/usb/devices/<loc>:1.0/<loc>-port<N>/disable   (0 = on, 1 = off)
+# That's a single targeted op, no tree scan. Reads are world-readable; writing
+# needs the udev rule (udev/70-asteroid-docking-bay.rules) or we fall back to
+# uhubctl. uhubctl stays for mapping/discovery only.
+_SYSFS_USB = Path("/sys/bus/usb/devices")
+
+# Short-lived power-state cache, keyed (location, port) → (value, expiry). Lets
+# the status page skip the ~200ms/port disable read on empty cascade ports.
+# TTL'd (not authoritative-forever) so it self-heals: an external change, or a
+# write handled by a *different* serve process with its own cache, becomes
+# visible within one TTL. Correctness-sensitive callers (re-power checks, set
+# read-backs, the smart test) always read fresh via _sysfs_get_power, not this.
+_power_cache: dict = {}
+# Long TTL: empty-port power only changes when we change it (we update the cache
+# on every write), so the warmer can warm once and stay quiet for minutes. Fewer
+# background disable reads = fewer kernel hub-lock collisions with status reads.
+_POWER_TTL = 300.0
+
+
+def _pcache_get(key):
+    e = _power_cache.get(key)
+    return e[0] if e and e[1] > time.time() else None
+
+
+def _pcache_put(key, val):
+    _power_cache[key] = (val, time.time() + _POWER_TTL)
+
+
+def _sysfs_disable_path(location: str, port: int) -> "Path | None":
+    for iface in _SYSFS_USB.glob(f"{location}:*"):
+        p = iface / f"{location}-port{port}" / "disable"
+        if p.exists():
+            return p
+    return None
+
+
+def _sysfs_get_power(location: str, port: int) -> "bool | None":
+    """True = on, False = off, None = attr unavailable (caller falls back)."""
+    p = _sysfs_disable_path(location, port)
+    if p is None:
+        return None
+    try:
+        v = p.read_text().strip()
+    except OSError:
+        return None
+    return True if v == "0" else (False if v == "1" else None)
+
+
+def _sysfs_set_power(location: str, port: int, on: bool) -> bool:
+    """Write the port's power via sysfs. True on success, False if the attr is
+    missing or not writable (caller falls back to uhubctl)."""
+    p = _sysfs_disable_path(location, port)
+    if p is None:
+        return False
+    try:
+        p.write_text("0" if on else "1")
+        _pcache_put((location, port), on)
+        return True
+    except OSError as e:
+        log.debug("sysfs set_power %s:%d failed (%s) — falling back to uhubctl",
+                  location, port, e)
+        return False
+
+
+def _sysfs_hub_scan(cfg: dict) -> list[dict]:
+    """Fast uhubctl_list() replacement for the status page. Hub locations come
+    from a cheap directory glob (no USB queries); power/presence are read only
+    for the configured hubs' ports, and a present child device proves the port
+    is powered, so the ~50ms disable read is skipped for occupied ports."""
+    config_locs = {h["location"] for h in cfg.get("hubs", [])}
+    hubs: list[dict] = []
+    for iface in _SYSFS_USB.glob("*:1.0"):
+        loc = iface.name.rsplit(":", 1)[0]
+        port_dirs = list(iface.glob(f"{loc}-port*"))
+        if not port_dirs:
+            continue
+        ports: list[int] = []
+        power: dict = {}
+        connect: dict = {}
+        want = loc in config_locs
+        for pd in port_dirs:
+            try:
+                n = int(pd.name.rsplit("port", 1)[1])
+            except ValueError:
+                continue
+            ports.append(n)
+            if want:
+                present = (_SYSFS_USB / f"{loc}.{n}").exists()
+                connect[n] = present
+                if present:                       # a device proves it's powered
+                    power[n] = True
+                    _pcache_put((loc, n), True)
+                else:
+                    # Never read `disable` on the status path — it's a slow,
+                    # variable USB query (some empty-off ports hang for seconds).
+                    # Serve the cached value; _power_cache_warmer keeps it fresh.
+                    power[n] = _pcache_get((loc, n))
+        desc = ""
+        if want:
+            try:
+                desc = (_SYSFS_USB / loc / "product").read_text().strip()
+            except OSError:
+                pass
+        hubs.append({"location": loc, "description": desc, "ppps": True,
+                     "ports": sorted(ports), "power": power, "connect": connect})
+    return hubs
+
+
+def _power_cache_warmer() -> None:
+    """Background daemon: keep _power_cache populated for empty cascade ports so
+    the status path never blocks on a slow, variable `disable` read. Sequential
+    (no USB concurrency — that is what wedges) and gently paced. Runs forever,
+    re-reading entries as their TTL lapses."""
+    while True:
+        try:
+            if time.time() - _fb_list_cache["ts"] > 60:
+                _fastboot_poll()        # also slow; keep it off the status path
+            cfg = load_config()
+            for h in cfg.get("hubs", []):
+                loc = h["location"]
+                for iface in _SYSFS_USB.glob(f"{loc}:*"):
+                    for pd in sorted(iface.glob(f"{loc}-port*")):
+                        try:
+                            n = int(pd.name.rsplit("port", 1)[1])
+                        except ValueError:
+                            continue
+                        if (_SYSFS_USB / f"{loc}.{n}").exists():
+                            continue            # occupied → known powered
+                        if _pcache_get((loc, n)) is not None:
+                            continue            # still fresh, skip the slow read
+                        v = _sysfs_get_power(loc, n)
+                        if v is not None:
+                            _pcache_put((loc, n), v)
+                        time.sleep(0.25)        # gentle on the bus
+        except Exception as e:
+            log.debug("power cache warmer: %s", e)
+        time.sleep(5)
+
+
 def uhubctl_list() -> list[dict]:
     """
     Return a list of controllable hubs as dicts:
@@ -336,7 +479,12 @@ def uhubctl_list() -> list[dict]:
 
 
 def uhubctl_get_power(location: str, port: int) -> bool | None:
-    """Return True = powered on, False = powered off, None = unknown."""
+    """Return True = powered on, False = powered off, None = unknown.
+    Reads sysfs directly (no bus scan); falls back to uhubctl only if the
+    sysfs disable attr isn't available for this hub."""
+    v = _sysfs_get_power(location, port)
+    if v is not None:
+        return v
     rc, out, err = _uhubctl_exec(f"uhubctl -S -l {location} -p {port}")
     if rc != 0:
         if "Permission denied" in err or "Operation not permitted" in err:
@@ -361,6 +509,17 @@ def uhubctl_set_power(location: str, port: int, on: bool) -> bool:
     Raises RuntimeError on uhubctl command failure.
     """
     action = "on" if on else "off"
+    # Fast path: write the port's power directly via sysfs (no bus scan).
+    if _sysfs_set_power(location, port, on):
+        actual = _sysfs_get_power(location, port)       # fresh read-back
+        if actual is not None:
+            _pcache_put((location, port), actual)
+        confirmed = actual == on
+        if not confirmed:
+            log.warning("sysfs set %s port %d %s: read-back did not confirm",
+                        location, port, action)
+        return confirmed
+    # Fallback: uhubctl (sysfs attr not writable yet — needs the udev rule).
     with _uhubctl_lock:
         rc, _, err = _uhubctl_exec(f"uhubctl -S -l {location} -p {port} -a {action}")
         if rc != 0:
@@ -368,6 +527,7 @@ def uhubctl_set_power(location: str, port: int, on: bool) -> bool:
                 f"uhubctl failed setting hub {location} port {port} {action}: {err}"
             )
         confirmed = uhubctl_get_power(location, port) == on
+    _pcache_put((location, port), on)
     if not confirmed:
         log.warning(
             "uhubctl set %s port %d %s: command succeeded but port state did not change"
@@ -381,6 +541,10 @@ def uhubctl_cycle(location: str, port: int, delay: int = 3) -> None:
     """Power-cycle a port in a single uhubctl invocation (off → delay → on).
     Used as the stale-node recovery primitive: unlike a plain off→on pair,
     the cycle makes this dock raise a proper connect event."""
+    if _sysfs_set_power(location, port, False):
+        time.sleep(delay)
+        _sysfs_set_power(location, port, True)
+        return
     _uhubctl_exec(f"uhubctl -S -l {location} -p {port} -a cycle -d {delay}")
 
 
@@ -421,7 +585,7 @@ def _wait_adb_state(serial: str, present: bool, timeout: float) -> bool:
 
 def adb_external_power(serial: str) -> bool | None:
     """Watch's own view: is it on external power (AC/USB/wireless)? None = unknown."""
-    rc, out, _ = _run(f"adb -s {serial} shell dumpsys battery", check=False)
+    rc, out, _ = adb_shell(serial, "dumpsys battery")
     if rc != 0 or not out.strip():
         return None
     vals = []
@@ -552,8 +716,10 @@ def adb_devices() -> dict[str, str]:
     return adb_devices_checked() or {}
 
 
-def adb_shell(serial: str, cmd: str) -> tuple[int, str, str]:
-    return _run(f"adb -s {serial} shell {cmd}", check=False)
+def adb_shell(serial: str, cmd: str, timeout: int = 8) -> tuple[int, str, str]:
+    # Always bounded: a sluggish/half-attached watch must never stall a status
+    # refresh (dumpsys with no timeout was the page-killer).
+    return _run(f"adb -s {serial} shell {cmd}", check=False, timeout=timeout)
 
 
 def get_watch_codename(serial: str) -> str | None:
@@ -846,19 +1012,33 @@ def _sysfs_path_to_serial_map(serials: set[str]) -> dict[str, str]:
     return result
 
 
+_fb_list_cache: dict = {"ts": 0.0, "val": {}}
+
+
 def _fastboot_list() -> dict[str, str | None]:
     """
-    Return {serial: sysfs_usb_path} for all devices currently in fastboot mode.
-    Short timeout prevents a sluggish fastboot daemon from blocking the status poll.
+    Return {serial: sysfs_usb_path} for devices in fastboot mode, from a cache
+    refreshed by the background warmer (_fastboot_poll) — never blocks on the
+    slow `fastboot devices` scan. The flash/onboard flows poll fastboot directly.
     sysfs_usb_path may be None if the device's path cannot be determined.
     """
-    rc, out, _ = _run("fastboot devices", check=False, timeout=5)
+    return _fb_list_cache["val"]
+
+
+def _fastboot_poll() -> None:
+    """Refresh the fastboot device cache. `fastboot devices` is a slow USB scan
+    (5-8s when nothing is in fastboot and it ignores the subprocess timeout), so
+    ONLY the background warmer calls this — never the status path."""
+    rc, out, _ = _run("fastboot devices", check=False, timeout=8)
     serials = {parts[0] for line in out.splitlines()
                if len(parts := line.split()) >= 2 and parts[1] == "fastboot"}
     if not serials:
-        return {}
-    path_by_serial = {s: p for p, s in _sysfs_path_to_serial_map(serials).items()}
-    return {s: path_by_serial.get(s) for s in serials}
+        result: dict[str, str | None] = {}
+    else:
+        path_by_serial = {s: p for p, s in _sysfs_path_to_serial_map(serials).items()}
+        result = {s: path_by_serial.get(s) for s in serials}
+    _fb_list_cache["ts"] = time.time()
+    _fb_list_cache["val"] = result
 
 
 def _fastboot_getvar_product(serial: str) -> str | None:
@@ -1776,8 +1956,13 @@ def _web_status_data(cfg: dict) -> list[dict]:
     Mapped ports sort first (by number) within each hub; empty ports follow.
     Empty ports skip the per-port uhubctl query to keep refresh time low.
     """
+    import time as _time
+    _tk = _time.perf_counter
+    _t0 = _tk()
     devices = adb_devices()
+    _t_adb = _tk()
     fb_devices = _fastboot_list()   # {serial: sysfs_path | None}
+    _t_fb = _tk()
     # Reverse maps for empty-port detection: sysfs_path → serial
     fb_by_path: dict[str, str] = {
         path: serial
@@ -1793,7 +1978,8 @@ def _web_status_data(cfg: dict) -> list[dict]:
     for s in list(_watch_os):
         if devices.get(s) != "device":
             _watch_os.pop(s)
-    physical = {h["location"]: h for h in uhubctl_list()}
+    physical = {h["location"]: h for h in (_sysfs_hub_scan(cfg) or uhubctl_list())}
+    _t_scan = _tk()
     # Every hub location, used to spot cascade ports: a port whose child is
     # itself a hub (e.g. 1-2 port 3 feeds sub-hub 1-2.3). Those are internal
     # chip-to-chip links, not watch sockets — powering one off cuts the whole
@@ -1954,6 +2140,10 @@ def _web_status_data(cfg: dict) -> list[dict]:
         socks = [p["socket"] for p in h["ports"] if p.get("socket") is not None]
         return (h["location"].split(".")[0], min(socks) if socks else 9999)
     result.sort(key=_hub_key)
+    _total = _tk() - _t0
+    if _total > 1.0:      # quiet when fast; flag only the occasional slow refresh
+        log.info("STATUS TIMING (slow): fastboot=%.2fs sysfs_scan=%.2fs total=%.2fs",
+                 _t_fb - _t_adb, _t_scan - _t_fb, _total)
     return result
 
 
@@ -3304,6 +3494,7 @@ def cmd_serve(args, cfg: dict):
         daemon_threads = True
 
     _resume_persisted_tasks()
+    threading.Thread(target=_power_cache_warmer, daemon=True).start()
 
     host, port = args.host, args.port
     log.info("Web UI starting on http://%s:%d/", host, port)
