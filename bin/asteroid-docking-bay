@@ -22,6 +22,7 @@ import os
 import queue
 import shlex
 import subprocess
+import tempfile
 import sys
 import threading
 import time
@@ -2080,6 +2081,45 @@ def _control_set_time(serial: str) -> "str | None":
     return tz
 
 
+# UI-session tools (screenshots, notifications) talk to the Wayland compositor
+# and the user's D-Bus session, which live under the `ceres` account — adb shell
+# is root and can't reach them, so these run via `su ceres` with the session env.
+_CERES_ENV = ("XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0 "
+              "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus")
+
+
+def _watch_user_cmd(serial: str, cmd: str, timeout: int = 15) -> tuple[int, str, str]:
+    """Run a command in the watch's ceres user session (not as root)."""
+    inner = "su ceres -c " + shlex.quote(_CERES_ENV + " " + cmd)
+    return _run(f"adb -s {serial} shell {shlex.quote(inner)}",
+                check=False, timeout=timeout)
+
+
+def _watch_notify(serial: str) -> bool:
+    """Send a test notification to the watch."""
+    cmd = ('notificationtool -o add --application=docking-bay --urgency=2 '
+           '--icon=ios-happy '
+           '--hint="x-nemo-preview-summary asteroid-docking-bay" '
+           '--hint="x-nemo-preview-body test notification from the host" '
+           '"docking-bay" "ping"')
+    rc, _, err = _watch_user_cmd(serial, cmd, timeout=12)
+    if rc != 0:
+        log.warning("notify %s failed: %s", serial, err.strip())
+    return rc == 0
+
+
+def _watch_screenshot(serial: str) -> "Path | None":
+    """Capture the watch screen and pull it locally. Returns the Path or None.
+    screenshottool exits 10 even on success, so we judge by the pulled file."""
+    remote = "/home/ceres/.dockingbay_ss.jpg"
+    _watch_user_cmd(serial, f"screenshottool {remote} 0", timeout=15)
+    local = Path(tempfile.gettempdir()) / f"dockingbay_ss_{serial}.jpg"
+    rc, _, _ = _run(f"adb -s {serial} pull {remote} {shlex.quote(str(local))}",
+                    check=False, timeout=15)
+    _run(f"adb -s {serial} shell rm -f {remote}", check=False, timeout=8)
+    return local if (rc == 0 and local.exists() and local.stat().st_size > 0) else None
+
+
 def _web_status_data(cfg: dict) -> list[dict]:
     """
     Return hub-structured status including unmapped (empty) ports.
@@ -2534,6 +2574,19 @@ _WEB_TEMPLATE = """\
     .cc-act{width:100%;padding:8px;border-radius:6px;border:1px solid #388bfd;background:transparent;color:#388bfd;cursor:pointer;font:inherit}
     .cc-act:hover{background:#0d1f3a}
     .cc-act.done{border-color:#3fb950;color:#3fb950}
+    /* Row action floating menus */
+    .btn.pw{border-color:#f0883e;color:#f0883e}
+    .btn.pw:hover{background:#2a1a0e}
+    .menu{position:fixed;z-index:110;display:none;min-width:172px;background:#161b22;border:1px solid #30363d;border-radius:7px;box-shadow:0 10px 30px rgba(0,0,0,.6);padding:5px}
+    .menu-item{display:block;width:100%;text-align:left;padding:6px 10px;margin:1px 0;border-radius:5px;border:1px solid transparent;background:transparent;color:#c9d1d9;cursor:pointer;font:inherit;white-space:nowrap}
+    .menu-item:hover:not(:disabled){background:#0d1117;border-color:#30363d}
+    .menu-item:disabled{opacity:.38;cursor:default}
+    .menu-item.ch{color:#3fb950}.menu-item.dr{color:#58a6ff}.menu-item.ht{color:#f0883e}
+    .menu-item.wbx{color:#a371f7}.menu-item.dng{color:#f85149}
+    .menu-sep{height:1px;background:#30363d;margin:4px 2px}
+    .menu-hd{padding:3px 10px 5px;font-size:10px;color:#6e7681}
+    #toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(20px);background:#161b22;border:1px solid #30363d;color:#c9d1d9;padding:9px 16px;border-radius:7px;font-size:12px;opacity:0;pointer-events:none;transition:.2s;z-index:200}
+    #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
     table{width:100%;border-collapse:collapse}
     th{color:#6e7681;text-align:left;padding:5px 12px;border-bottom:1px solid #21262d;font-size:11px;text-transform:uppercase;letter-spacing:1px;font-weight:normal}
     th:first-child,td.tc{width:22px;padding-right:0}
@@ -2598,6 +2651,7 @@ _WEB_TEMPLATE = """\
   </table>
   <div id="hist" style="display:none"></div>
   <div id="cc" class="cc" onmouseleave="ccLeave()" onmouseenter="ccEnter()"></div>
+  <div id="menu" class="menu" onmouseleave="menuLeave()" onmouseenter="menuEnter()"></div>
 <script>
 const srcs={};
 const chargeEnd={};
@@ -2749,21 +2803,10 @@ function render(data){
           `<td>${adb}</td>` +
           `<td id="bat-${slot}">${bat}</td>` +
           `<td id="act-${slot}">` +
-          `<button class="btn btn-ref${isRef?' pulsing':''}"${d} onclick="doRefresh('${slot}')">Refresh</button>` +
-          (p.power===true&&!isFb?`<button class="btn ht"${d} onclick="doHalt('${slot}')">&#x23FB; Halt</button>`:'')+
-          (!isFb?(charging
-            ?`<button class="btn ch" onclick="doStopCharge('${slot}')">&#9632; Stop charge</button>`
-            :`<button class="btn ch"${dp}${noSwT} onclick="doCharge('${slot}')">&#9889; Charge</button>`
-          ):'')+
-          (!isFb?(draining
-            ?`<button class="btn dr" onclick="doStopDrain('${slot}')">&#9632; Stop test</button>`
-            :`<button class="btn dr"${dp}${noSwT} onclick="doDrain('${slot}')">Drain test</button>`
-          ):'')+
-          (!isFb?(wb
-            ?`<button class="btn wb" onclick="doStopWb('${slot}')">&#8617; Return</button>`
-            :`<button class="btn wb"${dp}${noSwT} onclick="doWb('${slot}')" title="check out for hands-on work: battery held ${lo}&ndash;${hi}% while you work over WiFi/SSH">&#128295; Workbench</button>`
-          ):'')+
-          `<button class="btn fl"${d} onclick="doFl('${slot}')">Flash nightly</button>` +
+          `<button class="ico${isRef?' pulsing':''}"${d} onclick="doRefresh('${slot}')" title="refresh / re-identify this port">&#x21BB;</button>` +
+          (!isFb?`<button class="btn pw"${p.excluded?' disabled':''} onclick="menuPower(event,'${slot}',${charging},${draining},${p.power===true},${noSw})" title="power / charge / drain / reboot">&#x23FB; Power &#9662;</button>`:'')+
+          (!isFb?`<button class="btn wb"${p.excluded?' disabled':''} onclick="menuWorkbench(event,'${slot}','${p.serial}',${wb},${p.adb==='device'})" title="attended actions — watch stays on">&#128295; Workbench &#9662;</button>`:'')+
+          `<button class="btn fl"${d} onclick="menuFlash(event,'${slot}')" title="backup / restore / flash">&#128190; Flash &#9662;</button>` +
           `</td></tr>` +
           `<tr class="lr" id="lr-${slot}"><td colspan="8"><div class="log${logActive?' show':''}" id="log-${slot}"></div></td></tr>`
         );
@@ -2775,16 +2818,23 @@ function render(data){
   if(Object.keys(chargeEnd).length>0&&!countdownRunning)tickCountdown();
 }
 // ── Control Center overlay ──────────────────────────────────────────────────
-let ccSerial=null, ccName=null, ccTimer=null;
+let ccSerial=null, ccName=null, ccTimer=null, ccAX=0, ccAY=0;
 function fmtUp(sec){sec=Math.floor(+sec||0);const d=Math.floor(sec/86400),h=Math.floor(sec%86400/3600),m=Math.floor(sec%3600/60);return (d?d+'d ':'')+(h||d?h+'h ':'')+m+'m';}
+function ccPlace(){
+  // Anchor to the click; flip ABOVE the anchor if the panel would run off the
+  // bottom (its height only known after the async data renders). No page scroll.
+  const cc=document.getElementById('cc'), h=cc.offsetHeight, w=cc.offsetWidth;
+  let left=Math.min(ccAX, window.innerWidth-w-8);
+  let top=ccAY+10;
+  if(top+h>window.innerHeight-8) top=ccAY-h-10;
+  cc.style.left=Math.max(8,left)+'px'; cc.style.top=Math.max(8,top)+'px';
+}
 function openCC(serial,name,ev){
   ev.stopPropagation();
-  ccSerial=serial; ccName=name;
+  ccSerial=serial; ccName=name; ccAX=ev.clientX; ccAY=ev.clientY;
   const cc=document.getElementById('cc');
-  cc.style.display='block';
-  const x=Math.min(ev.clientX,window.innerWidth-352), y=Math.min(ev.clientY+8,window.innerHeight-40);
-  cc.style.left=Math.max(8,x)+'px'; cc.style.top=Math.max(8,y)+'px';
   cc.innerHTML=`<div class="cc-hd">${name} <span class="dim">loading&hellip;</span></div>`;
+  cc.style.display='block'; ccPlace();
   ccFetch();
 }
 function ccFetch(){
@@ -2807,6 +2857,7 @@ function renderCC(d){
     `<div class="cc-grid">${info}</div>`+
     `<div class="cc-tgls">${tgl('wifi','WiFi',d.wifi)}${tgl('bluetooth','BT',d.bluetooth)}</div>`+
     `<div class="cc-acts"><button class="cc-act" id="cc-time" onclick="ccSyncTime()">&#x21BB; Sync time from host</button></div>`;
+  ccPlace();
 }
 function ccToggle(tech,on){
   document.querySelectorAll('.cc-tgl').forEach(b=>b.classList.add('busy'));
@@ -2821,7 +2872,59 @@ function ccSyncTime(){
 function closeCC(){const cc=document.getElementById('cc');cc.style.display='none';ccSerial=null;if(ccTimer){clearTimeout(ccTimer);ccTimer=null;}}
 function ccLeave(){ccTimer=setTimeout(closeCC,600);}
 function ccEnter(){if(ccTimer){clearTimeout(ccTimer);ccTimer=null;}}
-document.addEventListener('click',e=>{const cc=document.getElementById('cc');if(cc.style.display==='block'&&!cc.contains(e.target)&&!e.target.classList.contains('cn'))closeCC();});
+// ── Row action floating menus ───────────────────────────────────────────────
+let menuTimer=null;
+function openMenu(ev,html){
+  ev.stopPropagation();
+  const m=document.getElementById('menu');
+  m.innerHTML=html; m.style.left='-9999px'; m.style.top='0px'; m.style.display='block';
+  const r=ev.currentTarget.getBoundingClientRect(), mw=m.offsetWidth, mh=m.offsetHeight;
+  let left=r.left, top=r.bottom+3;
+  if(left+mw>window.innerWidth-8)left=window.innerWidth-8-mw;
+  if(top+mh>window.innerHeight-8)top=Math.max(8,r.top-mh-3);
+  m.style.left=Math.max(8,left)+'px'; m.style.top=top+'px';
+}
+function closeMenu(){document.getElementById('menu').style.display='none';}
+function menuLeave(){menuTimer=setTimeout(closeMenu,450);}
+function menuEnter(){if(menuTimer){clearTimeout(menuTimer);menuTimer=null;}}
+function mi(cls,label,fn,dis){return `<button class="menu-item ${cls}"${dis?' disabled title="not available yet"':` onclick="${fn};closeMenu()"`}>${label}</button>`;}
+function menuPower(ev,slot,charging,draining,powered,noSw){
+  openMenu(ev,
+    (charging?mi('ch','&#9632; Stop charge',`doStopCharge('${slot}')`):mi('ch','&#9889; Charge',`doCharge('${slot}')`,noSw))+
+    (draining?mi('dr','&#9632; Stop drain test',`doStopDrain('${slot}')`):mi('dr','&#128201; Drain test',`doDrain('${slot}')`,noSw))+
+    '<div class="menu-sep"></div>'+
+    (powered?mi('ht','&#x23FB; Power off',`doHalt('${slot}')`):'')+
+    mi('ht','&#x21BB; Reboot',`doReboot('${slot}')`)+
+    mi('dng','&#128295; Bootloader',`doBootloader('${slot}')`));
+}
+function menuWorkbench(ev,slot,serial,wb,online){
+  openMenu(ev,
+    '<div class="menu-hd">watch stays on — power off when done</div>'+
+    (wb?mi('wbx','&#8617; End checkout',`doStopWb('${slot}')`):mi('wbx','&#128295; Checkout (hold band)',`doWb('${slot}')`))+
+    '<div class="menu-sep"></div>'+
+    mi('','&#x21BB; Set time from host',`doSetTime('${serial}')`,!online)+
+    mi('','&#128247; Screenshot',`doScreenshot('${serial}')`,!online)+
+    mi('','&#128276; Test notification',`doNotify('${serial}')`,!online));
+}
+function menuFlash(ev,slot){
+  openMenu(ev,
+    mi('','&#128190; Backup data',`doBackup('${slot}')`,true)+
+    mi('','&#8617; Restore data',`doRestore('${slot}')`,true)+
+    '<div class="menu-sep"></div>'+
+    mi('','&#9889; Flash nightly',`doFl('${slot}')`)+
+    mi('',"Flash 2.1",`doFlV('${slot}','2.1')`,true)+
+    mi('',"Flash 2.0",`doFlV('${slot}','2.0')`,true));
+}
+function toast(msg){let t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove('show'),2400);}
+function doSetTime(s){toast('syncing time…');fetch('/api/watch/'+encodeURIComponent(s)+'/settime',{method:'POST'}).then(()=>toast('time synced from host'));}
+function doNotify(s){fetch('/api/watch/'+encodeURIComponent(s)+'/notify',{method:'POST'}).then(r=>r.json()).then(d=>toast(d.ok?'notification sent to watch':'notify failed'));}
+function doScreenshot(s){toast('capturing…');window.open('/api/watch/'+encodeURIComponent(s)+'/screenshot.jpg?t='+Date.now(),'_blank');}
+function doFlV(s,v){toast('Flash '+v+' — not released yet');}
+function doBackup(s){} function doRestore(s){}
+document.addEventListener('click',e=>{
+  const cc=document.getElementById('cc');if(cc.style.display==='block'&&!cc.contains(e.target)&&!e.target.classList.contains('cn'))closeCC();
+  const m=document.getElementById('menu');if(m.style.display==='block'&&!m.contains(e.target))closeMenu();
+});
 function refresh(){
   fetch('/api/status').then(r=>r.json()).then(d=>{render(d);document.getElementById('ts').textContent='updated '+new Date().toLocaleTimeString()}).catch(()=>{document.getElementById('ts').textContent='connection error'});
 }
@@ -3428,6 +3531,23 @@ def cmd_serve(args, cfg: dict):
         resp.content_type = "application/json"
         tz = _control_set_time(serial)
         return json.dumps({"ok": True, "timezone": tz})
+
+    @app.post("/api/watch/<serial>/notify")
+    def api_watch_notify(serial):
+        """Send a test notification to the watch."""
+        resp.content_type = "application/json"
+        return json.dumps({"ok": _watch_notify(serial)})
+
+    @app.get("/api/watch/<serial>/screenshot.jpg")
+    def api_watch_screenshot(serial):
+        """Capture and return the watch screen as a JPEG."""
+        local = _watch_screenshot(serial)
+        if not local:
+            resp.status = 502
+            resp.content_type = "text/plain"
+            return "screenshot failed"
+        resp.content_type = "image/jpeg"
+        return local.read_bytes()
 
     @app.post("/api/on/<loc>/<port:int>")
     def api_on(loc, port):
