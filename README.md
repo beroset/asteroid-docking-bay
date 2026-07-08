@@ -76,6 +76,12 @@ sudo apt install uhubctl android-tools-adb
 pip install bottle   # optional, for the web UI
 ```
 
+**Fedora**
+```sh
+sudo dnf install uhubctl android-tools
+pip install bottle   # optional, for the web UI
+```
+
 ## Installation
 
 ```sh

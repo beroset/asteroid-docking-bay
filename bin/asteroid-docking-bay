@@ -279,6 +279,7 @@ def _require_uhubctl():
             "uhubctl not found. Install it:\n"
             "  Arch:    sudo pacman -S uhubctl\n"
             "  Debian:  sudo apt install uhubctl\n"
+            "  Fedora:  sudo dnf install uhubctl\n"
             "  Source:  https://github.com/mvp/uhubctl"
         )
         sys.exit(1)
