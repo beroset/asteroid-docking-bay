@@ -13,13 +13,17 @@ dock. Both abuse aging cells, and deep discharge feeds the notorious
 low-charge panic-reboot loop.
 
 asteroid-docking-bay keeps the whole collection docked on smart USB hubs
-(per-port power switching via [uhubctl](https://github.com/mvp/uhubctl))
+(near-instant per-port power switching through the kernel's own sysfs
+interface; [uhubctl](https://github.com/mvp/uhubctl) for discovery)
 and sustains every battery in a healthy mid-range band (40–80% by default)
 — always boot-ready, never trickle-cooked:
 
 - **Web dashboard** for the whole fleet: per-port power, ADB and OS
   detection, battery state, live operations — and it follows physically
-  relocated watches automatically.
+  relocated watches automatically. A per-watch **Control Center** reads full
+  device telemetry (battery voltage/current/temperature/cycles, system,
+  network, connected phone) and drives the watch's hardware — WiFi/Bluetooth,
+  screen, buzz-to-find, clock sync, screenshots — from the browser.
 - **Battery care**: charge-to-target instead of charging by the clock, a
   periodic sustain timer, and a workbench mode that holds the band while
   you do hands-on work on a watch over WiFi/SSH.
@@ -259,17 +263,27 @@ assigned) show a **Refresh** button that triggers a full per-port remap: powers
 the port on, waits for a watch, reads its codename, tests PPPS, and updates
 config — all streamed live into an inline log below the row.
 
-**Mapped watch rows** offer:
+**Mapped watch rows** keep a compact action column: a leading **↻** refresh,
+the **ON / OFF** power toggle and **⟳** power-cycle, then three floating menus
+that flip above or below the button to stay on-screen. Click a watch's
+**codename** to open its **Control Center** (described below). The menus:
 
-- **Refresh** — re-polls ADB state and battery level.
-- **ON / OFF toggle** — switches hub port power; confirms the state changed.
-- **⟳** — power-cycles the port (off → 5 s → on).
-- **⏻ Halt** — submenu: graceful OS shutdown, reboot, or reboot to bootloader.
+- **⏻ Power** — the charge, drain-test and power operations below, plus
+  **Power off / Reboot / Reboot to bootloader**.
+- **🔧 Workbench** — the checkout band-hold plus attended actions that leave
+  the watch powered on: **Set time from host**, **Screenshot**, **Test
+  notification**.
+- **💾 Flash** — **Flash nightly** (Backup / Restore and versioned flashes are
+  placeholders for now).
+
+The charge, drain and workbench operations in detail:
 - **⚡ Charge** — charges to `high_threshold` (shown live as `⚡ 64% → 80%`),
   polling the battery every 2 minutes and stopping exactly at the target
   (capped by `charge_max_minutes`). Watches whose battery can't be read fall
-  back to a fixed `charge_duration_minutes` countdown. A **◼ Stop charge**
-  button is available while it runs.
+  back to a fixed `charge_duration_minutes` countdown. If a charging watch
+  starts *losing* charge — dirty contacts, bad cable, failing port — the
+  battery column flags **⚠ losing power!** instead of pretending to charge.
+  A **◼ Stop charge** item is available while it runs.
 - **📉 Drain test** — standby battery drain measurement: powers the port off
   and lets the watch run on battery, waking it every 30 minutes for a battery
   reading until it reaches 15% or you press **◼ Stop test**. The battery
@@ -299,6 +313,23 @@ config — all streamed live into an inline log below the row.
   puts the watch back into the normal fleet, already inside the band.
   Charge, drain and flash actions refuse while a watch is checked out.
 - **Flash nightly** — full nightly flash streamed live into the inline log.
+
+**Control Center.** Click a watch's **codename** to open a live, host-side
+mirror of the watch's own About page and quick settings, read in a single ADB
+batch:
+
+- **System** — kernel, Qt, SoC, CPU clock, uptime, boot reason, memory, storage.
+- **Battery** — charge, health, technology, voltage, **real charge/discharge
+  current in mA**, temperature, cycle count, and USB-input voltage (confirms
+  the port is actually delivering power, not just switched on).
+- **Network & links** — WiFi, IP, traffic, Bluetooth, and the connected
+  companion phone.
+
+From the same panel you can toggle **WiFi / Bluetooth**, **Buzz** the watch
+(vibrate to find it in a full dock), force its **Screen** on, grab a
+**Screenshot**, and **Sync** its clock + timezone from the host — all over
+ADB. Session actions (screenshot, notifications) run in the watch's `ceres`
+user session, not as root.
 
 The ADB column shows the AsteroidOS logo next to `device` when the watch is
 detected running AsteroidOS; other watches show their detected OS instead
