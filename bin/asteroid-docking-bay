@@ -2012,6 +2012,26 @@ echo "memcached=$(grep -m1 "^Cached" /proc/meminfo | tr -dc 0-9)"
 echo "wlanmac=$(cat /sys/class/net/wlan0/address 2>/dev/null)"
 echo "tz=$(readlink /etc/localtime 2>/dev/null | sed "s,.*/zoneinfo/,,")"
 echo "datetime=$(date "+%Y-%m-%d %H:%M:%S")"
+echo "soc=$(grep -m1 Hardware /proc/cpuinfo | cut -d: -f2)"
+echo "cpufreq=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq 2>/dev/null)"
+echo "cores=$(cat /sys/devices/system/cpu/online 2>/dev/null)"
+echo "bootreason=$(tr " " "\n" < /proc/cmdline | grep bootreason | cut -d= -f2)"
+echo "df=$(df -h / 2>/dev/null | tail -1)"
+echo "bat_cap=$(cat /sys/class/power_supply/battery/capacity 2>/dev/null)"
+echo "bat_status=$(cat /sys/class/power_supply/battery/status 2>/dev/null)"
+echo "bat_health=$(cat /sys/class/power_supply/battery/health 2>/dev/null)"
+echo "bat_tech=$(cat /sys/class/power_supply/battery/technology 2>/dev/null)"
+echo "bat_volt=$(cat /sys/class/power_supply/battery/voltage_now 2>/dev/null)"
+echo "bat_curr=$(cat /sys/class/power_supply/battery/current_now 2>/dev/null)"
+echo "bat_temp=$(cat /sys/class/power_supply/battery/temp 2>/dev/null)"
+echo "bat_cycles=$(cat /sys/class/power_supply/battery/cycle_count 2>/dev/null)"
+echo "usb_online=$(cat /sys/class/power_supply/usb/online 2>/dev/null)"
+echo "usb_volt=$(cat /sys/class/power_supply/usb/voltage_now 2>/dev/null)"
+echo "ip=$(ip -o -4 addr show wlan0 2>/dev/null | grep -o "inet [0-9.]*" | cut -d" " -f2)"
+echo "net_rx=$(cat /sys/class/net/wlan0/statistics/rx_bytes 2>/dev/null)"
+echo "net_tx=$(cat /sys/class/net/wlan0/statistics/tx_bytes 2>/dev/null)"
+echo "btcount=$(hcitool con 2>/dev/null | grep -c "<")"
+echo "btmac=$(hcitool con 2>/dev/null | grep -o "[0-9A-F:]\{17\}" | head -1)"
 echo "--connman--"
 connmanctl technologies 2>/dev/null'''
 
@@ -2557,15 +2577,20 @@ _WEB_TEMPLATE = """\
     /* Control Center overlay */
     .cn{cursor:pointer;border-bottom:1px dotted #4d5561}
     .cn:hover{color:#58a6ff;border-bottom-color:#58a6ff}
-    .cc{position:fixed;z-index:100;display:none;width:340px;max-width:92vw;background:#161b22;border:1px solid #30363d;border-radius:8px;box-shadow:0 10px 34px rgba(0,0,0,.6);font-size:12px;overflow:hidden}
+    .cc{position:fixed;z-index:100;display:none;width:auto;min-width:340px;max-width:94vw;background:#161b22;border:1px solid #30363d;border-radius:8px;box-shadow:0 10px 34px rgba(0,0,0,.6);font-size:12px;overflow:hidden}
+    .cc-cols{display:flex;flex-wrap:wrap}
+    .cc-col{flex:1 1 210px;min-width:200px}
+    .cc-sec{padding:8px 14px}
+    .cc-sech{font-size:10px;color:#8b949e;text-transform:uppercase;letter-spacing:.6px;border-bottom:1px solid #21262d;padding-bottom:3px;margin-bottom:5px}
     .cc-hd{padding:8px 30px 8px 12px;background:#0d1117;border-bottom:1px solid #30363d;font-weight:700;color:#58a6ff;position:relative}
     .cc-hd .dim{font-weight:400}
     .cc-x{position:absolute;right:10px;top:6px;cursor:pointer;color:#6e7681;font-weight:400;font-size:16px;line-height:1}
     .cc-x:hover{color:#fff}
-    .cc-grid{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;padding:10px 12px}
+    .cc-grid{display:grid;grid-template-columns:auto 1fr;gap:3px 10px}
+    .cc-act.mini{width:auto;flex:1;padding:6px}
     .cc-k{color:#6e7681}
     .cc-v{color:#c9d1d9;text-align:right;font-variant-numeric:tabular-nums;word-break:break-all}
-    .cc-tgls{display:flex;gap:8px;padding:2px 12px 10px}
+    .cc-tgls{display:flex;flex-wrap:wrap;gap:8px;padding:2px 12px 10px}
     .cc-tgl{flex:1;padding:7px 4px;border-radius:6px;border:1px solid #30363d;background:transparent;cursor:pointer;font:inherit;color:#8b949e}
     .cc-tgl.on{border-color:#3fb950;color:#3fb950}
     .cc-tgl.busy{opacity:.5;cursor:progress}
@@ -2845,20 +2870,47 @@ function ccFetch(){
 }
 function renderCC(d){
   const cc=document.getElementById('cc');
-  if(!d||!d.kernel){cc.innerHTML=`<div class="cc-hd">${ccName} <span class="err">no data (watch offline?)</span><span class="cc-x" onclick="closeCC()">&times;</span></div>`;return;}
-  const mt=+d.memtotal,mf=+d.memfree,used=Math.round((mt-mf)/1024),tot=Math.round(mt/1024);
-  const rows=[['Kernel',d.kernel],['Qt',d.qt],['Uptime',fmtUp(d.uptime)],['Load 1/5/15',d.load],
-    ['Threads',d.threads],['Memory',used+' / '+tot+' MB'],['WLAN MAC',d.wlanmac],
-    ['Timezone',d.tz],['Watch clock',d.datetime],['Serial',d.serial]];
-  const info=rows.map(r=>`<div class="cc-k">${r[0]}</div><div class="cc-v">${esc(r[1]||'—')}</div>`).join('');
+  if(!d||!d.kernel){cc.innerHTML=`<div class="cc-hd">${ccName} <span class="err">no data (watch offline?)</span><span class="cc-x" onclick="closeCC()">&times;</span></div>`;ccPlace();return;}
+  const kv=(k,v)=>`<div class="cc-k">${k}</div><div class="cc-v">${esc(v==null||v===''?'—':String(v))}</div>`;
+  const sec=(t,r)=>`<div class="cc-sec"><div class="cc-sech">${t}</div><div class="cc-grid">${r}</div></div>`;
+  const num=x=>(x==null||x===''||isNaN(+x))?null:+x;
+  const mt=+d.memtotal,mf=+d.memfree,memU=mt?Math.round((mt-mf)/1024):null,memT=mt?Math.round(mt/1024):null;
+  const bv=num(d.bat_volt),ba=num(d.bat_curr),bt=num(d.bat_temp),uv=num(d.usb_volt),freq=num(d.cpufreq);
+  const dfp=(d.df||'').trim().split(/[ \t]+/);
+  const storage=dfp.length>=5?`${dfp[2]} / ${dfp[1]} (${dfp[4]})`:null;
+  const mb=x=>{const n=num(x);return n==null?null:(n/1048576).toFixed(2)+' MB';};
+  const phone=(+d.btcount>0)?(d.btmac||'connected'):'none';
+  const cur=ba==null?null:`${(ba/1000).toFixed(0)} mA ${ba<-5?'&#9660;':ba>5?'&#9650;':''}`;
+  const sys=sec('System',
+    kv('Kernel',d.kernel)+kv('Qt',d.qt)+kv('SoC',(d.soc||'').trim())+
+    kv('CPU',freq?(freq/1000).toFixed(0)+' MHz':null)+
+    kv('Uptime',fmtUp(d.uptime))+kv('Boot',d.bootreason)+
+    kv('Load',d.load)+kv('Threads',d.threads)+
+    kv('Memory',memU!=null?`${memU} / ${memT} MB`:null)+kv('Storage',storage));
+  const bat=sec('Battery',
+    kv('Charge',d.bat_cap!=null&&d.bat_cap!==''?d.bat_cap+'%':null)+kv('Status',d.bat_status)+
+    kv('Health',d.bat_health)+kv('Tech',d.bat_tech)+
+    kv('Voltage',bv?(bv/1e6).toFixed(3)+' V':null)+kv('Current',cur)+
+    kv('Temp',bt!=null?(bt/10).toFixed(1)+' °C':null)+kv('Cycles',d.bat_cycles)+
+    kv('USB in',uv!=null&&uv>0?(uv/1e6).toFixed(2)+' V':(+d.usb_online?'online':null)));
+  const net=sec('Network &amp; links',
+    kv('WiFi',d.wifi==null?null:(d.wifi?'on':'off'))+kv('IP',d.ip)+
+    kv('RX / TX',(mb(d.net_rx)||'0')+' / '+(mb(d.net_tx)||'0'))+
+    kv('Bluetooth',d.bluetooth==null?null:(d.bluetooth?'on':'off'))+kv('Phone',phone)+
+    kv('Timezone',d.tz)+kv('Clock',d.datetime)+kv('WLAN MAC',d.wlanmac)+kv('Serial',d.serial));
   const tgl=(t,l,on)=>`<button class="cc-tgl${on?' on':''}" onclick="ccToggle('${t}',${on?0:1})">${l}: ${on?'ON':'OFF'}</button>`;
   cc.innerHTML=
     `<div class="cc-hd">${esc(ccName)} <span class="dim">${esc(d.os||'')}</span><span class="cc-x" onclick="closeCC()">&times;</span></div>`+
-    `<div class="cc-grid">${info}</div>`+
-    `<div class="cc-tgls">${tgl('wifi','WiFi',d.wifi)}${tgl('bluetooth','BT',d.bluetooth)}</div>`+
+    `<div class="cc-cols"><div class="cc-col">${sys}</div><div class="cc-col">${bat}</div><div class="cc-col">${net}</div></div>`+
+    `<div class="cc-tgls">${tgl('wifi','WiFi',d.wifi)}${tgl('bluetooth','BT',d.bluetooth)}`+
+      `<button class="cc-tgl" onclick="ccBuzz()" title="vibrate to locate in the dock">&#128243; Buzz</button>`+
+      `<button class="cc-tgl" onclick="ccScreen()" title="force the screen on">&#128161; Screen</button>`+
+      `<button class="cc-tgl" onclick="doScreenshot('${d.serial}')" title="screenshot in a new tab">&#128247; Shot</button></div>`+
     `<div class="cc-acts"><button class="cc-act" id="cc-time" onclick="ccSyncTime()">&#x21BB; Sync time from host</button></div>`;
   ccPlace();
 }
+function ccBuzz(){fetch('/api/watch/'+encodeURIComponent(ccSerial)+'/buzz',{method:'POST'}).then(()=>toast('buzzed'));}
+function ccScreen(){fetch('/api/watch/'+encodeURIComponent(ccSerial)+'/screen/on',{method:'POST'}).then(()=>toast('screen forced on'));}
 function ccToggle(tech,on){
   document.querySelectorAll('.cc-tgl').forEach(b=>b.classList.add('busy'));
   fetch('/api/watch/'+encodeURIComponent(ccSerial)+'/toggle/'+tech+'/'+(on?'on':'off'),{method:'POST'})
@@ -3548,6 +3600,22 @@ def cmd_serve(args, cfg: dict):
             return "screenshot failed"
         resp.content_type = "image/jpeg"
         return local.read_bytes()
+
+    @app.post("/api/watch/<serial>/buzz")
+    def api_watch_buzz(serial):
+        """Vibrate the watch briefly — locate/identify it in a full dock."""
+        resp.content_type = "application/json"
+        rc, _, _ = _run(f'adb -s {serial} shell "echo 300 > /sys/class/timed_output/vibrator/enable"',
+                        check=False, timeout=8)
+        return json.dumps({"ok": rc == 0})
+
+    @app.post("/api/watch/<serial>/screen/<state>")
+    def api_watch_screen(serial, state):
+        """Force the screen on (demo mode) or release it."""
+        resp.content_type = "application/json"
+        rc, _, _ = _run(f"adb -s {serial} shell mcetool -D {'on' if state == 'on' else 'off'}",
+                        check=False, timeout=10)
+        return json.dumps({"ok": rc == 0})
 
     @app.post("/api/on/<loc>/<port:int>")
     def api_on(loc, port):
