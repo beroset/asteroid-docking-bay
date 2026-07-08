@@ -13,6 +13,7 @@ Logs:   journald (if python-systemd is installed) + stderr
 """
 
 import argparse
+import ast
 import copy
 import fcntl
 import glob
@@ -20,7 +21,9 @@ import json
 import logging
 import os
 import queue
+import shlex
 import subprocess
+import tempfile
 import sys
 import threading
 import time
@@ -595,7 +598,7 @@ def _wait_adb_state(serial: str, present: bool, timeout: float) -> bool:
     deadline = time.time() + timeout
     while True:
         devs = adb_devices_checked()
-        if devs is not None and ((devs.get(serial) == "device") is present):
+        if devs is not None and ((_adb_state(devs, serial) == "device") is present):
             return True
         if time.time() >= deadline:
             return False
@@ -655,7 +658,7 @@ def test_port_power_switching(location: str, port: int,
     else:
         confirmed_on = True  # measured again after the restore below
 
-    adb_before    = bool(serial) and adb_devices().get(serial) == "device"
+    adb_before    = bool(serial) and _adb_state(adb_devices(), serial) == "device"
     device_before = _port_device_present(location, port)
 
     uhubctl_set_power(location, port, False)
@@ -713,26 +716,50 @@ def test_port_power_switching(location: str, port: int,
 
 # ── ADB wrappers ──────────────────────────────────────────────────────────────
 
-def adb_devices_checked() -> dict[str, str] | None:
+def adb_devices_checked() -> dict[str, str | list[str]] | None:
     """Like adb_devices, but None when the adb call itself failed (server
     crash / not installed) — distinct from a genuinely empty device list."""
-    rc, out, err = _run("adb devices", check=False)
+    rc, out, err = _run("adb devices -l", check=False)
     if rc != 0:
         log.warning("adb devices failed (rc=%s): %s", rc, err.strip() or "no stderr")
         return None
-    result: dict[str, str] = {}
-    for line in out.splitlines()[1:]:
-        if not line.strip():
-            continue
+    result: dict[str, dict[str, str | list[str]]] = {}
+    lines = out.splitlines()[1:]
+    for line in lines:
         parts = line.split()
-        if len(parts) >= 2:
-            result[parts[0]] = parts[1]
+        serial = parts[0]
+        status = parts[1]
+
+        extras = parts[2:]
+
+        parsed: dict[str, str | list[str]] = {}
+
+        for token in extras:
+            if ":" in token:
+                k, v = token.split(":", 1)
+                parsed[k] = v
+            else:
+                parsed.setdefault("_tokens", []).append(token)
+
+        result[serial] = {"status": status, **parsed}
     return result
 
 
-def adb_devices() -> dict[str, str]:
+def adb_devices() -> dict[str, str | list[str]]:
     """Return {serial: state} for all ADB-visible devices ({} on failure)."""
     return adb_devices_checked() or {}
+
+
+def _adb_state(devs: dict, serial: "str | None") -> "str | None":
+    """State string ('device'/'offline'/…) for a serial in an adb_devices() map,
+    or None if the serial isn't present. None-safe: adb_devices() values are now
+    per-device dicts (`{"status": …, "usb": …}`), and `devs.get(serial)` is None
+    for an absent/offline watch — `None['status']` would raise, so callers go
+    through here instead of indexing the entry directly."""
+    entry = devs.get(serial)
+    if isinstance(entry, dict):
+        return entry.get("status")
+    return entry  # None, or a plain string (defensive)
 
 
 def adb_shell(serial: str, cmd: str, timeout: int = 8) -> tuple[int, str, str]:
@@ -901,7 +928,7 @@ def _wait_for_new_adb_device(known_serials: set[str], timeout: int = 10) -> str 
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         for serial, state in adb_devices().items():
-            if serial not in known_serials and state == "device":
+            if serial not in known_serials and state['status'] == "device":
                 return serial
         time.sleep(1)
     return None
@@ -924,7 +951,7 @@ def wait_serial_online(serial: str, wait_secs: int, retries: int,
     for attempt in range(attempts):
         for _ in range(retries):
             devs = adb_devices_checked()
-            if devs is not None and devs.get(serial) == "device":
+            if devs is not None and _adb_state(devs, serial) == "device":
                 return True
             if stop_event is not None:
                 if stop_event.wait(timeout=wait_secs):
@@ -955,13 +982,13 @@ def wait_for_adb(codename: str, cfg: dict, charge_cfg: dict) -> str | None:
         devices = adb_devices()
 
         # Fast path: known serial is already online.
-        if known_serial and devices.get(known_serial) == "device":
+        if known_serial and _adb_state(devices, known_serial) == "device":
             log.debug("%s: ADB online (serial %s)", codename, known_serial)
             return known_serial
 
         # Slower path: scan all 'device'-state entries for the codename.
         for serial, state in devices.items():
-            if state != "device":
+            if state['status'] != "device":
                 continue
             detected = get_watch_codename(serial)
             if detected and detected.lower() == codename.lower():
@@ -1269,6 +1296,7 @@ def _flash_one_watch(
 
 
 _CHARGE_POLL_SEC = 120  # battery poll interval in charge-to-target mode
+_CHARGE_STALL_POLLS = 2  # consecutive drops while charging → "losing power" alarm
 
 
 def _ensure_port_powered(codename: str, loc: "str | None",
@@ -1409,6 +1437,8 @@ def _run_charge_for_web(slot: str, loc: str, port: int, cfg: dict) -> None:
                 _log_event(serial, codename, "charge_start", pct=level, target=target)
                 log.info("%s: charging %d%% → %d%%", codename, level, target)
                 deadline = time.time() + max_sec
+                prev_pct = level
+                dropping = 0
                 while not stop_event.wait(timeout=_CHARGE_POLL_SEC):
                     if time.time() >= deadline:
                         log.warning("%s: target %d%% not reached within "
@@ -1420,6 +1450,27 @@ def _run_charge_for_web(slot: str, loc: str, port: int, cfg: dict) -> None:
                     if lvl is None:
                         continue  # transient read failure — keep charging
                     task["pct"] = lvl
+                    # Alarm: a charging watch must never LOSE charge. Consecutive
+                    # drops mean it's losing power despite the charge attempt —
+                    # dirty contacts / bad cable / failing port (the sawfish case
+                    # we used to silently discard). Flag it but keep trying; a
+                    # flaky contact may recover.
+                    if lvl < prev_pct:
+                        dropping += 1
+                        if dropping >= _CHARGE_STALL_POLLS and not task.get("losing_power"):
+                            task["losing_power"] = True
+                            log.warning("%s: battery DROPPING while charging "
+                                        "(%d%% → %d%%) — losing power despite charge; "
+                                        "check contacts/cable/port",
+                                        codename, prev_pct, lvl)
+                            _log_event(serial, codename, "charge_power_loss",
+                                       pct=lvl, from_pct=prev_pct)
+                    elif lvl > prev_pct:
+                        if task.pop("losing_power", None):
+                            log.info("%s: charge recovered — gaining again (%d%%)",
+                                     codename, lvl)
+                        dropping = 0
+                    prev_pct = lvl
                     _persist_task("charge", slot, loc, port, task)
                     if lvl >= target:
                         log.info("%s: reached %d%% (target %d%%)",
@@ -1968,6 +2019,152 @@ def _latest_drain_summaries() -> dict[str, dict]:
     return best
 
 
+# ── Control Center: per-watch stats + hardware toggles over ADB ───────────────
+# Data sources mirror asteroid-settings AboutPage.qml / QuickPanelPage.qml,
+# confirmed on AsteroidOS 1.1 / kernel 3.10. adb shell runs as root. One shell
+# batch keeps it to a single round-trip. See reference_watch_control_commands.
+_CC_SCRIPT = r'''. /etc/os-release 2>/dev/null; echo "os=$NAME $VERSION"
+echo "host=$(hostname)"
+echo "kernel=$(uname -r)"
+echo "qt=$(ls /usr/lib/libQt*Core.so.*.*.* 2>/dev/null | grep -o "[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*" | head -1)"
+echo "uptime=$(cut -d" " -f1 /proc/uptime)"
+echo "load=$(cut -d" " -f1-3 /proc/loadavg)"
+echo "threads=$(cut -d" " -f4 /proc/loadavg)"
+echo "memtotal=$(grep -m1 MemTotal /proc/meminfo | tr -dc 0-9)"
+echo "memfree=$(grep -m1 MemFree /proc/meminfo | tr -dc 0-9)"
+echo "membuffers=$(grep -m1 Buffers /proc/meminfo | tr -dc 0-9)"
+echo "memcached=$(grep -m1 "^Cached" /proc/meminfo | tr -dc 0-9)"
+echo "wlanmac=$(cat /sys/class/net/wlan0/address 2>/dev/null)"
+echo "tz=$(readlink /etc/localtime 2>/dev/null | sed "s,.*/zoneinfo/,,")"
+echo "datetime=$(date "+%Y-%m-%d %H:%M:%S")"
+echo "soc=$(grep -m1 Hardware /proc/cpuinfo | cut -d: -f2)"
+echo "cpufreq=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq 2>/dev/null)"
+echo "cores=$(cat /sys/devices/system/cpu/online 2>/dev/null)"
+echo "bootreason=$(tr " " "\n" < /proc/cmdline | grep bootreason | cut -d= -f2)"
+echo "df=$(df -h / 2>/dev/null | tail -1)"
+echo "bat_cap=$(cat /sys/class/power_supply/battery/capacity 2>/dev/null)"
+echo "bat_status=$(cat /sys/class/power_supply/battery/status 2>/dev/null)"
+echo "bat_health=$(cat /sys/class/power_supply/battery/health 2>/dev/null)"
+echo "bat_tech=$(cat /sys/class/power_supply/battery/technology 2>/dev/null)"
+echo "bat_volt=$(cat /sys/class/power_supply/battery/voltage_now 2>/dev/null)"
+echo "bat_curr=$(cat /sys/class/power_supply/battery/current_now 2>/dev/null)"
+echo "bat_temp=$(cat /sys/class/power_supply/battery/temp 2>/dev/null)"
+echo "bat_cycles=$(cat /sys/class/power_supply/battery/cycle_count 2>/dev/null)"
+echo "usb_online=$(cat /sys/class/power_supply/usb/online 2>/dev/null)"
+echo "usb_volt=$(cat /sys/class/power_supply/usb/voltage_now 2>/dev/null)"
+echo "ip=$(ip -o -4 addr show wlan0 2>/dev/null | grep -o "inet [0-9.]*" | cut -d" " -f2)"
+echo "net_rx=$(cat /sys/class/net/wlan0/statistics/rx_bytes 2>/dev/null)"
+echo "net_tx=$(cat /sys/class/net/wlan0/statistics/tx_bytes 2>/dev/null)"
+echo "btcount=$(hcitool con 2>/dev/null | grep -c "<")"
+echo "btmac=$(hcitool con 2>/dev/null | grep -o "[0-9A-F:]\{17\}" | head -1)"
+echo "--connman--"
+connmanctl technologies 2>/dev/null'''
+
+
+def _control_center_data(serial: str) -> dict:
+    """Read a watch's About-style stats + connman toggle states in one adb
+    batch. Returns {} if unreachable."""
+    rc, out, _ = _run(f"adb -s {serial} shell {shlex.quote(_CC_SCRIPT)}",
+                      check=False, timeout=12)
+    if rc != 0 or not out.strip():
+        return {}
+    info: dict = {}
+    in_conn = False
+    ctype = None
+    tech: dict = {}
+    for line in out.splitlines():
+        if line.strip() == "--connman--":
+            in_conn = True
+            continue
+        if not in_conn:
+            if "=" in line:
+                k, v = line.split("=", 1)
+                info[k.strip()] = v.strip()
+        else:
+            s = line.strip()
+            if s.startswith("Type ="):
+                ctype = s.split("=", 1)[1].strip()
+            elif s.startswith("Powered =") and ctype:
+                tech[ctype] = (s.split("=", 1)[1].strip().lower() == "true")
+    info["serial"] = serial
+    info["wifi"] = tech.get("wifi")
+    info["bluetooth"] = tech.get("bluetooth")
+    return info
+
+
+def _control_toggle(serial: str, tech: str, on: bool) -> bool:
+    """Enable/disable a connman technology (wifi|bluetooth) on the watch."""
+    action = "enable" if on else "disable"
+    rc, _, err = _run(f"adb -s {serial} shell connmanctl {action} {tech}",
+                      check=False, timeout=12)
+    if rc != 0:
+        log.warning("toggle %s %s on %s failed: %s", action, tech, serial,
+                    err.strip() or f"rc={rc}")
+    return rc == 0
+
+
+def _host_timezone() -> "str | None":
+    """Host IANA timezone (e.g. 'Europe/Berlin') to push to a watch."""
+    try:
+        tz = os.readlink("/etc/localtime")
+    except OSError:
+        return None
+    return tz.split("zoneinfo/", 1)[1] if "zoneinfo/" in tz else None
+
+
+def _control_set_time(serial: str) -> "str | None":
+    """Sync the watch's clock + timezone from the host (the priority action).
+    `date -s @<host UTC epoch>` then `timedatectl set-timezone`. Returns the tz
+    applied, or None."""
+    epoch = int(time.time())
+    _run(f"adb -s {serial} shell date -s @{epoch}", check=False, timeout=10)
+    tz = _host_timezone()
+    if tz:
+        _run(f"adb -s {serial} shell timedatectl set-timezone {shlex.quote(tz)}",
+             check=False, timeout=10)
+    log.info("%s: synced time from host (epoch=%d tz=%s)", serial, epoch, tz)
+    return tz
+
+
+# UI-session tools (screenshots, notifications) talk to the Wayland compositor
+# and the user's D-Bus session, which live under the `ceres` account — adb shell
+# is root and can't reach them, so these run via `su ceres` with the session env.
+_CERES_ENV = ("XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0 "
+              "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus")
+
+
+def _watch_user_cmd(serial: str, cmd: str, timeout: int = 15) -> tuple[int, str, str]:
+    """Run a command in the watch's ceres user session (not as root)."""
+    inner = "su ceres -c " + shlex.quote(_CERES_ENV + " " + cmd)
+    return _run(f"adb -s {serial} shell {shlex.quote(inner)}",
+                check=False, timeout=timeout)
+
+
+def _watch_notify(serial: str) -> bool:
+    """Send a test notification to the watch."""
+    cmd = ('notificationtool -o add --application=docking-bay --urgency=2 '
+           '--icon=ios-happy '
+           '--hint="x-nemo-preview-summary asteroid-docking-bay" '
+           '--hint="x-nemo-preview-body test notification from the host" '
+           '"docking-bay" "ping"')
+    rc, _, err = _watch_user_cmd(serial, cmd, timeout=12)
+    if rc != 0:
+        log.warning("notify %s failed: %s", serial, err.strip())
+    return rc == 0
+
+
+def _watch_screenshot(serial: str) -> "Path | None":
+    """Capture the watch screen and pull it locally. Returns the Path or None.
+    screenshottool exits 10 even on success, so we judge by the pulled file."""
+    remote = "/home/ceres/.dockingbay_ss.jpg"
+    _watch_user_cmd(serial, f"screenshottool {remote} 0", timeout=15)
+    local = Path(tempfile.gettempdir()) / f"dockingbay_ss_{serial}.jpg"
+    rc, _, _ = _run(f"adb -s {serial} pull {remote} {shlex.quote(str(local))}",
+                    check=False, timeout=15)
+    _run(f"adb -s {serial} shell rm -f {remote}", check=False, timeout=8)
+    return local if (rc == 0 and local.exists() and local.stat().st_size > 0) else None
+
+
 def _web_status_data(cfg: dict) -> list[dict]:
     """
     Return hub-structured status including unmapped (empty) ports.
@@ -1991,11 +2188,11 @@ def _web_status_data(cfg: dict) -> list[dict]:
     adb_by_path: dict[str, str] = _sysfs_path_to_serial_map(set(devices.keys()))
     # Live soft-remap: follow booted watches that were physically moved.
     online_by_path = {p: s for p, s in adb_by_path.items()
-                      if devices.get(s) == "device"}
+                      if _adb_state(devices, s) == "device"}
     cfg = _soft_remap(cfg, online_by_path) or cfg
     # Evict OS cache entries for offline watches → re-detected on next boot.
     for s in list(_watch_os):
-        if devices.get(s) != "device":
+        if _adb_state(devices, s) != "device":
             _watch_os.pop(s)
     physical = {h["location"]: h for h in (_sysfs_hub_scan(cfg) or uhubctl_list())}
     _t_scan = _tk()
@@ -2045,7 +2242,7 @@ def _web_status_data(cfg: dict) -> list[dict]:
                 serial = (next((s for s in serials_for_codename if s in devices), None)
                           or next((s for s in serials_for_codename if s in fb_devices), None)
                           or (serials_for_codename[0] if serials_for_codename else None))
-            adb_state = devices.get(serial) if serial else None
+            adb_state = _adb_state(devices, serial) if serial else None
             if adb_state is None and serial and serial in fb_devices:
                 adb_state = "fastboot"
             if adb_state is None and _sysfs_usb_mode(f"{loc}.{port_num}") == "ssh":
@@ -2071,6 +2268,7 @@ def _web_status_data(cfg: dict) -> list[dict]:
             charge_end_ts = ct.get("charge_end_ts")
             charge_pct    = ct.get("pct")    if charging_active else None
             charge_target = ct.get("target") if charging_active else None
+            charge_losing = ct.get("losing_power") if charging_active else None
             wb = _workbench_tasks.get(slot)
             workbench = None
             if wb and not wb.get("done", True):
@@ -2102,6 +2300,7 @@ def _web_status_data(cfg: dict) -> list[dict]:
                 "charging_active": charging_active,
                 "charge_end_ts": charge_end_ts,
                 "charge_pct": charge_pct, "charge_target": charge_target,
+                "charge_losing": charge_losing,
                 "drain": drain, "drain_last": drain_last,
                 "workbench": workbench,
                 "socket": sockets.get(port_str),
@@ -2126,12 +2325,12 @@ def _web_status_data(cfg: dict) -> list[dict]:
                 # power state is free from the single full scan above
                 "power": phys.get("power", {}).get(port_num),
                 "smart": port_smart.get(str(port_num)),
-                "adb": (devices.get(adb_serial) if adb_serial
+                "adb": (_adb_state(devices, adb_serial) if adb_serial
                         else ("fastboot" if fb_serial
                               else ("ssh" if _sysfs_usb_mode(sysfs_path) == "ssh"
                                     else None))),
                 "os": (_watch_os_for(adb_serial)
-                       if adb_serial and devices.get(adb_serial) == "device" else None),
+                       if adb_serial and _adb_state(devices, adb_serial) == "device" else None),
                 "battery": None,
                 "flashing": remapping, "empty": True,
                 "fastboot_product": fb_product,
@@ -2265,7 +2464,7 @@ def _sse_remap_gen(loc: str, port: int):
                         cur = adb_devices()
                         path_map = _sysfs_path_to_serial_map(set(cur.keys()))
                         s = path_map.get(sysfs_path)
-                        if s and cur.get(s) == "device":
+                        if s and _adb_state(cur, s) == "device":
                             return s
                         el = time.monotonic() - st
                         if el >= nxt:
@@ -2400,6 +2599,44 @@ _WEB_TEMPLATE = """\
     .htxt{letter-spacing:3px}
     .meta{color:#6e7681;font-size:11px;margin-bottom:20px}
     .hdr{text-align:center}
+    /* Control Center overlay */
+    .cn{cursor:pointer;border-bottom:1px dotted #4d5561}
+    .cn:hover{color:#58a6ff;border-bottom-color:#58a6ff}
+    .cc{position:fixed;z-index:100;display:none;width:auto;min-width:340px;max-width:94vw;background:#161b22;border:1px solid #30363d;border-radius:8px;box-shadow:0 10px 34px rgba(0,0,0,.6);font-size:12px;overflow:hidden}
+    .cc-cols{display:flex;flex-wrap:wrap}
+    .cc-col{flex:1 1 210px;min-width:200px}
+    .cc-sec{padding:8px 14px}
+    .cc-sech{font-size:10px;color:#8b949e;text-transform:uppercase;letter-spacing:.6px;border-bottom:1px solid #21262d;padding-bottom:3px;margin-bottom:5px}
+    .cc-hd{padding:8px 30px 8px 12px;background:#0d1117;border-bottom:1px solid #30363d;font-weight:700;color:#58a6ff;position:relative}
+    .cc-hd .dim{font-weight:400}
+    .cc-x{position:absolute;right:10px;top:6px;cursor:pointer;color:#6e7681;font-weight:400;font-size:16px;line-height:1}
+    .cc-x:hover{color:#fff}
+    .cc-grid{display:grid;grid-template-columns:auto 1fr;gap:3px 10px}
+    .cc-act.mini{width:auto;flex:1;padding:6px}
+    .cc-k{color:#6e7681}
+    .cc-v{color:#c9d1d9;text-align:right;font-variant-numeric:tabular-nums;word-break:break-all}
+    .cc-tgls{display:flex;flex-wrap:wrap;gap:8px;padding:2px 12px 10px}
+    .cc-tgl{flex:1;padding:7px 4px;border-radius:6px;border:1px solid #30363d;background:transparent;cursor:pointer;font:inherit;color:#8b949e}
+    .cc-tgl.on{border-color:#3fb950;color:#3fb950}
+    .cc-tgl.busy{opacity:.5;cursor:progress}
+    .cc-tgl:hover{background:#0d1117}
+    .cc-acts{padding:0 12px 12px}
+    .cc-act{width:100%;padding:8px;border-radius:6px;border:1px solid #388bfd;background:transparent;color:#388bfd;cursor:pointer;font:inherit}
+    .cc-act:hover{background:#0d1f3a}
+    .cc-act.done{border-color:#3fb950;color:#3fb950}
+    /* Row action floating menus */
+    .btn.pw{border-color:#f0883e;color:#f0883e}
+    .btn.pw:hover{background:#2a1a0e}
+    .menu{position:fixed;z-index:110;display:none;min-width:172px;background:#161b22;border:1px solid #30363d;border-radius:7px;box-shadow:0 10px 30px rgba(0,0,0,.6);padding:5px}
+    .menu-item{display:block;width:100%;text-align:left;padding:6px 10px;margin:1px 0;border-radius:5px;border:1px solid transparent;background:transparent;color:#c9d1d9;cursor:pointer;font:inherit;white-space:nowrap}
+    .menu-item:hover:not(:disabled){background:#0d1117;border-color:#30363d}
+    .menu-item:disabled{opacity:.38;cursor:default}
+    .menu-item.ch{color:#3fb950}.menu-item.dr{color:#58a6ff}.menu-item.ht{color:#f0883e}
+    .menu-item.wbx{color:#a371f7}.menu-item.dng{color:#f85149}
+    .menu-sep{height:1px;background:#30363d;margin:4px 2px}
+    .menu-hd{padding:3px 10px 5px;font-size:10px;color:#6e7681}
+    #toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(20px);background:#161b22;border:1px solid #30363d;color:#c9d1d9;padding:9px 16px;border-radius:7px;font-size:12px;opacity:0;pointer-events:none;transition:.2s;z-index:200}
+    #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
     table{width:100%;border-collapse:collapse}
     th{color:#6e7681;text-align:left;padding:5px 12px;border-bottom:1px solid #21262d;font-size:11px;text-transform:uppercase;letter-spacing:1px;font-weight:normal}
     th:first-child,td.tc{width:22px;padding-right:0}
@@ -2463,6 +2700,8 @@ _WEB_TEMPLATE = """\
     <tbody id="tb"></tbody>
   </table>
   <div id="hist" style="display:none"></div>
+  <div id="cc" class="cc" onmouseleave="ccLeave()" onmouseenter="ccEnter()"></div>
+  <div id="menu" class="menu" onmouseleave="menuLeave()" onmouseenter="menuEnter()"></div>
 <script>
 const srcs={};
 const chargeEnd={};
@@ -2570,7 +2809,8 @@ function render(data){
           const pct=w.pct!=null?w.pct+'% ':'';
           bat=`<span class="warn" title="workbench: battery held in the ${lo}–${hi}% band while you work over WiFi/SSH${w.blind?' (battery unreadable — blind duty cycle)':''}">&#128295; ${pct}${esc(w.phase||'')}</span>`;
         }else if(charging){
-          if(p.charge_target!=null){bat=`<span class="warn">&#9889; ${p.charge_pct!=null?p.charge_pct:'?'}% &rarr; ${p.charge_target}%</span>`;}
+          if(p.charge_losing){bat=`<span class="err" title="battery is DROPPING while charging — losing power despite the charge attempt. Check contacts / cable / port (the dirty-contact failure).">&#9888; ${p.charge_pct!=null?p.charge_pct:'?'}% &#8595; losing power!</span>`;}
+          else if(p.charge_target!=null){bat=`<span class="warn">&#9889; ${p.charge_pct!=null?p.charge_pct:'?'}% &rarr; ${p.charge_target}%</span>`;}
           else if(chargeEnd[slot]){const rem=Math.max(0,Math.round((chargeEnd[slot]-Date.now())/1000));const m=Math.floor(rem/60),s=rem%60;bat=`<span class="warn">&#9889; ${m}m${String(s).padStart(2,'0')}s</span>`;}
           else{bat='<span class="warn">&#9889; starting&hellip;</span>';}
         }
@@ -2604,28 +2844,19 @@ function render(data){
         rows.push(
           `<tr class="wr${isRef?' refreshing':''}${p.excluded?' excl':''}" id="wr-${slot}">` +
           `<td class="tc">${tree}</td>` +
-          `<td><b>${esc(p.codename)}</b></td>` +
+          `<td>`+(p.adb==='device'
+            ?`<b class="cn" onclick="openCC('${p.serial}','${p.codename}',event)" title="open Control Center">${esc(p.codename)}</b>`
+            :`<b>${esc(p.codename)}</b>`)+`</td>` +
           `<td>${mkport(p)}</td>` +
           `<td><button class="${pwrCls}"${dp}${noSwT} onclick="${pwrFn}">${pwrLbl}</button><button class="ico"${dp} onclick="doCy('${slot}')" title="Power-cycle port">&#x21BA;</button></td>` +
           `<td>${mksmt(p.smart)}</td>` +
           `<td>${adb}</td>` +
           `<td id="bat-${slot}">${bat}</td>` +
           `<td id="act-${slot}">` +
-          `<button class="btn btn-ref${isRef?' pulsing':''}"${d} onclick="doRefresh('${slot}')">Refresh</button>` +
-          (p.power===true&&!isFb?`<button class="btn ht"${d} onclick="doHalt('${slot}')">&#x23FB; Halt</button>`:'')+
-          (!isFb?(charging
-            ?`<button class="btn ch" onclick="doStopCharge('${slot}')">&#9632; Stop charge</button>`
-            :`<button class="btn ch"${dp}${noSwT} onclick="doCharge('${slot}')">&#9889; Charge</button>`
-          ):'')+
-          (!isFb?(draining
-            ?`<button class="btn dr" onclick="doStopDrain('${slot}')">&#9632; Stop test</button>`
-            :`<button class="btn dr"${dp}${noSwT} onclick="doDrain('${slot}')">Drain test</button>`
-          ):'')+
-          (!isFb?(wb
-            ?`<button class="btn wb" onclick="doStopWb('${slot}')">&#8617; Return</button>`
-            :`<button class="btn wb"${dp}${noSwT} onclick="doWb('${slot}')" title="check out for hands-on work: battery held ${lo}&ndash;${hi}% while you work over WiFi/SSH">&#128295; Workbench</button>`
-          ):'')+
-          `<button class="btn fl"${d} onclick="doFl('${slot}')">Flash nightly</button>` +
+          `<button class="ico${isRef?' pulsing':''}"${d} onclick="doRefresh('${slot}')" title="refresh / re-identify this port">&#x21BB;</button>` +
+          (!isFb?`<button class="btn pw"${p.excluded?' disabled':''} onclick="menuPower(event,'${slot}',${charging},${draining},${p.power===true},${noSw})" title="power / charge / drain / reboot">&#x23FB; Power &#9662;</button>`:'')+
+          (!isFb?`<button class="btn wb"${p.excluded?' disabled':''} onclick="menuWorkbench(event,'${slot}','${p.serial}',${wb},${p.adb==='device'})" title="attended actions — watch stays on">&#128295; Workbench &#9662;</button>`:'')+
+          `<button class="btn fl"${d} onclick="menuFlash(event,'${slot}')" title="backup / restore / flash">&#128190; Flash &#9662;</button>` +
           `</td></tr>` +
           `<tr class="lr" id="lr-${slot}"><td colspan="8"><div class="log${logActive?' show':''}" id="log-${slot}"></div></td></tr>`
         );
@@ -2636,6 +2867,141 @@ function render(data){
   Object.keys(srcs).forEach(c=>{const b=document.getElementById('log-'+c);if(b)b.classList.add('show');});
   if(Object.keys(chargeEnd).length>0&&!countdownRunning)tickCountdown();
 }
+// ── Control Center overlay ──────────────────────────────────────────────────
+let ccSerial=null, ccName=null, ccTimer=null, ccAX=0, ccAY=0;
+function fmtUp(sec){sec=Math.floor(+sec||0);const d=Math.floor(sec/86400),h=Math.floor(sec%86400/3600),m=Math.floor(sec%3600/60);return (d?d+'d ':'')+(h||d?h+'h ':'')+m+'m';}
+function ccPlace(){
+  // Anchor to the click; flip ABOVE the anchor if the panel would run off the
+  // bottom (its height only known after the async data renders). No page scroll.
+  const cc=document.getElementById('cc'), h=cc.offsetHeight, w=cc.offsetWidth;
+  let left=Math.min(ccAX, window.innerWidth-w-8);
+  let top=ccAY+10;
+  if(top+h>window.innerHeight-8) top=ccAY-h-10;
+  cc.style.left=Math.max(8,left)+'px'; cc.style.top=Math.max(8,top)+'px';
+}
+function openCC(serial,name,ev){
+  ev.stopPropagation();
+  ccSerial=serial; ccName=name; ccAX=ev.clientX; ccAY=ev.clientY;
+  const cc=document.getElementById('cc');
+  cc.innerHTML=`<div class="cc-hd">${name} <span class="dim">loading&hellip;</span></div>`;
+  cc.style.display='block'; ccPlace();
+  ccFetch();
+}
+function ccFetch(){
+  const s=ccSerial;
+  fetch('/api/watch/'+encodeURIComponent(s)).then(r=>r.json()).then(d=>{if(ccSerial===s)renderCC(d)}).catch(()=>{
+    const cc=document.getElementById('cc');cc.innerHTML=`<div class="cc-hd">${ccName} <span class="err">unreachable</span><span class="cc-x" onclick="closeCC()">&times;</span></div>`;
+  });
+}
+function renderCC(d){
+  const cc=document.getElementById('cc');
+  if(!d||!d.kernel){cc.innerHTML=`<div class="cc-hd">${ccName} <span class="err">no data (watch offline?)</span><span class="cc-x" onclick="closeCC()">&times;</span></div>`;ccPlace();return;}
+  const kv=(k,v)=>`<div class="cc-k">${k}</div><div class="cc-v">${esc(v==null||v===''?'—':String(v))}</div>`;
+  const sec=(t,r)=>`<div class="cc-sec"><div class="cc-sech">${t}</div><div class="cc-grid">${r}</div></div>`;
+  const num=x=>(x==null||x===''||isNaN(+x))?null:+x;
+  const mt=+d.memtotal,mf=+d.memfree,memU=mt?Math.round((mt-mf)/1024):null,memT=mt?Math.round(mt/1024):null;
+  const bv=num(d.bat_volt),ba=num(d.bat_curr),bt=num(d.bat_temp),uv=num(d.usb_volt),freq=num(d.cpufreq);
+  const dfp=(d.df||'').trim().split(/[ \t]+/);
+  const storage=dfp.length>=5?`${dfp[2]} / ${dfp[1]} (${dfp[4]})`:null;
+  const mb=x=>{const n=num(x);return n==null?null:(n/1048576).toFixed(2)+' MB';};
+  const phone=(+d.btcount>0)?(d.btmac||'connected'):'none';
+  const cur=ba==null?null:`${(ba/1000).toFixed(0)} mA ${ba<-5?'&#9660;':ba>5?'&#9650;':''}`;
+  const sys=sec('System',
+    kv('Kernel',d.kernel)+kv('Qt',d.qt)+kv('SoC',(d.soc||'').trim())+
+    kv('CPU',freq?(freq/1000).toFixed(0)+' MHz':null)+
+    kv('Uptime',fmtUp(d.uptime))+kv('Boot',d.bootreason)+
+    kv('Load',d.load)+kv('Threads',d.threads)+
+    kv('Memory',memU!=null?`${memU} / ${memT} MB`:null)+kv('Storage',storage));
+  const bat=sec('Battery',
+    kv('Charge',d.bat_cap!=null&&d.bat_cap!==''?d.bat_cap+'%':null)+kv('Status',d.bat_status)+
+    kv('Health',d.bat_health)+kv('Tech',d.bat_tech)+
+    kv('Voltage',bv?(bv/1e6).toFixed(3)+' V':null)+kv('Current',cur)+
+    kv('Temp',bt!=null?(bt/10).toFixed(1)+' °C':null)+kv('Cycles',d.bat_cycles)+
+    kv('USB in',uv!=null&&uv>0?(uv/1e6).toFixed(2)+' V':(+d.usb_online?'online':null)));
+  const net=sec('Network &amp; links',
+    kv('WiFi',d.wifi==null?null:(d.wifi?'on':'off'))+kv('IP',d.ip)+
+    kv('RX / TX',(mb(d.net_rx)||'0')+' / '+(mb(d.net_tx)||'0'))+
+    kv('Bluetooth',d.bluetooth==null?null:(d.bluetooth?'on':'off'))+kv('Phone',phone)+
+    kv('Timezone',d.tz)+kv('Clock',d.datetime)+kv('WLAN MAC',d.wlanmac)+kv('Serial',d.serial));
+  const tgl=(t,l,on)=>`<button class="cc-tgl${on?' on':''}" onclick="ccToggle('${t}',${on?0:1})">${l}: ${on?'ON':'OFF'}</button>`;
+  cc.innerHTML=
+    `<div class="cc-hd">${esc(ccName)} <span class="dim">${esc(d.os||'')}</span><span class="cc-x" onclick="closeCC()">&times;</span></div>`+
+    `<div class="cc-cols"><div class="cc-col">${sys}</div><div class="cc-col">${bat}</div><div class="cc-col">${net}</div></div>`+
+    `<div class="cc-tgls">${tgl('wifi','WiFi',d.wifi)}${tgl('bluetooth','BT',d.bluetooth)}`+
+      `<button class="cc-tgl" onclick="ccBuzz()" title="vibrate to locate in the dock">&#128243; Buzz</button>`+
+      `<button class="cc-tgl" onclick="ccScreen()" title="force the screen on">&#128161; Screen</button>`+
+      `<button class="cc-tgl" onclick="doScreenshot('${d.serial}')" title="screenshot in a new tab">&#128247; Shot</button></div>`+
+    `<div class="cc-acts"><button class="cc-act" id="cc-time" onclick="ccSyncTime()">&#x21BB; Sync time from host</button></div>`;
+  ccPlace();
+}
+function ccBuzz(){fetch('/api/watch/'+encodeURIComponent(ccSerial)+'/buzz',{method:'POST'}).then(()=>toast('buzzed'));}
+function ccScreen(){fetch('/api/watch/'+encodeURIComponent(ccSerial)+'/screen/on',{method:'POST'}).then(()=>toast('screen forced on'));}
+function ccToggle(tech,on){
+  document.querySelectorAll('.cc-tgl').forEach(b=>b.classList.add('busy'));
+  fetch('/api/watch/'+encodeURIComponent(ccSerial)+'/toggle/'+tech+'/'+(on?'on':'off'),{method:'POST'})
+    .then(()=>setTimeout(ccFetch,1600)).catch(()=>ccFetch());
+}
+function ccSyncTime(){
+  const b=document.getElementById('cc-time');if(b)b.textContent='syncing…';
+  fetch('/api/watch/'+encodeURIComponent(ccSerial)+'/settime',{method:'POST'})
+    .then(()=>setTimeout(()=>{const bb=document.getElementById('cc-time');if(bb){bb.textContent='✓ synced';bb.classList.add('done');}ccFetch();},700));
+}
+function closeCC(){const cc=document.getElementById('cc');cc.style.display='none';ccSerial=null;if(ccTimer){clearTimeout(ccTimer);ccTimer=null;}}
+function ccLeave(){ccTimer=setTimeout(closeCC,600);}
+function ccEnter(){if(ccTimer){clearTimeout(ccTimer);ccTimer=null;}}
+// ── Row action floating menus ───────────────────────────────────────────────
+let menuTimer=null;
+function openMenu(ev,html){
+  ev.stopPropagation();
+  const m=document.getElementById('menu');
+  m.innerHTML=html; m.style.left='-9999px'; m.style.top='0px'; m.style.display='block';
+  const r=ev.currentTarget.getBoundingClientRect(), mw=m.offsetWidth, mh=m.offsetHeight;
+  let left=r.left, top=r.bottom+3;
+  if(left+mw>window.innerWidth-8)left=window.innerWidth-8-mw;
+  if(top+mh>window.innerHeight-8)top=Math.max(8,r.top-mh-3);
+  m.style.left=Math.max(8,left)+'px'; m.style.top=top+'px';
+}
+function closeMenu(){document.getElementById('menu').style.display='none';}
+function menuLeave(){menuTimer=setTimeout(closeMenu,450);}
+function menuEnter(){if(menuTimer){clearTimeout(menuTimer);menuTimer=null;}}
+function mi(cls,label,fn,dis){return `<button class="menu-item ${cls}"${dis?' disabled title="not available yet"':` onclick="${fn};closeMenu()"`}>${label}</button>`;}
+function menuPower(ev,slot,charging,draining,powered,noSw){
+  openMenu(ev,
+    (charging?mi('ch','&#9632; Stop charge',`doStopCharge('${slot}')`):mi('ch','&#9889; Charge',`doCharge('${slot}')`,noSw))+
+    (draining?mi('dr','&#9632; Stop drain test',`doStopDrain('${slot}')`):mi('dr','&#128201; Drain test',`doDrain('${slot}')`,noSw))+
+    '<div class="menu-sep"></div>'+
+    (powered?mi('ht','&#x23FB; Power off',`doHalt('${slot}')`):'')+
+    mi('ht','&#x21BB; Reboot',`doReboot('${slot}')`)+
+    mi('dng','&#128295; Bootloader',`doBootloader('${slot}')`));
+}
+function menuWorkbench(ev,slot,serial,wb,online){
+  openMenu(ev,
+    '<div class="menu-hd">watch stays on — power off when done</div>'+
+    (wb?mi('wbx','&#8617; End checkout',`doStopWb('${slot}')`):mi('wbx','&#128295; Checkout (hold band)',`doWb('${slot}')`))+
+    '<div class="menu-sep"></div>'+
+    mi('','&#x21BB; Set time from host',`doSetTime('${serial}')`,!online)+
+    mi('','&#128247; Screenshot',`doScreenshot('${serial}')`,!online)+
+    mi('','&#128276; Test notification',`doNotify('${serial}')`,!online));
+}
+function menuFlash(ev,slot){
+  openMenu(ev,
+    mi('','&#128190; Backup data',`doBackup('${slot}')`,true)+
+    mi('','&#8617; Restore data',`doRestore('${slot}')`,true)+
+    '<div class="menu-sep"></div>'+
+    mi('','&#9889; Flash nightly',`doFl('${slot}')`)+
+    mi('',"Flash 2.1",`doFlV('${slot}','2.1')`,true)+
+    mi('',"Flash 2.0",`doFlV('${slot}','2.0')`,true));
+}
+function toast(msg){let t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove('show'),2400);}
+function doSetTime(s){toast('syncing time…');fetch('/api/watch/'+encodeURIComponent(s)+'/settime',{method:'POST'}).then(()=>toast('time synced from host'));}
+function doNotify(s){fetch('/api/watch/'+encodeURIComponent(s)+'/notify',{method:'POST'}).then(r=>r.json()).then(d=>toast(d.ok?'notification sent to watch':'notify failed'));}
+function doScreenshot(s){toast('capturing…');window.open('/api/watch/'+encodeURIComponent(s)+'/screenshot.jpg?t='+Date.now(),'_blank');}
+function doFlV(s,v){toast('Flash '+v+' — not released yet');}
+function doBackup(s){} function doRestore(s){}
+document.addEventListener('click',e=>{
+  const cc=document.getElementById('cc');if(cc.style.display==='block'&&!cc.contains(e.target)&&!e.target.classList.contains('cn'))closeCC();
+  const m=document.getElementById('menu');if(m.style.display==='block'&&!m.contains(e.target))closeMenu();
+});
 function refresh(){
   fetch('/api/status').then(r=>r.json()).then(d=>{render(d);document.getElementById('ts').textContent='updated '+new Date().toLocaleTimeString()}).catch(()=>{document.getElementById('ts').textContent='connection error'});
 }
@@ -2851,7 +3217,7 @@ def cmd_status(args, cfg: dict):
                 smart_str = "?"
 
             serial = find_serial_for_codename(cfg, codename)
-            adb_state = devices.get(serial, "--") if serial else "--"
+            adb_state = (_adb_state(devices, serial) or "--") if serial else "--"
             if serial:
                 seen_serials.add(serial)
 
@@ -3219,6 +3585,62 @@ def cmd_serve(args, cfg: dict):
                 })
                 status_cache["ts"] = now
             return status_cache["body"]
+
+    # ── Control Center: per-watch stats + hardware toggles ────────────────────
+    @app.get("/api/watch/<serial>")
+    def api_watch(serial):
+        """Stats + toggle states for the Control Center overlay."""
+        resp.content_type = "application/json"
+        return json.dumps(_control_center_data(serial))
+
+    @app.post("/api/watch/<serial>/toggle/<tech>/<state>")
+    def api_watch_toggle(serial, tech, state):
+        resp.content_type = "application/json"
+        if tech not in ("wifi", "bluetooth"):
+            return json.dumps({"ok": False, "error": f"unknown toggle {tech}"})
+        ok = _control_toggle(serial, tech, state == "on")
+        _bust_status_cache()
+        return json.dumps({"ok": ok})
+
+    @app.post("/api/watch/<serial>/settime")
+    def api_watch_settime(serial):
+        """Sync the watch clock + timezone from the host."""
+        resp.content_type = "application/json"
+        tz = _control_set_time(serial)
+        return json.dumps({"ok": True, "timezone": tz})
+
+    @app.post("/api/watch/<serial>/notify")
+    def api_watch_notify(serial):
+        """Send a test notification to the watch."""
+        resp.content_type = "application/json"
+        return json.dumps({"ok": _watch_notify(serial)})
+
+    @app.get("/api/watch/<serial>/screenshot.jpg")
+    def api_watch_screenshot(serial):
+        """Capture and return the watch screen as a JPEG."""
+        local = _watch_screenshot(serial)
+        if not local:
+            resp.status = 502
+            resp.content_type = "text/plain"
+            return "screenshot failed"
+        resp.content_type = "image/jpeg"
+        return local.read_bytes()
+
+    @app.post("/api/watch/<serial>/buzz")
+    def api_watch_buzz(serial):
+        """Vibrate the watch briefly — locate/identify it in a full dock."""
+        resp.content_type = "application/json"
+        rc, _, _ = _run(f'adb -s {serial} shell "echo 300 > /sys/class/timed_output/vibrator/enable"',
+                        check=False, timeout=8)
+        return json.dumps({"ok": rc == 0})
+
+    @app.post("/api/watch/<serial>/screen/<state>")
+    def api_watch_screen(serial, state):
+        """Force the screen on (demo mode) or release it."""
+        resp.content_type = "application/json"
+        rc, _, _ = _run(f"adb -s {serial} shell mcetool -D {'on' if state == 'on' else 'off'}",
+                        check=False, timeout=10)
+        return json.dumps({"ok": rc == 0})
 
     @app.post("/api/on/<loc>/<port:int>")
     def api_on(loc, port):
@@ -3749,16 +4171,25 @@ def cmd_discover(args, cfg: dict):
         print("No ADB devices found.")
         return
 
-    print(f"{'SERIAL':<24}  {'STATE':<14}  CODENAME")
-    print("-" * 60)
+    print(f"{'SERIAL':<24}  {'STATE':<14} {'USB':<12} {'ASTEROID':<10} CODENAME")
+    print("-" * 74)
     for serial, state in sorted(devices.items()):
-        codename = "--"
-        if state == "device":
-            codename = get_watch_codename(serial) or "--"
+        usb = codename = "--"
+        asteroid = False
+        if state['status'] == "device":
+            usb = state.get('usb', '--')
+            try:
+                codename = state['product']
+            except KeyError:
+                codename = get_watch_codename(serial)
+                if codename:
+                    asteroid = True
+                else:
+                    codename = "--"
         known = cfg.get("serials", {}).get(serial)
         if known and known != codename:
             codename += f"  (config: {known})"
-        print(f"{serial:<24}  {state:<14}  {codename}")
+        print(f"{serial:<24}  {state['status']:<14} {usb:<12} {asteroid!s:10} {codename}")
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
