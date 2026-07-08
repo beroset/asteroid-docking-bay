@@ -598,7 +598,7 @@ def _wait_adb_state(serial: str, present: bool, timeout: float) -> bool:
     deadline = time.time() + timeout
     while True:
         devs = adb_devices_checked()
-        if devs is not None and ((devs.get(serial)['status'] == "device") is present):
+        if devs is not None and ((_adb_state(devs, serial) == "device") is present):
             return True
         if time.time() >= deadline:
             return False
@@ -658,7 +658,7 @@ def test_port_power_switching(location: str, port: int,
     else:
         confirmed_on = True  # measured again after the restore below
 
-    adb_before    = bool(serial) and adb_devices().get(serial)['status'] == "device"
+    adb_before    = bool(serial) and _adb_state(adb_devices(), serial) == "device"
     device_before = _port_device_present(location, port)
 
     uhubctl_set_power(location, port, False)
@@ -748,6 +748,18 @@ def adb_devices_checked() -> dict[str, str | list[str]] | None:
 def adb_devices() -> dict[str, str | list[str]]:
     """Return {serial: state} for all ADB-visible devices ({} on failure)."""
     return adb_devices_checked() or {}
+
+
+def _adb_state(devs: dict, serial: "str | None") -> "str | None":
+    """State string ('device'/'offline'/…) for a serial in an adb_devices() map,
+    or None if the serial isn't present. None-safe: adb_devices() values are now
+    per-device dicts (`{"status": …, "usb": …}`), and `devs.get(serial)` is None
+    for an absent/offline watch — `None['status']` would raise, so callers go
+    through here instead of indexing the entry directly."""
+    entry = devs.get(serial)
+    if isinstance(entry, dict):
+        return entry.get("status")
+    return entry  # None, or a plain string (defensive)
 
 
 def adb_shell(serial: str, cmd: str, timeout: int = 8) -> tuple[int, str, str]:
@@ -939,7 +951,7 @@ def wait_serial_online(serial: str, wait_secs: int, retries: int,
     for attempt in range(attempts):
         for _ in range(retries):
             devs = adb_devices_checked()
-            if devs is not None and devs.get(serial)['status'] == "device":
+            if devs is not None and _adb_state(devs, serial) == "device":
                 return True
             if stop_event is not None:
                 if stop_event.wait(timeout=wait_secs):
@@ -970,7 +982,7 @@ def wait_for_adb(codename: str, cfg: dict, charge_cfg: dict) -> str | None:
         devices = adb_devices()
 
         # Fast path: known serial is already online.
-        if known_serial and devices.get(known_serial)['status'] == "device":
+        if known_serial and _adb_state(devices, known_serial) == "device":
             log.debug("%s: ADB online (serial %s)", codename, known_serial)
             return known_serial
 
@@ -2176,11 +2188,11 @@ def _web_status_data(cfg: dict) -> list[dict]:
     adb_by_path: dict[str, str] = _sysfs_path_to_serial_map(set(devices.keys()))
     # Live soft-remap: follow booted watches that were physically moved.
     online_by_path = {p: s for p, s in adb_by_path.items()
-                      if devices.get(s)['status'] == "device"}
+                      if _adb_state(devices, s) == "device"}
     cfg = _soft_remap(cfg, online_by_path) or cfg
     # Evict OS cache entries for offline watches → re-detected on next boot.
     for s in list(_watch_os):
-        if devices.get(s)['status'] != "device":
+        if _adb_state(devices, s) != "device":
             _watch_os.pop(s)
     physical = {h["location"]: h for h in (_sysfs_hub_scan(cfg) or uhubctl_list())}
     _t_scan = _tk()
@@ -2230,7 +2242,7 @@ def _web_status_data(cfg: dict) -> list[dict]:
                 serial = (next((s for s in serials_for_codename if s in devices), None)
                           or next((s for s in serials_for_codename if s in fb_devices), None)
                           or (serials_for_codename[0] if serials_for_codename else None))
-            adb_state = devices.get(serial) if serial else None
+            adb_state = _adb_state(devices, serial) if serial else None
             if adb_state is None and serial and serial in fb_devices:
                 adb_state = "fastboot"
             if adb_state is None and _sysfs_usb_mode(f"{loc}.{port_num}") == "ssh":
@@ -2313,12 +2325,12 @@ def _web_status_data(cfg: dict) -> list[dict]:
                 # power state is free from the single full scan above
                 "power": phys.get("power", {}).get(port_num),
                 "smart": port_smart.get(str(port_num)),
-                "adb": (devices.get(adb_serial) if adb_serial
+                "adb": (_adb_state(devices, adb_serial) if adb_serial
                         else ("fastboot" if fb_serial
                               else ("ssh" if _sysfs_usb_mode(sysfs_path) == "ssh"
                                     else None))),
                 "os": (_watch_os_for(adb_serial)
-                       if adb_serial and devices.get(adb_serial) == "device" else None),
+                       if adb_serial and _adb_state(devices, adb_serial) == "device" else None),
                 "battery": None,
                 "flashing": remapping, "empty": True,
                 "fastboot_product": fb_product,
@@ -2452,7 +2464,7 @@ def _sse_remap_gen(loc: str, port: int):
                         cur = adb_devices()
                         path_map = _sysfs_path_to_serial_map(set(cur.keys()))
                         s = path_map.get(sysfs_path)
-                        if s and cur.get(s)['status'] == "device":
+                        if s and _adb_state(cur, s) == "device":
                             return s
                         el = time.monotonic() - st
                         if el >= nxt:
@@ -3205,12 +3217,12 @@ def cmd_status(args, cfg: dict):
                 smart_str = "?"
 
             serial = find_serial_for_codename(cfg, codename)
-            adb_state = devices.get(serial, "--") if serial else "--"
+            adb_state = (_adb_state(devices, serial) or "--") if serial else "--"
             if serial:
                 seen_serials.add(serial)
 
             battery_str = "--"
-            if adb_state['status'] == "device":
+            if adb_state == "device":
                 level = get_battery_level(serial)
                 battery_str = f"{level}%" if level is not None else "err"
 
@@ -3232,7 +3244,7 @@ def cmd_status(args, cfg: dict):
     print(hdr)
     print(sep)
     for name, port, power, smart, adb, bat in rows:
-        print(f"{name:<16}  {port:<14}  {power:<5}  {smart:<5}  {adb['status']:<14}  {bat}")
+        print(f"{name:<16}  {port:<14}  {power:<5}  {smart:<5}  {adb:<14}  {bat}")
 
     if has_dumb_port:
         print("\nNOTE: ports marked 'NO!' do not support power switching.")
@@ -4165,7 +4177,7 @@ def cmd_discover(args, cfg: dict):
         usb = codename = "--"
         asteroid = False
         if state['status'] == "device":
-            usb = state['usb']
+            usb = state.get('usb', '--')
             try:
                 codename = state['product']
             except KeyError:
