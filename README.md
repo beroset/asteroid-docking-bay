@@ -2,37 +2,37 @@
 
 # asteroid-docking-bay
 
-Fleet manager for [AsteroidOS](https://asteroidos.org) smartwatches —
-because you can only wear one at a time.
+A dashboard and CLI for keeping a collection of [AsteroidOS](https://asteroidos.org)
+smartwatches charged and healthy while they sit in a drawer.
 
-Anyone who flashes AsteroidOS tends to accumulate watches, and their
-2014–2018-era batteries spend most of their lives in a drawer: either
-drained flat (worn cells lose charge fast — a watch "powered off at 100%"
-is still empty months later) or pegged at 100% on a permanently powered
-dock. Both abuse aging cells, and deep discharge feeds the notorious
-low-charge panic-reboot loop.
+If you flash AsteroidOS you tend to accumulate watches, and their 2014–2018
+batteries don't store well. Powered off, a worn cell drains flat within weeks
+(one "powered off at 100%" is empty months later), and a flat cell often gets
+stuck in the low-charge reboot loop. Left on a powered dock instead, it sits
+pegged at 100%, which is also hard on the cell.
 
-asteroid-docking-bay keeps the whole collection docked on smart USB hubs
-(near-instant per-port power switching through the kernel's own sysfs
-interface; [uhubctl](https://github.com/mvp/uhubctl) for discovery)
-and sustains every battery in a healthy mid-range band (40–80% by default)
-— always boot-ready, never trickle-cooked:
+This keeps them docked on smart USB hubs and cycles each battery to stay
+around 40–80%. Port power is switched by writing the kernel's per-port
+`disable` attribute in sysfs, which stays fast even on deep hub cascades
+([uhubctl](https://github.com/mvp/uhubctl) is used for discovery and as a
+fallback).
 
-- **Web dashboard** for the whole fleet: per-port power, ADB and OS
-  detection, battery state, live operations — and it follows physically
-  relocated watches automatically. A per-watch **Control Center** reads full
-  device telemetry (battery voltage/current/temperature/cycles, system,
-  network, connected phone) and drives the watch's hardware — WiFi/Bluetooth,
-  screen, buzz-to-find, clock sync, screenshots — from the browser.
-- **Battery care**: charge-to-target instead of charging by the clock, a
-  periodic sustain timer, and a workbench mode that holds the band while
-  you do hands-on work on a watch over WiFi/SSH.
-- **Battery triage**: standby drain tests with history — measure which
-  watches still hold a day of standby (wearable ⌚) and which are
-  battery-swap candidates best kept as dock-sustained dev units (🪫).
-- **Fleet flashing**: download, verify, and flash AsteroidOS nightlies to
-  every docked watch in one command — build-testing on real hardware
-  across every codename you own instead of waiting for user error reports.
+What it does:
+
+- A web dashboard for the fleet: power, ADB and OS detection, battery, and
+  running operations, and it tracks watches you move between ports. Click a
+  watch to open a Control Center that reads its telemetry (battery
+  voltage/current/temperature/cycles, memory, network, paired phone) and
+  controls its hardware over ADB: WiFi, Bluetooth, screen, buzz-to-find,
+  clock sync, screenshots.
+- Battery care: charge to a target rather than on a timer, a sustain job
+  every 12 hours, and a workbench mode that keeps a watch in-band while you
+  work on it over WiFi/SSH.
+- Battery triage: standby drain tests with saved history, to see which
+  watches still hold a day of standby (⌚) and which are battery-swap
+  candidates worth keeping only as dock-powered dev units (🪫).
+- Fleet flashing: fetch, checksum, and flash AsteroidOS nightlies to every
+  docked watch at once.
 
 <img width="1501" height="631" alt="asteroid-docking-bay Web UI" src="https://github.com/user-attachments/assets/3bf9cc0e-ac0c-4aee-97b9-0624f2b92bb6" />
 
@@ -40,13 +40,9 @@ and sustains every battery in a healthy mid-range band (40–80% by default)
 
 1. Watches are physically connected to smart USB hubs that support per-port
    power control.
-2. The `asteroid-docking-bay` CLI controls hub port power and communicates
-   with watches via `adb`. Port power is switched by writing the kernel's
-   per-port `disable` attribute in sysfs directly — a single targeted
-   operation with no bus scan, so it is near-instant. `uhubctl` is used only
-   for discovery/mapping (and as a fallback when the sysfs attribute is not
-   writable — see Rootless setup). This matters on deep hub cascades, where
-   `uhubctl`'s per-command libusb re-enumeration takes several seconds.
+2. The `asteroid-docking-bay` CLI switches hub port power (via sysfs, as
+   above; `uhubctl` for discovery and as a fallback) and talks to the watches
+   over `adb`.
 3. A systemd user timer fires every 12 hours, powers each watch on, checks
    the battery over ADB, charges it to 80% if below 40%, then powers the
    port back off.
@@ -297,10 +293,8 @@ The charge, drain and workbench operations in detail:
   Each watch's latest drain result also annotates its battery column
   permanently: **⌚ ~3d** means the battery holds at least
   `wearable_min_hours` (default 24 h) of standby — wearable; **🪫 ~9h**
-  marks a battery-swap candidate that's best kept as a dock-sustained dev /
-  flash-test watch. This is the fleet triage view for aging collections:
-  which watches still hold a day, and which only survive because the
-  periodic charge keeps them in the 40–80% band.
+  marks a battery-swap candidate that's best kept as a dock-powered dev /
+  flash-test watch.
 - **🔧 Workbench** — check a watch out for hands-on work. The rig powers it
   up and then holds its battery in the low–high band for the whole session:
   charge to `high_threshold`, rest with the port off, re-check every
