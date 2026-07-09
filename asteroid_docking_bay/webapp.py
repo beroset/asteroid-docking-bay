@@ -298,11 +298,14 @@ def _sse_remap_gen(loc: str, port: int):
 
 
 def serve(args, cfg: dict):
-    """Start the web UI. Requires: pip install bottle"""
+    """Start the web UI. Requires the bottle package."""
     try:
         from bottle import Bottle, response as resp
     except ImportError:
-        log.error("bottle is required for 'serve'.\nInstall it:  pip install bottle")
+        log.error("bottle is required for 'serve'.\n"
+                  "  Arch:    sudo pacman -S python-bottle\n"
+                  "  Debian:  sudo apt install python3-bottle\n"
+                  "  Other:   pip install bottle")
         sys.exit(1)
 
     app = Bottle()

@@ -693,7 +693,7 @@ def main():
 
     sub.add_parser("discover", help="scan for ADB-connected watches and show codenames")
 
-    p_sv = sub.add_parser("serve", help="start the web UI (requires: pip install bottle)")
+    p_sv = sub.add_parser("serve", help="start the web UI (requires the bottle package)")
     p_sv.add_argument(
         "--host", default="127.0.0.1", metavar="HOST",
         help="bind address (default: 127.0.0.1)",

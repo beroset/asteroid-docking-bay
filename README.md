@@ -67,7 +67,7 @@ ADB shell. This is the standard Linux power-supply class — `dumpsys` and
 **Arch Linux**
 ```sh
 sudo pacman -S uhubctl android-tools
-pip install bottle   # optional, for the web UI
+sudo pacman -S python-bottle   # optional, for the web UI
 ```
 
 **Debian / Ubuntu**
