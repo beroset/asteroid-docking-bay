@@ -395,7 +395,7 @@ function menuPower(ev,slot,charging,draining,powered,noSw){
     (charging?mi('ch','&#9632; Stop charge',`doStopCharge('${slot}')`):mi('ch','&#9889; Charge',`doCharge('${slot}')`,noSw))+
     (draining?mi('dr','&#9632; Stop drain test',`doStopDrain('${slot}')`):mi('dr','&#128201; Drain test',`doDrain('${slot}')`,noSw))+
     '<div class="menu-sep"></div>'+
-    (powered?mi('ht','&#x23FB; Power off',`doHalt('${slot}')`):'')+
+    (powered?mi('ht','&#x23FB; Power off',`doPoweroff('${slot}')`):'')+
     mi('ht','&#x21BB; Reboot',`doReboot('${slot}')`)+
     mi('dng','&#128295; Bootloader',`doBootloader('${slot}')`));
 }
@@ -470,19 +470,6 @@ function doPoweroff(c){
 }
 const halting={};const haltTimers={};
 function _haltClear(c){delete halting[c];clearTimeout(haltTimers[c]);}
-function doHalt(c){
-  if(halting[c])return;
-  halting[c]=true;
-  const cell=document.getElementById('act-'+c);
-  if(!cell)return;
-  cell.innerHTML=
-    `<button class="btn hcut" onclick="doPoweroff('${c}')">Power off</button>`+
-    `<button class="btn hrb" onclick="doReboot('${c}')">Reboot</button>`+
-    `<button class="btn hbl" onclick="doBootloader('${c}')">Bootloader</button>`+
-    `<button class="btn" onclick="closeHalt('${c}')">&#x2715;</button>`;
-  haltTimers[c]=setTimeout(()=>closeHalt(c),4000);
-}
-function closeHalt(c){_haltClear(c);refresh();}
 function doReboot(c){
   _haltClear(c);
   fetch('/api/reboot/'+_api(c),{method:'POST'}).then(()=>setTimeout(refresh,3000));
