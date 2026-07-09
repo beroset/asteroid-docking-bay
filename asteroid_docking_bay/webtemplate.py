@@ -327,7 +327,9 @@ function renderCC(d){
   const storage=dfp.length>=5?`${dfp[2]} / ${dfp[1]} (${dfp[4]})`:null;
   const mb=x=>{const n=num(x);return n==null?null:(n/1048576).toFixed(2)+' MB';};
   const phone=(+d.btcount>0)?(d.btmac||'connected'):'none';
-  const cur=ba==null?null:`${(ba/1000).toFixed(0)} mA ${ba<-5?'&#9660;':ba>5?'&#9650;':''}`;
+  // Real unicode arrows, not entities: this value passes through esc(),
+  // which would render an entity as literal "&#9660;" text.
+  const cur=ba==null?null:`${(ba/1000).toFixed(0)} mA ${ba<-5?'\\u25bc':ba>5?'\\u25b2':''}`;
   const sys=sec('System',
     kv('Kernel',d.kernel)+kv('Qt',d.qt)+kv('SoC',(d.soc||'').trim())+
     kv('CPU',freq?(freq/1000).toFixed(0)+' MHz':null)+
@@ -414,7 +416,14 @@ function menuFlash(ev,slot){
     mi('',"Flash 2.1",`doFlV('${slot}','2.1')`,true)+
     mi('',"Flash 2.0",`doFlV('${slot}','2.0')`,true));
 }
-function toast(msg){let t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove('show'),2400);}
+function toast(msg){
+  // Created on first use — every menu action toasts, and a missing element
+  // here threw and silently killed the action itself (screenshot bug).
+  let t=document.getElementById('toast');
+  if(!t){t=document.createElement('div');t.id='toast';document.body.appendChild(t);}
+  t.textContent=msg;t.classList.add('show');
+  clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove('show'),2400);
+}
 function doSetTime(s){toast('syncing time…');fetch('/api/watch/'+encodeURIComponent(s)+'/settime',{method:'POST'}).then(()=>toast('time synced from host'));}
 function doNotify(s){fetch('/api/watch/'+encodeURIComponent(s)+'/notify',{method:'POST'}).then(r=>r.json()).then(d=>toast(d.ok?'notification sent to watch':'notify failed'));}
 function doScreenshot(s){toast('capturing…');window.open('/api/watch/'+encodeURIComponent(s)+'/screenshot.jpg?t='+Date.now(),'_blank');}
