@@ -353,13 +353,14 @@ function renderCC(d){
     `<div class="cc-cols"><div class="cc-col">${sys}</div><div class="cc-col">${bat}</div><div class="cc-col">${net}</div></div>`+
     `<div class="cc-tgls">${tgl('wifi','WiFi',d.wifi)}${tgl('bluetooth','BT',d.bluetooth)}`+
       `<button class="cc-tgl" onclick="ccBuzz()" title="vibrate to locate in the dock">&#128243; Buzz</button>`+
-      `<button class="cc-tgl" onclick="ccScreen()" title="force the screen on">&#128161; Screen</button>`+
+      `<button class="cc-tgl" onclick="ccScreen(true)" title="force the screen on (mce demo mode — stays on until released!)">&#128161; On</button>`+
+      `<button class="cc-tgl" onclick="ccScreen(false)" title="release the forced screen">&#128161; Off</button>`+
       `<button class="cc-tgl" onclick="doScreenshot('${d.serial}')" title="screenshot in a new tab">&#128247; Shot</button></div>`+
     `<div class="cc-acts"><button class="cc-act" id="cc-time" onclick="ccSyncTime()">&#x21BB; Sync time from host</button></div>`;
   ccPlace();
 }
 function ccBuzz(){fetch('/api/watch/'+encodeURIComponent(ccSerial)+'/buzz',{method:'POST'}).then(()=>toast('buzzed'));}
-function ccScreen(){fetch('/api/watch/'+encodeURIComponent(ccSerial)+'/screen/on',{method:'POST'}).then(()=>toast('screen forced on'));}
+function ccScreen(on){fetch('/api/watch/'+encodeURIComponent(ccSerial)+'/screen/'+(on?'on':'off'),{method:'POST'}).then(()=>toast(on?'screen forced on \u2014 release it when done!':'screen released'));}
 function ccToggle(tech,on){
   document.querySelectorAll('.cc-tgl').forEach(b=>b.classList.add('busy'));
   fetch('/api/watch/'+encodeURIComponent(ccSerial)+'/toggle/'+tech+'/'+(on?'on':'off'),{method:'POST'})
