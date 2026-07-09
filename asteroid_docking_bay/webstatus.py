@@ -212,7 +212,12 @@ def _web_status_data(cfg: dict) -> list[dict]:
             charging_active = (slot in _charge_tasks
                                 and not _charge_tasks[slot].get("done", True))
             ct = _charge_tasks.get(slot, {})
-            charge_end_ts = ct.get("charge_end_ts")
+            # A blind-mode countdown only exists while charging without a
+            # target; anything else (stale key on a resumed task) would feed
+            # the UI a countdown already in the past.
+            charge_end_ts = (ct.get("charge_end_ts")
+                             if charging_active and ct.get("target") is None
+                             else None)
             charge_pct    = ct.get("pct")    if charging_active else None
             charge_target = ct.get("target") if charging_active else None
             charge_losing = ct.get("losing_power") if charging_active else None

@@ -210,7 +210,9 @@ function render(data){
         );
       }else{
         const slot=p.slot_loc+':'+p.port;
-        if(p.charge_end_ts&&!chargeEnd[slot])chargeEnd[slot]=p.charge_end_ts*1000;
+        // Only a FUTURE end time is a countdown: accepting a stale/past one
+        // creates a tick->expire->refresh->re-add loop that hammers the API.
+        if(p.charge_end_ts&&p.charge_end_ts*1000>Date.now()&&!chargeEnd[slot])chargeEnd[slot]=p.charge_end_ts*1000;
         if(!p.charging_active&&chargeEnd[slot])delete chargeEnd[slot];
         const charging=!!p.charging_active;
         const draining=!!(p.drain&&p.drain.active);

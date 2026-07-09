@@ -255,6 +255,11 @@ class ChargeOp(Operation):
                     return
 
                 level = get_battery_level(serial) if serial else None
+                # A resumed task can carry a blind-mode countdown from a
+                # previous run; entering target mode must clear it or the UI
+                # sees a countdown already in the past.
+                if level is not None:
+                    task.pop("charge_end_ts", None)
                 if level is not None and level >= target:
                     task["pct"], task["target"] = level, target
                     log.info("%s: already at %d%% (≥%d%%) — nothing to do",
