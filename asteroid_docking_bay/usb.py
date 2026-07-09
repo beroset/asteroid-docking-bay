@@ -51,7 +51,7 @@ def _require_uhubctl():
     if rc != 0:
         log.error(
             "uhubctl not found. Install it:\n"
-            "  Arch:    sudo pacman -S uhubctl\n"
+            "  Arch:    yay -S uhubctl   (AUR)\n"
             "  Debian:  sudo apt install uhubctl\n"
             "  Source:  https://github.com/mvp/uhubctl"
         )

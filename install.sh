@@ -72,7 +72,7 @@ fi
 
 if ! command -v uhubctl &>/dev/null; then
     echo "WARNING: uhubctl not found."
-    echo "  Arch:    sudo pacman -S uhubctl"
+    echo "  Arch:    yay -S uhubctl   (AUR)"
     echo "  Debian:  sudo apt install uhubctl"
     echo "  Source:  https://github.com/mvp/uhubctl"
 fi
