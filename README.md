@@ -351,7 +351,11 @@ toggle, cycle, Charge and Drain buttons are disabled (Refresh, Halt and
 Flash still work — they only need ADB).
 
 The page auto-refreshes every 15 seconds. `--host 0.0.0.0` makes it
-reachable from other machines on the network.
+reachable from other machines on the network — if your distro runs a
+firewall, open the port first (firewalld:
+`sudo firewall-cmd --add-port=8080/tcp --permanent && sudo firewall-cmd --reload`).
+If the port is taken, `--port` picks another; the systemd unit is overridden
+via `systemctl --user edit asteroid-docking-bay-web.service`.
 
 For persistent background operation, use the included systemd service:
 ```sh
