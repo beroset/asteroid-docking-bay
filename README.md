@@ -533,6 +533,21 @@ if a watch disappears from `adb devices`, you have the right port.
 These strings are stable as long as you plug hubs into the same physical ports.
 If you rearrange cables, re-run `asteroid-docking-bay map`.
 
+## Development
+
+The code lives in the `asteroid_docking_bay/` package;
+`bin/asteroid-docking-bay` is a thin launcher.
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) maps the modules, the
+dependency rules, and which parts are classes. The pure logic (parsers,
+drain math, the charge alarm) has a test suite:
+
+```sh
+pytest
+```
+
+Anything that touches a hub or a watch is verified on real hardware
+instead — see the release notes for what that means in practice.
+
 ## Uninstall
 
 ```sh

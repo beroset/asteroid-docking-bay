@@ -59,11 +59,11 @@ def _require_uhubctl():
 
 
 # ── Direct sysfs port control ─────────────────────────────────────────────────
-# uhubctl re-enumerates the whole USB tree via libusb on every command (~5-13s
-# on this cascade) — the source of the "snail" UI and the churn that raced adb.
-# The kernel exposes each port's power directly:
+# uhubctl re-enumerates the whole USB tree via libusb on every command (5-13s
+# on a deep cascade), and that churn races adb's own libusb use. The kernel
+# exposes each port's power directly:
 #   /sys/bus/usb/devices/<loc>:1.0/<loc>-port<N>/disable   (0 = on, 1 = off)
-# That's a single targeted op, no tree scan. Reads are world-readable; writing
+# — a single targeted op, no tree scan. Reads are world-readable; writing
 # needs the udev rule (udev/70-asteroid-docking-bay.rules) or we fall back to
 # uhubctl. uhubctl stays for mapping/discovery only.
 _SYSFS_USB = Path("/sys/bus/usb/devices")

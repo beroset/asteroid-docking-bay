@@ -66,8 +66,8 @@ def _adb_state(devs: dict, serial: "str | None") -> "str | None":
 
 
 def adb_shell(serial: str, cmd: str, timeout: int = 8) -> tuple[int, str, str]:
-    # Always bounded: a sluggish/half-attached watch must never stall a status
-    # refresh (dumpsys with no timeout was the page-killer).
+    # Always bounded: a sluggish/half-attached watch must never stall a
+    # status refresh for minutes.
     return _run(f"adb -s {serial} shell {cmd}", check=False, timeout=timeout)
 
 
