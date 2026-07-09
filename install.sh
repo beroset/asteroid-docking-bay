@@ -40,6 +40,7 @@ if [[ $UNINSTALL -eq 1 ]]; then
 
     echo "Removing installed files…"
     rm -f "${BIN_DIR}/asteroid-docking-bay"
+    rm -rf "${HOME}/.local/share/asteroid-docking-bay/lib"
     rm -f "${SYSTEMD_USER_DIR}/asteroid-docking-bay-charge.service"
     rm -f "${SYSTEMD_USER_DIR}/asteroid-docking-bay-charge.timer"
     rm -f "${SYSTEMD_USER_DIR}/asteroid-docking-bay-web.service"
@@ -76,11 +77,15 @@ if ! command -v uhubctl &>/dev/null; then
     echo "  Source:  https://github.com/mvp/uhubctl"
 fi
 
-# ── Install binary ────────────────────────────────────────────────────────────
+# ── Install launcher + package ────────────────────────────────────────────────
 
-echo "Installing binary to ${BIN_DIR}…"
-mkdir -p "${BIN_DIR}"
+LIB_DIR="${HOME}/.local/share/asteroid-docking-bay/lib"
+echo "Installing launcher to ${BIN_DIR} and package to ${LIB_DIR}…"
+mkdir -p "${BIN_DIR}" "${LIB_DIR}"
 install -m 755 bin/asteroid-docking-bay "${BIN_DIR}/asteroid-docking-bay"
+rm -rf "${LIB_DIR}/asteroid_docking_bay"
+cp -r asteroid_docking_bay "${LIB_DIR}/asteroid_docking_bay"
+find "${LIB_DIR}/asteroid_docking_bay" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
 
 # Ensure ~/.local/bin is on PATH.
 if [[ ":$PATH:" != *":${HOME}/.local/bin:"* ]]; then
