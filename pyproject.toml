@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-3.0-only
+[project]
+name = "asteroid-docking-bay"
+description = "Fleet manager for AsteroidOS smartwatches"
+license = "GPL-3.0-only"
+requires-python = ">=3.9"
+dynamic = ["version"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

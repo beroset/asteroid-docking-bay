@@ -66,8 +66,9 @@ ADB shell. This is the standard Linux power-supply class — `dumpsys` and
 
 **Arch Linux**
 ```sh
-sudo pacman -S uhubctl android-tools
-pip install bottle   # optional, for the web UI
+sudo pacman -S android-tools
+yay -S uhubctl   # AUR
+sudo pacman -S python-bottle   # optional, for the web UI
 ```
 
 **Debian / Ubuntu**
@@ -350,7 +351,11 @@ toggle, cycle, Charge and Drain buttons are disabled (Refresh, Halt and
 Flash still work — they only need ADB).
 
 The page auto-refreshes every 15 seconds. `--host 0.0.0.0` makes it
-reachable from other machines on the network.
+reachable from other machines on the network — if your distro runs a
+firewall, open the port first (firewalld:
+`sudo firewall-cmd --add-port=8080/tcp --permanent && sudo firewall-cmd --reload`).
+If the port is taken, `--port` picks another; the systemd unit is overridden
+via `systemctl --user edit asteroid-docking-bay-web.service`.
 
 For persistent background operation, use the included systemd service:
 ```sh
@@ -532,6 +537,21 @@ if a watch disappears from `adb devices`, you have the right port.
 `uhubctl` identifies hubs by their USB location string (e.g. `1-1`, `2-3.4`).
 These strings are stable as long as you plug hubs into the same physical ports.
 If you rearrange cables, re-run `asteroid-docking-bay map`.
+
+## Development
+
+The code lives in the `asteroid_docking_bay/` package;
+`bin/asteroid-docking-bay` is a thin launcher.
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) maps the modules, the
+dependency rules, and which parts are classes. The pure logic (parsers,
+drain math, the charge alarm) has a test suite:
+
+```sh
+pytest
+```
+
+Anything that touches a hub or a watch is verified on real hardware
+instead — see the release notes for what that means in practice.
 
 ## Uninstall
 

@@ -40,6 +40,7 @@ if [[ $UNINSTALL -eq 1 ]]; then
 
     echo "Removing installed files…"
     rm -f "${BIN_DIR}/asteroid-docking-bay"
+    rm -rf "${HOME}/.local/share/asteroid-docking-bay/lib"
     rm -f "${SYSTEMD_USER_DIR}/asteroid-docking-bay-charge.service"
     rm -f "${SYSTEMD_USER_DIR}/asteroid-docking-bay-charge.timer"
     rm -f "${SYSTEMD_USER_DIR}/asteroid-docking-bay-web.service"
@@ -71,16 +72,20 @@ fi
 
 if ! command -v uhubctl &>/dev/null; then
     echo "WARNING: uhubctl not found."
-    echo "  Arch:    sudo pacman -S uhubctl"
+    echo "  Arch:    yay -S uhubctl   (AUR)"
     echo "  Debian:  sudo apt install uhubctl"
     echo "  Source:  https://github.com/mvp/uhubctl"
 fi
 
-# ── Install binary ────────────────────────────────────────────────────────────
+# ── Install launcher + package ────────────────────────────────────────────────
 
-echo "Installing binary to ${BIN_DIR}…"
-mkdir -p "${BIN_DIR}"
+LIB_DIR="${HOME}/.local/share/asteroid-docking-bay/lib"
+echo "Installing launcher to ${BIN_DIR} and package to ${LIB_DIR}…"
+mkdir -p "${BIN_DIR}" "${LIB_DIR}"
 install -m 755 bin/asteroid-docking-bay "${BIN_DIR}/asteroid-docking-bay"
+rm -rf "${LIB_DIR}/asteroid_docking_bay"
+cp -r asteroid_docking_bay "${LIB_DIR}/asteroid_docking_bay"
+find "${LIB_DIR}/asteroid_docking_bay" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
 
 # Ensure ~/.local/bin is on PATH.
 if [[ ":$PATH:" != *":${HOME}/.local/bin:"* ]]; then
@@ -102,11 +107,13 @@ systemctl --user daemon-reload
 # ── udev rules ────────────────────────────────────────────────────────────────
 
 echo ""
-echo "Optional: install udev rules for rootless uhubctl/adb access."
+echo "Optional: install udev rules for rootless hub power switching and adb."
 echo "  sudo cp udev/70-asteroid-docking-bay.rules ${UDEV_RULES_DIR}/"
-echo "  (edit the file first to uncomment the lines matching your hub's vendor ID)"
-echo "  sudo udevadm control --reload-rules && sudo udevadm trigger"
-echo "  sudo usermod -aG plugdev \$USER   # log out and back in after this"
+echo "  sudo udevadm control --reload-rules && sudo udevadm trigger --action=add"
+echo "  (Lenovo and Realtek RTS5411 hubs work out of the box; for other hubs"
+echo "  uncomment the line matching your vendor ID in the rules file first.)"
+echo "  The rules grant access via the 'users' group — check you are in it"
+echo "  with 'groups'; if not: sudo usermod -aG users \$USER and re-login."
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 
@@ -118,7 +125,8 @@ echo "  1. Set up udev rules (see above) for rootless operation."
 echo "  2. Map your hubs:     asteroid-docking-bay map"
 echo "  3. Verify:            asteroid-docking-bay status"
 echo "  4. Enable the timer:  systemctl --user enable --now asteroid-docking-bay-charge.timer"
-echo "  5. Web UI (optional): pip install bottle"
+echo "  5. Web UI (optional): install bottle (Arch: sudo pacman -S python-bottle,"
+echo "                        Debian: sudo apt install python3-bottle, or pip install bottle)"
 echo "                        systemctl --user enable --now asteroid-docking-bay-web.service"
 echo "                        # then open http://127.0.0.1:8080/"
 echo ""
