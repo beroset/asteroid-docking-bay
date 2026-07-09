@@ -266,10 +266,16 @@ def _sse_remap_gen(loc: str, port: int):
                         if was_mapped:
                             save_config(cfg)
                             _emit("Cleared stale port mapping.")
-                    try:
-                        uhubctl_set_power(loc, port, False)
-                    except Exception:
-                        pass
+                    # A watch with a deeply discharged cell cannot boot within
+                    # any reasonable window — it needs VBUS to trickle past its
+                    # pre-charge threshold first. Leave the port powered and
+                    # say so; cutting power here strands exactly the watches
+                    # that need charge the most. (A bootlooping watch charges
+                    # best parked in fastboot — it draws less than booting.)
+                    _emit("Port left POWERED: if a watch with a flat battery "
+                          "is docked here, let it pre-charge 30-60 min and "
+                          "onboard again. Bootlooping watch? Hold it in "
+                          "fastboot to charge. Empty port? Toggle it off.")
 
             except Exception as exc:
                 _emit(f"ERROR: {exc}")
