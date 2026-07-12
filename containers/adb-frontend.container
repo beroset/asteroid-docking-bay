@@ -10,7 +10,9 @@ After=adb-backend.service
 ContainerName=adb-frontend
 Image=localhost/adb-frontend:latest
 Network=adb-dockingbay.network
-Secret=adb-token
+# type=mount into /tmp (a tmpfs): the default /run/secrets mountpoint
+# cannot be created on this container's read-only rootfs.
+Secret=adb-token,type=mount,target=/tmp/adb-token
 PublishPort=8080:8080
 
 ReadOnly=true

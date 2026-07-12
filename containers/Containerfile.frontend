@@ -15,4 +15,4 @@ EXPOSE 8080
 ENTRYPOINT ["python3", "bin/asteroid-docking-bay", "serve", \
             "--host", "0.0.0.0", "--port", "8080", \
             "--backend", "adb-backend:8099", \
-            "--token-file", "/run/secrets/adb-token"]
+            "--token-file", "/tmp/adb-token"]
