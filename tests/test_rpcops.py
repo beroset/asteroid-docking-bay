@@ -20,7 +20,9 @@ REGISTERED = set(rpcops.DISPATCH._data) | set(rpcops.DISPATCH._stream)
 
 
 def test_every_frontend_op_is_registered():
-    called = set(re.findall(r'_call\("([\w.]+)"', WEBAPP_SRC))
+    from asteroid_docking_bay.webapp import _JSON_ROUTES
+    called = {spec[2] for spec in _JSON_ROUTES}
+    called |= set(re.findall(r'_call\("([\w.]+)"', WEBAPP_SRC))
     called |= set(re.findall(r'_sse\("([\w.]+)"', WEBAPP_SRC))
     missing = sorted(called - REGISTERED)
     assert not missing, (

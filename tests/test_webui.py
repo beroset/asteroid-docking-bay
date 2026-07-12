@@ -51,14 +51,15 @@ def test_every_literal_element_id_exists():
 
 
 def _route_patterns():
-    """Bottle route paths registered in webapp.py, as regexes."""
+    """Every route the server registers: the _JSON_ROUTES table (imported —
+    it IS the contract) plus the explicit @app routes in webapp.py."""
+    from asteroid_docking_bay.webapp import _JSON_ROUTES
     src = (Path(__file__).resolve().parent.parent
            / "asteroid_docking_bay" / "webapp.py").read_text()
-    patterns = []
-    for path in re.findall(r'@app\.(?:get|post)\("([^"]+)"\)', src):
-        rx = re.sub(r"<[^>]+>", "[^/]+", path)
-        patterns.append((path, re.compile("^" + rx + "$")))
-    return patterns
+    paths = [spec[1] for spec in _JSON_ROUTES]
+    paths += re.findall(r'@app\.(?:get|post)\("([^"]+)"\)', src)
+    return [(p, re.compile("^" + re.sub(r"<[^>]+>", "[^/]+", p) + "$"))
+            for p in paths]
 
 
 def test_every_js_api_call_hits_a_route():

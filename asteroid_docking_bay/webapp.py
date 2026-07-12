@@ -24,6 +24,36 @@ from .ops import _background_warmer, _resume_persisted_tasks
 from .webtemplate import _WEB_TEMPLATE
 
 
+# The uniform JSON route⇄op contract as data: every entry becomes a route
+# whose URL parameters flow into the op's args by name, merged with the
+# static args. `bust` invalidates the status cache after state changes.
+# Non-uniform routes (page, status cache, screenshot binary, on/off state
+# words, SSE streams) stay explicit in serve() below. Tests import this
+# table — it is the contract, not just wiring.
+_JSON_ROUTES = [
+    # method, path,                                op,                static args,    bust
+    ("GET",  "/api/watch/<serial>",                "watch.cc",        {},             False),
+    ("POST", "/api/watch/<serial>/settime",        "watch.settime",   {},             False),
+    ("POST", "/api/watch/<serial>/notify",         "watch.notify",    {},             False),
+    ("POST", "/api/watch/<serial>/buzz",           "watch.buzz",      {},             False),
+    ("POST", "/api/on/<loc>/<port:int>",           "port.set",        {"on": True},   True),
+    ("POST", "/api/off/<loc>/<port:int>",          "port.set",        {"on": False},  True),
+    ("POST", "/api/poweroff/<loc>/<port:int>",     "port.poweroff",   {},             True),
+    ("POST", "/api/reboot/<loc>/<port:int>",       "port.reboot",     {},             False),
+    ("POST", "/api/bootloader/<loc>/<port:int>",   "port.bootloader", {},             False),
+    ("POST", "/api/cycle/<loc>/<port:int>",        "port.cycle",      {},             True),
+    ("POST", "/api/hide/<loc>/<port:int>",         "port.hide",       {},             True),
+    ("POST", "/api/hide-hub/<loc>",                "hub.hide",        {},             True),
+    ("POST", "/api/charge/<loc>/<port:int>",       "charge.start",    {},             True),
+    ("POST", "/api/charge/stop/<loc>/<port:int>",  "charge.stop",     {},             True),
+    ("POST", "/api/workbench/<loc>/<port:int>",    "workbench.start", {},             True),
+    ("POST", "/api/workbench/stop/<loc>/<port:int>", "workbench.stop", {},            True),
+    ("POST", "/api/drain/<loc>/<port:int>",        "drain.start",     {},             True),
+    ("POST", "/api/drain/stop/<loc>/<port:int>",   "drain.stop",      {},             True),
+    ("GET",  "/api/drain/history",                 "drain.history",   {},             False),
+]
+
+
 def serve(args, cfg: dict):
     """Start the web UI. Requires the bottle package."""
     try:
@@ -87,6 +117,18 @@ def serve(args, cfg: dict):
             yield f"data: ERROR: {e}\n\n"
         yield "event: done\ndata: complete\n\n"
 
+    def _register(method, path, op, static, bust):
+        def handler(**url_args):
+            resp.content_type = "application/json"
+            result = _call(op, {**url_args, **static})
+            if bust:
+                _bust_status_cache()
+            return json.dumps(result)
+        app.route(path, method=method, callback=handler)
+
+    for spec in _JSON_ROUTES:
+        _register(*spec)
+
     @app.get("/api/status")
     def api_status():
         resp.content_type = "application/json"
@@ -97,27 +139,12 @@ def serve(args, cfg: dict):
                 status_cache["ts"] = now
             return status_cache["body"]
 
-    @app.get("/api/watch/<serial>")
-    def api_watch(serial):
-        resp.content_type = "application/json"
-        return json.dumps(_call("watch.cc", {"serial": serial}))
-
     @app.post("/api/watch/<serial>/toggle/<tech>/<state>")
     def api_watch_toggle(serial, tech, state):
         resp.content_type = "application/json"
         d = _call("watch.toggle", {"serial": serial, "tech": tech, "on": state == "on"})
         _bust_status_cache()
         return json.dumps(d)
-
-    @app.post("/api/watch/<serial>/settime")
-    def api_watch_settime(serial):
-        resp.content_type = "application/json"
-        return json.dumps(_call("watch.settime", {"serial": serial}))
-
-    @app.post("/api/watch/<serial>/notify")
-    def api_watch_notify(serial):
-        resp.content_type = "application/json"
-        return json.dumps(_call("watch.notify", {"serial": serial}))
 
     @app.get("/api/watch/<serial>/screenshot.jpg")
     def api_watch_screenshot(serial):
@@ -129,114 +156,10 @@ def serve(args, cfg: dict):
         resp.content_type = "image/jpeg"
         return base64.b64decode(d["jpeg_b64"])
 
-    @app.post("/api/watch/<serial>/buzz")
-    def api_watch_buzz(serial):
-        resp.content_type = "application/json"
-        return json.dumps(_call("watch.buzz", {"serial": serial}))
-
     @app.post("/api/watch/<serial>/screen/<state>")
     def api_watch_screen(serial, state):
         resp.content_type = "application/json"
         return json.dumps(_call("watch.screen", {"serial": serial, "on": state == "on"}))
-
-    @app.post("/api/on/<loc>/<port:int>")
-    def api_on(loc, port):
-        resp.content_type = "application/json"
-        d = _call("port.set", {"loc": loc, "port": port, "on": True})
-        _bust_status_cache()
-        return json.dumps(d)
-
-    @app.post("/api/off/<loc>/<port:int>")
-    def api_off(loc, port):
-        resp.content_type = "application/json"
-        d = _call("port.set", {"loc": loc, "port": port, "on": False})
-        _bust_status_cache()
-        return json.dumps(d)
-
-    @app.post("/api/poweroff/<loc>/<port:int>")
-    def api_poweroff(loc, port):
-        resp.content_type = "application/json"
-        d = _call("port.poweroff", {"loc": loc, "port": port})
-        _bust_status_cache()
-        return json.dumps(d)
-
-    @app.post("/api/reboot/<loc>/<port:int>")
-    def api_reboot(loc, port):
-        resp.content_type = "application/json"
-        return json.dumps(_call("port.reboot", {"loc": loc, "port": port}))
-
-    @app.post("/api/bootloader/<loc>/<port:int>")
-    def api_bootloader(loc, port):
-        resp.content_type = "application/json"
-        return json.dumps(_call("port.bootloader", {"loc": loc, "port": port}))
-
-    @app.post("/api/cycle/<loc>/<port:int>")
-    def api_cycle(loc, port):
-        resp.content_type = "application/json"
-        d = _call("port.cycle", {"loc": loc, "port": port})
-        _bust_status_cache()
-        return json.dumps(d)
-
-    @app.post("/api/hide/<loc>/<port:int>")
-    def api_hide(loc, port):
-        resp.content_type = "application/json"
-        d = _call("port.hide", {"loc": loc, "port": port})
-        _bust_status_cache()
-        return json.dumps(d)
-
-    @app.post("/api/hide-hub/<loc>")
-    def api_hide_hub(loc):
-        resp.content_type = "application/json"
-        d = _call("hub.hide", {"loc": loc})
-        _bust_status_cache()
-        return json.dumps(d)
-
-    @app.post("/api/charge/<loc>/<port:int>")
-    def api_charge(loc, port):
-        resp.content_type = "application/json"
-        d = _call("charge.start", {"loc": loc, "port": port})
-        _bust_status_cache()
-        return json.dumps(d)
-
-    @app.post("/api/charge/stop/<loc>/<port:int>")
-    def api_charge_stop(loc, port):
-        resp.content_type = "application/json"
-        d = _call("charge.stop", {"loc": loc, "port": port})
-        _bust_status_cache()
-        return json.dumps(d)
-
-    @app.post("/api/workbench/<loc>/<port:int>")
-    def api_workbench(loc, port):
-        resp.content_type = "application/json"
-        d = _call("workbench.start", {"loc": loc, "port": port})
-        _bust_status_cache()
-        return json.dumps(d)
-
-    @app.post("/api/workbench/stop/<loc>/<port:int>")
-    def api_workbench_stop(loc, port):
-        resp.content_type = "application/json"
-        d = _call("workbench.stop", {"loc": loc, "port": port})
-        _bust_status_cache()
-        return json.dumps(d)
-
-    @app.get("/api/drain/history")
-    def api_drain_history():
-        resp.content_type = "application/json"
-        return json.dumps(_call("drain.history"))
-
-    @app.post("/api/drain/<loc>/<port:int>")
-    def api_drain(loc, port):
-        resp.content_type = "application/json"
-        d = _call("drain.start", {"loc": loc, "port": port})
-        _bust_status_cache()
-        return json.dumps(d)
-
-    @app.post("/api/drain/stop/<loc>/<port:int>")
-    def api_drain_stop(loc, port):
-        resp.content_type = "application/json"
-        d = _call("drain.stop", {"loc": loc, "port": port})
-        _bust_status_cache()
-        return json.dumps(d)
 
     def _event_stream_headers():
         resp.content_type = "text/event-stream"
