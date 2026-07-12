@@ -427,7 +427,7 @@ def cmd_map(args, cfg: dict):
     # USB 3.0 companion buses expose the same physical ports as their USB 2.0
     # counterparts. Watches are USB 2.0 devices and only enumerate on the 2.x bus.
     # Scanning 3.x hubs causes double-detection and incorrect PPPS results.
-    hubs = [h for h in hubs if ", USB 3." not in h.get("description", "")]
+    hubs = [hub for hub in hubs if ", USB 3." not in hub.get("description", "")]
     if not hubs:
         print("No USB hubs found by uhubctl.")
         print("See udev/70-asteroid-docking-bay.rules for permission setup.")
@@ -549,15 +549,15 @@ def cmd_map(args, cfg: dict):
             "port_serials": port_serials,
         })
 
-    touched_locs = {h["location"] for h in new_hubs}
-    new_codenames = {cn for h in new_hubs for cn in h.get("ports", {}).values()}
+    touched_locs = {hub["location"] for hub in new_hubs}
+    new_codenames = {codename for hub in new_hubs for codename in hub.get("ports", {}).values()}
     # Preserve old hub entries only when they contain codenames NOT found in this
     # scan.  An old entry whose watches all reappeared at a new location is stale
     # (hub moved to a different USB path) and should be dropped to avoid duplicates.
     cfg["hubs"] = new_hubs + [
-        h for h in cfg.get("hubs", [])
-        if h["location"] not in touched_locs
-        and not any(cn in new_codenames for cn in h.get("ports", {}).values())
+        hub for hub in cfg.get("hubs", [])
+        if hub["location"] not in touched_locs
+        and not any(codename in new_codenames for codename in hub.get("ports", {}).values())
     ]
     save_config(cfg)
 

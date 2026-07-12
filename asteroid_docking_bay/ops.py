@@ -167,8 +167,8 @@ def _background_warmer() -> None:
             if time.time() - fastboot._fb_list_cache["ts"] > 60:
                 fastboot._fastboot_poll()
             cfg = load_config()
-            for h in cfg.get("hubs", []):
-                loc = h["location"]
+            for hub in cfg.get("hubs", []):
+                loc = hub["location"]
                 for iface in usb._SYSFS_USB.glob(f"{loc}:*"):
                     for pd in sorted(iface.glob(f"{loc}-port*")):
                         try:
@@ -587,7 +587,7 @@ def _resume_persisted_tasks() -> None:
     """On web startup, re-spawn workers for any op that was running when the
     service last stopped, so charge/drain/workbench survive restarts."""
     cfg = load_config()
-    hub_locs = {h["location"] for h in cfg.get("hubs", [])}
+    hub_locs = {hub["location"] for hub in cfg.get("hubs", [])}
     kinds = {op.kind: op for op in (ChargeOp, DrainOp, WorkbenchOp)}
     resumed = 0
     for p in task_store.load_all():

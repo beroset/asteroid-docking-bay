@@ -45,14 +45,14 @@ def _soft_remap(cfg: dict, online_by_path: dict[str, str]) -> "dict | None":
 
     Returns the updated config, or None if nothing changed.
     """
-    hub_locs = {h["location"] for h in cfg.get("hubs", [])}
+    hub_locs = {hub["location"] for hub in cfg.get("hubs", [])}
     moves: list[tuple[str, str, str]] = []
     for path, serial in online_by_path.items():
         parsed = _parse_hub_port_path(path)
         if parsed is None or parsed[0] not in hub_locs or serial in _soft_remap_unknown:
             continue
         loc, port = parsed
-        hub = next(h for h in cfg["hubs"] if h["location"] == loc)
+        hub = next(hub for hub in cfg["hubs"] if hub["location"] == loc)
         port_str = str(port)
         codename = cfg.get("serials", {}).get(serial)
         if (codename is not None
@@ -72,8 +72,8 @@ def _soft_remap(cfg: dict, online_by_path: dict[str, str]) -> "dict | None":
             if not codename:
                 _soft_remap_unknown.add(serial)
                 continue
-            hub = next((h for h in cfg.get("hubs", [])
-                        if h["location"] == loc), None)
+            hub = next((hub for hub in cfg.get("hubs", [])
+                        if hub["location"] == loc), None)
             if hub is None:
                 continue
             ports        = hub.setdefault("ports", {})
@@ -84,23 +84,23 @@ def _soft_remap(cfg: dict, online_by_path: dict[str, str]) -> "dict | None":
 
             # Clear the watch's previous seat — exact serial binding first,
             # otherwise a single unambiguous codename match.
-            old_seats = [(h2, k) for h2 in cfg["hubs"]
-                         for k, s in h2.get("port_serials", {}).items()
+            old_seats = [(other_hub, k) for other_hub in cfg["hubs"]
+                         for k, s in other_hub.get("port_serials", {}).items()
                          if s == serial
-                         and not (h2["location"] == loc and k == port_str)]
+                         and not (other_hub["location"] == loc and k == port_str)]
             if not old_seats:
-                named = [(h2, k) for h2 in cfg["hubs"]
-                         for k, cn in h2.get("ports", {}).items()
+                named = [(other_hub, k) for other_hub in cfg["hubs"]
+                         for k, cn in other_hub.get("ports", {}).items()
                          if cn.lower() == codename.lower()
-                         and not (h2["location"] == loc and k == port_str)
-                         and h2.get("port_serials", {}).get(k) is None]
+                         and not (other_hub["location"] == loc and k == port_str)
+                         and other_hub.get("port_serials", {}).get(k) is None]
                 if len(named) == 1:
                     old_seats = named
-            for h2, k in old_seats:
-                old = h2.get("ports", {}).pop(k, None)
-                h2.get("port_serials", {}).pop(k, None)
+            for other_hub, k in old_seats:
+                old = other_hub.get("ports", {}).pop(k, None)
+                other_hub.get("port_serials", {}).pop(k, None)
                 log.info("soft-remap: cleared %s:p%s (was %s)",
-                         h2["location"], k, old)
+                         other_hub["location"], k, old)
 
             prev = ports.get(port_str)
             ports[port_str] = codename
@@ -139,10 +139,10 @@ def _web_status_data(cfg: dict) -> list[dict]:
                       if _adb_state(devices, s) == "device"}
     cfg = _soft_remap(cfg, online_by_path) or cfg
     # Evict OS cache entries for offline watches → re-detected on next boot.
-    for s in list(_watch_os):
-        if _adb_state(devices, s) != "device":
-            _watch_os.pop(s)
-    physical = {h["location"]: h for h in (_sysfs_hub_scan(cfg) or uhubctl_list())}
+    for serial in list(_watch_os):
+        if _adb_state(devices, serial) != "device":
+            _watch_os.pop(serial)
+    physical = {hub["location"]: hub for hub in (_sysfs_hub_scan(cfg) or uhubctl_list())}
     # Every hub location, used to spot cascade ports: a port whose child is
     # itself a hub (e.g. 1-2 port 3 feeds sub-hub 1-2.3). Those are internal
     # chip-to-chip links, not watch sockets — powering one off cuts the whole
@@ -184,10 +184,10 @@ def _web_status_data(cfg: dict) -> list[dict]:
             # same-codename watches each see their own ADB state.
             serial = cfg_hub.get("port_serials", {}).get(port_str)
             if not serial:
-                serials_for_codename = [s for s, cn in cfg.get("serials", {}).items()
-                                        if cn.lower() == codename.lower()]
-                serial = (next((s for s in serials_for_codename if s in devices), None)
-                          or next((s for s in serials_for_codename if s in fb_devices), None)
+                serials_for_codename = [serial for serial, cname in cfg.get("serials", {}).items()
+                                        if cname.lower() == codename.lower()]
+                serial = (next((x for x in serials_for_codename if x in devices), None)
+                          or next((x for x in serials_for_codename if x in fb_devices), None)
                           or (serials_for_codename[0] if serials_for_codename else None))
             adb_state = _adb_state(devices, serial) if serial else None
             if adb_state is None and serial and serial in fb_devices:

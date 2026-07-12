@@ -185,16 +185,16 @@ def _port_hide(args):
     loc, port = args["loc"], args["port"]
     with _config_lock:
         cfg = load_config()
-        hub = next((h for h in cfg.get("hubs", []) if h["location"] == loc), None)
+        hub = next((hub for hub in cfg.get("hubs", []) if hub["location"] == loc), None)
         if hub is None:
             return {"ok": False, "error": "hub not found"}
         excl = hub.setdefault("exclude", {})
-        ps = str(port)
-        if ps in excl:
-            del excl[ps]
+        port_str = str(port)
+        if port_str in excl:
+            del excl[port_str]
             state = False
         else:
-            excl[ps] = "hidden by user"
+            excl[port_str] = "hidden by user"
             state = True
         save_config(cfg)
     return {"ok": True, "hidden": state}
@@ -206,7 +206,7 @@ def _hub_hide(args):
     loc = args["loc"]
     with _config_lock:
         cfg = load_config()
-        hub = next((h for h in cfg.get("hubs", []) if h["location"] == loc), None)
+        hub = next((hub for hub in cfg.get("hubs", []) if hub["location"] == loc), None)
         if hub is None:
             return {"ok": False, "error": "hub not found"}
         hub["hidden"] = not hub.get("hidden", False)
@@ -408,10 +408,10 @@ def _onboard_stream(loc: str, port: int):
                     st = time.monotonic()
                     nxt = 15
                     while time.monotonic() - st < secs:
-                        cur = adb_devices()
-                        path_map = _sysfs_path_to_serial_map(set(cur.keys()))
+                        devices = adb_devices()
+                        path_map = _sysfs_path_to_serial_map(set(devices.keys()))
                         s = path_map.get(sysfs_path)
-                        if s and _adb_state(cur, s) == "device":
+                        if s and _adb_state(devices, s) == "device":
                             return s
                         el = time.monotonic() - st
                         if el >= nxt:
@@ -460,8 +460,8 @@ def _onboard_stream(loc: str, port: int):
                                 hub_serials.pop(k, None)
                                 _emit(f"Removed stale mapping: {hub['location']}:p{k} → {codename}")
                         # Add/update this port.
-                        hub_entry = next((h for h in cfg.get("hubs", [])
-                                          if h["location"] == loc), None)
+                        hub_entry = next((hub for hub in cfg.get("hubs", [])
+                                          if hub["location"] == loc), None)
                         if hub_entry is not None:
                             hub_entry.setdefault("ports", {})[str(port)] = codename
                             hub_entry.setdefault("port_serials", {})[str(port)] = found_serial

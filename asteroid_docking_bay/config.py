@@ -169,14 +169,14 @@ def find_serial_for_loc_port(cfg: dict, loc: str, port: int) -> str | None:
     codename = find_codename_for_loc_port(cfg, loc, port)
     if not codename:
         return None
-    matching = [s for s, cn in cfg.get("serials", {}).items()
-                if cn.lower() == codename.lower()]
+    matching = [serial for serial, cname in cfg.get("serials", {}).items()
+                if cname.lower() == codename.lower()]
     if len(matching) == 1:
         return matching[0]
     connected = set(adb_devices().keys())
-    for s in matching:
-        if s in connected:
-            return s
+    for serial in matching:
+        if serial in connected:
+            return serial
     return matching[0] if matching else None
 
 

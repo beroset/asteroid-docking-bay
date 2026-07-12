@@ -137,7 +137,7 @@ def _sysfs_hub_scan(cfg: dict) -> list[dict]:
     from a cheap directory glob (no USB queries); power/presence are read only
     for the configured hubs' ports, and a present child device proves the port
     is powered, so the ~50ms disable read is skipped for occupied ports."""
-    config_locs = {h["location"] for h in cfg.get("hubs", [])}
+    config_locs = {hub["location"] for hub in cfg.get("hubs", [])}
     hubs: list[dict] = []
     for iface in _SYSFS_USB.glob("*:1.0"):
         loc = iface.name.rsplit(":", 1)[0]
@@ -181,8 +181,8 @@ def _sysfs_switch_mode(cfg: dict) -> str:
     falling back to uhubctl (slow)? Determined by whether a configured hub's
     port `disable` attr is writable by us — i.e. whether the udev rule is in
     effect. Logged at startup so the fast/slow state is never a mystery."""
-    for h in cfg.get("hubs", []):
-        loc = h["location"]
+    for hub in cfg.get("hubs", []):
+        loc = hub["location"]
         for iface in _SYSFS_USB.glob(f"{loc}:*"):
             for pd in sorted(iface.glob(f"{loc}-port*")):
                 cand = pd / "disable"

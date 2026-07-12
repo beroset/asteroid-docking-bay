@@ -49,7 +49,7 @@ def _fastboot_poll() -> None:
         result: dict[str, str | None] = {}
     else:
         path_by_serial = {s: p for p, s in _sysfs_path_to_serial_map(serials).items()}
-        result = {s: path_by_serial.get(s) for s in serials}
+        result = {serial: path_by_serial.get(serial) for serial in serials}
     _fb_list_cache["ts"] = time.time()
     _fb_list_cache["val"] = result
 
