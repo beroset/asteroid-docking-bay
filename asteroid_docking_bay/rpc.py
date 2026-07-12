@@ -17,11 +17,21 @@ callers go through the same table, so the contract has one implementation.
 
 import hmac
 import json
+import os
 import socket
 import threading
 import time
+from pathlib import Path
 
 from .util import log
+
+
+def load_token(token_file: "str | None") -> str:
+    """The shared secret, from a file (a podman secret is a file) or the
+    ADB_RPC_TOKEN environment variable. Empty string if neither is set."""
+    if token_file:
+        return Path(token_file).read_text().strip()
+    return os.environ.get("ADB_RPC_TOKEN", "").strip()
 
 
 class RpcError(Exception):

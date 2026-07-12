@@ -320,9 +320,18 @@ def serve(args, cfg: dict):
         for up to the cache TTL, showing rows that never matched reality."""
         status_cache["ts"] = 0.0
 
-    from .rpc import LocalCaller, RpcError
+    from .rpc import LocalCaller, RpcClient, RpcError, load_token
     from . import rpcops
-    caller = LocalCaller(rpcops.DISPATCH)
+    # Split mode (--backend host:port) proxies every op to a remote backend;
+    # otherwise the ops run in-process. The routes are identical either way.
+    split = bool(getattr(args, "backend", None))
+    if split:
+        host, _, port = args.backend.rpartition(":")
+        caller = RpcClient(host or "127.0.0.1", int(port),
+                           load_token(getattr(args, "token_file", None)))
+        log.info("frontend proxying to backend at %s", args.backend)
+    else:
+        caller = LocalCaller(rpcops.DISPATCH)
 
     def _call(op, args=None):
         try:
@@ -514,9 +523,12 @@ def serve(args, cfg: dict):
     class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
         daemon_threads = True
 
-    _resume_persisted_tasks()
-    threading.Thread(target=_background_warmer, daemon=True).start()
-    log.info("Port switching: %s", _sysfs_switch_mode(cfg))
+    # The operations and their caches live wherever the ops actually run:
+    # in-process for the monolith, in the backend container for the split.
+    if not split:
+        _resume_persisted_tasks()
+        threading.Thread(target=_background_warmer, daemon=True).start()
+        log.info("Port switching: %s", _sysfs_switch_mode(cfg))
 
     host, port = args.host, args.port
     log.info("Web UI starting on http://%s:%d/", host, port)

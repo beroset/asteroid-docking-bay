@@ -34,19 +34,14 @@ def cmd_serve_backend(args, cfg: dict):
     """Start the RPC backend: the host-touching half of the container split.
     Owns the operations (resume + cache warmer) and serves the op table over
     a token-gated socket. No bottle dependency."""
-    import os
     import threading
-    from .rpc import RpcServer
+    from .rpc import RpcServer, load_token
     from . import rpcops
     from .usb import _sysfs_switch_mode
     from .webapp import _background_warmer
     from .ops import _resume_persisted_tasks
 
-    token = ""
-    if args.token_file:
-        token = Path(args.token_file).read_text().strip()
-    else:
-        token = os.environ.get("ADB_RPC_TOKEN", "").strip()
+    token = load_token(args.token_file)
     if not token:
         log.error("serve-backend requires a token: pass --token-file PATH "
                   "or set ADB_RPC_TOKEN")
@@ -733,6 +728,15 @@ def main():
     p_sv.add_argument(
         "--port", type=int, default=8080, metavar="PORT",
         help="port to listen on (default: 8080)",
+    )
+    p_sv.add_argument(
+        "--backend", metavar="HOST:PORT",
+        help="proxy all operations to a remote RPC backend (split mode) "
+             "instead of running them in-process",
+    )
+    p_sv.add_argument(
+        "--token-file", metavar="PATH",
+        help="shared secret for --backend (else the ADB_RPC_TOKEN env var)",
     )
 
     p_sb = sub.add_parser(
