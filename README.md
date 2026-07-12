@@ -553,6 +553,29 @@ pytest
 Anything that touches a hub or a watch is verified on real hardware
 instead — see the release notes for what that means in practice.
 
+### Container split (experimental)
+
+For a network-exposed deployment the web UI can run as an unprivileged
+frontend container that talks to a separate, host-touching backend over a
+token-gated socket — so a compromise of the exposed HTTP surface cannot
+reach the USB devices or config. The design and threat model are in
+[docs/CONTAINERS.md](docs/CONTAINERS.md); the pieces live under
+`containers/` (Containerfiles + podman quadlets).
+
+```sh
+containers/build.sh                       # build both images
+python3 -c 'import secrets; print(secrets.token_urlsafe(32))' \
+  | podman secret create adb-token -      # shared token
+cp containers/adb-*.container containers/adb-*.network \
+  ~/.config/containers/systemd/           # install quadlets
+systemctl --user daemon-reload && systemctl --user start adb-frontend
+```
+
+The backend needs USB + sysfs access and the host's adb server; the exact
+rootless-podman device/group directives are noted in the quadlet and may
+need tuning per host. The single-process `serve` remains the default for
+bare-metal installs. This split is new in 0.5 and still being trialled.
+
 ## Uninstall
 
 ```sh

@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Backend quadlet (podman-systemd). Host-touching; on the internal network
+# only. See docs/CONTAINERS.md. NOTE: rootless USB/sysfs access needs the
+# udev rules installed and the container running with the 'users' group —
+# verify AddDevice/Volume/GIDMap against your podman on the target host.
+[Unit]
+Description=asteroid-docking-bay RPC backend
+
+[Container]
+ContainerName=adb-backend
+Image=localhost/adb-backend:latest
+Network=adb-dockingbay.network
+Secret=adb-token
+
+# Host access: USB devices (uhubctl, fastboot), the hub ports' sysfs power
+# attrs (writable via the udev rule), and the config/state volumes.
+AddDevice=/dev/bus/usb
+Volume=/sys/bus/usb/devices:/sys/bus/usb/devices:rw
+Volume=%h/.config/asteroid-docking-bay:/root/.config/asteroid-docking-bay:rw
+Volume=%h/.local/share/asteroid-docking-bay:/root/.local/share/asteroid-docking-bay:rw
+Volume=%h/.local/state/asteroid-docking-bay:/root/.local/state/asteroid-docking-bay:rw
+# Keep the caller's supplementary groups so the udev-granted 'users' write
+# access to the sysfs disable attrs survives into the container.
+PodmanArgs=--group-add keep-groups
+# Use the host's adb server rather than a second in-container keyring.
+Environment=ANDROID_ADB_SERVER_ADDRESS=host.containers.internal
+
+[Service]
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

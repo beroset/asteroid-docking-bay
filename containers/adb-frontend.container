@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Frontend quadlet: the only published port. No devices, no volumes, no
+# privileges; read-only root. See docs/CONTAINERS.md.
+[Unit]
+Description=asteroid-docking-bay web frontend
+Requires=adb-backend.service
+After=adb-backend.service
+
+[Container]
+ContainerName=adb-frontend
+Image=localhost/adb-frontend:latest
+Network=adb-dockingbay.network
+Secret=adb-token
+PublishPort=8080:8080
+
+ReadOnly=true
+NoNewPrivileges=true
+DropCapability=ALL
+User=1000
+
+[Service]
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
