@@ -11,6 +11,7 @@ owns."""
 
 import base64
 import json
+import signal
 import sys
 import threading
 import time
@@ -261,6 +262,9 @@ def serve(args, cfg: dict):
         _resume_persisted_tasks()
         threading.Thread(target=_background_warmer, daemon=True).start()
         log.info("Port switching: %s", _sysfs_switch_mode(cfg))
+
+    # PID-1 duty in the frontend container: exit on SIGTERM (see backend).
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 
     host, port = args.host, args.port
     log.info("Web UI starting on http://%s:%d/", host, port)

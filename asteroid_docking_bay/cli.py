@@ -34,6 +34,7 @@ def cmd_serve_backend(args, cfg: dict):
     """Start the RPC backend: the host-touching half of the container split.
     Owns the operations (resume + cache warmer) and serves the op table over
     a token-gated socket. No bottle dependency."""
+    import signal
     import threading
     from .rpc import RpcServer, load_token
     from . import rpcops
@@ -45,6 +46,11 @@ def cmd_serve_backend(args, cfg: dict):
         log.error("serve-backend requires a token: pass --token-file PATH "
                   "or set ADB_RPC_TOKEN")
         sys.exit(1)
+
+    # As container PID 1 the default signal dispositions don't apply —
+    # without a handler, SIGTERM is ignored and every stop waits for the
+    # runtime's kill timeout.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 
     _resume_persisted_tasks()
     threading.Thread(target=_background_warmer, daemon=True).start()
