@@ -37,6 +37,7 @@ from .events import _DRAIN_FLOOR_PCT, _DRAIN_RESULTS_DIR
 from .webstatus import _web_status_data
 from .tasks import _adb_lock, _charge_tasks, _flash_tasks, _remap_tasks
 from .rpc import Dispatcher
+from . import __version__
 
 DISPATCH = Dispatcher()
 
@@ -52,6 +53,9 @@ def _status_get(args):
         "thresholds": {"low": cc.low_threshold, "high": cc.high_threshold},
         "drain_floor": _DRAIN_FLOOR_PCT,
         "wearable_min_hours": cfg.get("wearable_min_hours", 24),
+        # The version of the process running the ops — in split mode the
+        # backend's, which is what an upgrade check cares about.
+        "version": __version__,
     }
 
 
