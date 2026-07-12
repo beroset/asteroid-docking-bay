@@ -158,7 +158,14 @@ class RpcServer:
     def serve_forever(self) -> None:
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self._sock.bind((self.host, self.port))
+        try:
+            self._sock.bind((self.host, self.port))
+        except OSError as e:
+            if e.errno == 98:   # EADDRINUSE: explain, like serve does
+                log.error("rpc port %d is already in use by another program "
+                          "— pick a different one with --port", self.port)
+                raise SystemExit(1)
+            raise
         self._sock.listen(16)
         log.info("rpc backend listening on %s:%d", self.host, self.port)
         while not self._stop.is_set():
