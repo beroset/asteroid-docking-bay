@@ -38,8 +38,7 @@ def cmd_serve_backend(args, cfg: dict):
     from .rpc import RpcServer, load_token
     from . import rpcops
     from .usb import _sysfs_switch_mode
-    from .webapp import _background_warmer
-    from .ops import _resume_persisted_tasks
+    from .ops import _background_warmer, _resume_persisted_tasks
 
     token = load_token(args.token_file)
     if not token:

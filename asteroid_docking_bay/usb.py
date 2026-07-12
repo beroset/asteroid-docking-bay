@@ -163,7 +163,7 @@ def _sysfs_hub_scan(cfg: dict) -> list[dict]:
                 else:
                     # Never read `disable` on the status path — it's a slow,
                     # variable USB query (some empty-off ports hang for seconds).
-                    # Serve the cached value; _power_cache_warmer keeps it fresh.
+                    # Serve the cached value; the background warmer keeps it fresh.
                     power[n] = power_cache.get((loc, n))
         desc = ""
         if want:

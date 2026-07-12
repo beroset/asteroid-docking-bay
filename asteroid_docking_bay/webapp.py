@@ -1,12 +1,13 @@
 # SPDX-License-Identifier: GPL-3.0-only
 # SPDX-FileCopyrightText: 2026 Timo Könnecke (moWerk) <mo@mowerk.net>
 # SPDX-FileCopyrightText: 2023 Ed Beroset <beroset@ieee.org>
-"""Bottle app factory, SSE bridge, status cache, background warmer.
+"""Bottle app factory, SSE bridge, status cache.
 
 The web server is a thin frontend: routes parse HTTP and dispatch through a
 caller (in-process LocalCaller, or an RpcClient in --backend split mode) to
-the op table in rpcops. The only host-touching code left here is the cache
-warmer, which runs where the ops run (monolith, or backend container)."""
+the op table in rpcops. It touches no hardware itself; in monolithic mode it
+starts the ops machinery (resume + warmer) that the split backend otherwise
+owns."""
 
 import base64
 import json
@@ -18,43 +19,9 @@ from wsgiref.simple_server import WSGIServer, WSGIRequestHandler, make_server
 
 from .util import log
 from .config import load_config
-from . import usb, fastboot
 from .usb import _sysfs_switch_mode
-from .ops import _resume_persisted_tasks
+from .ops import _background_warmer, _resume_persisted_tasks
 from .webtemplate import _WEB_TEMPLATE
-
-
-def _background_warmer() -> None:
-    """Background daemon feeding the two slow caches so the status path never
-    blocks: usb's port-power cache (a `disable` read is a slow, variable USB
-    query) and fastboot's device list (a multi-second scan). Lives here — the
-    only place it is started — because it needs both usb and fastboot, which
-    must not import each other. Sequential and gently paced: parallel USB
-    reads are what wedges the bus."""
-    while True:
-        try:
-            if time.time() - fastboot._fb_list_cache["ts"] > 60:
-                fastboot._fastboot_poll()
-            cfg = load_config()
-            for h in cfg.get("hubs", []):
-                loc = h["location"]
-                for iface in usb._SYSFS_USB.glob(f"{loc}:*"):
-                    for pd in sorted(iface.glob(f"{loc}-port*")):
-                        try:
-                            n = int(pd.name.rsplit("port", 1)[1])
-                        except ValueError:
-                            continue
-                        if (usb._SYSFS_USB / f"{loc}.{n}").exists():
-                            continue            # occupied → known powered
-                        if usb.power_cache.get((loc, n)) is not None:
-                            continue            # still fresh, skip the slow read
-                        v = usb._sysfs_get_power(loc, n)
-                        if v is not None:
-                            usb.power_cache.put((loc, n), v)
-                        time.sleep(0.25)        # gentle on the bus
-        except Exception as e:
-            log.debug("cache warmer: %s", e)
-        time.sleep(5)
 
 
 def serve(args, cfg: dict):
