@@ -353,13 +353,14 @@ function renderCC(d){
     `<div class="cc-cols"><div class="cc-col">${sys}</div><div class="cc-col">${bat}</div><div class="cc-col">${net}</div></div>`+
     `<div class="cc-tgls">${tgl('wifi','WiFi',d.wifi)}${tgl('bluetooth','BT',d.bluetooth)}`+
       `<button class="cc-tgl" onclick="ccBuzz()" title="vibrate to locate in the dock">&#128243; Buzz</button>`+
-      `<button class="cc-tgl" onclick="ccScreen()" title="force the screen on">&#128161; Screen</button>`+
+      `<button class="cc-tgl" onclick="ccScreen(true)" title="force the screen on (mce demo mode — stays on until released!)">&#128161; On</button>`+
+      `<button class="cc-tgl" onclick="ccScreen(false)" title="release the forced screen">&#128161; Off</button>`+
       `<button class="cc-tgl" onclick="doScreenshot('${d.serial}')" title="screenshot in a new tab">&#128247; Shot</button></div>`+
     `<div class="cc-acts"><button class="cc-act" id="cc-time" onclick="ccSyncTime()">&#x21BB; Sync time from host</button></div>`;
   ccPlace();
 }
 function ccBuzz(){fetch('/api/watch/'+encodeURIComponent(ccSerial)+'/buzz',{method:'POST'}).then(()=>toast('buzzed'));}
-function ccScreen(){fetch('/api/watch/'+encodeURIComponent(ccSerial)+'/screen/on',{method:'POST'}).then(()=>toast('screen forced on'));}
+function ccScreen(on){fetch('/api/watch/'+encodeURIComponent(ccSerial)+'/screen/'+(on?'on':'off'),{method:'POST'}).then(()=>toast(on?'screen forced on \u2014 release it when done!':'screen released'));}
 function ccToggle(tech,on){
   document.querySelectorAll('.cc-tgl').forEach(b=>b.classList.add('busy'));
   fetch('/api/watch/'+encodeURIComponent(ccSerial)+'/toggle/'+tech+'/'+(on?'on':'off'),{method:'POST'})
@@ -394,7 +395,7 @@ function menuPower(ev,slot,charging,draining,powered,noSw){
     (charging?mi('ch','&#9632; Stop charge',`doStopCharge('${slot}')`):mi('ch','&#9889; Charge',`doCharge('${slot}')`,noSw))+
     (draining?mi('dr','&#9632; Stop drain test',`doStopDrain('${slot}')`):mi('dr','&#128201; Drain test',`doDrain('${slot}')`,noSw))+
     '<div class="menu-sep"></div>'+
-    (powered?mi('ht','&#x23FB; Power off',`doHalt('${slot}')`):'')+
+    (powered?mi('ht','&#x23FB; Power off',`doPoweroff('${slot}')`):'')+
     mi('ht','&#x21BB; Reboot',`doReboot('${slot}')`)+
     mi('dng','&#128295; Bootloader',`doBootloader('${slot}')`));
 }
@@ -469,19 +470,6 @@ function doPoweroff(c){
 }
 const halting={};const haltTimers={};
 function _haltClear(c){delete halting[c];clearTimeout(haltTimers[c]);}
-function doHalt(c){
-  if(halting[c])return;
-  halting[c]=true;
-  const cell=document.getElementById('act-'+c);
-  if(!cell)return;
-  cell.innerHTML=
-    `<button class="btn hcut" onclick="doPoweroff('${c}')">Power off</button>`+
-    `<button class="btn hrb" onclick="doReboot('${c}')">Reboot</button>`+
-    `<button class="btn hbl" onclick="doBootloader('${c}')">Bootloader</button>`+
-    `<button class="btn" onclick="closeHalt('${c}')">&#x2715;</button>`;
-  haltTimers[c]=setTimeout(()=>closeHalt(c),4000);
-}
-function closeHalt(c){_haltClear(c);refresh();}
 function doReboot(c){
   _haltClear(c);
   fetch('/api/reboot/'+_api(c),{method:'POST'}).then(()=>setTimeout(refresh,3000));
