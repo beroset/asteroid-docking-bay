@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# "Refuse a check-in unless all regression tests pass" — beroset.
+name: tests
+on:
+  push:
+  pull_request:
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.9", "3.14"]   # floor and current
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install pytest bottle
+      - run: pytest -q

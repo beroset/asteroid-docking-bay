@@ -232,37 +232,25 @@ def _charge_start(args):
             "duration_seconds": charge_config(cfg).charge_duration_minutes * 60}
 
 
-@DISPATCH.op("charge.stop")
-def _charge_stop(args):
-    if ChargeOp.stop(args["loc"], args["port"]):
-        return {"ok": True}
-    return {"ok": False, "error": "no charge running"}
+def _register_lifecycle(op_cls, name, stop_error):
+    """start/stop ops share one shape per Operation subclass; charge.start
+    stays hand-written above for its already-running special case."""
+    if name != "charge":
+        @DISPATCH.op(f"{name}.start")
+        def _start(args):
+            err = op_cls.start(args["loc"], args["port"], load_config())
+            return {"ok": False, "error": err} if err else {"ok": True}
+
+    @DISPATCH.op(f"{name}.stop")
+    def _stop(args):
+        if op_cls.stop(args["loc"], args["port"]):
+            return {"ok": True}
+        return {"ok": False, "error": stop_error}
 
 
-@DISPATCH.op("workbench.start")
-def _workbench_start(args):
-    err = WorkbenchOp.start(args["loc"], args["port"], load_config())
-    return {"ok": False, "error": err} if err else {"ok": True}
-
-
-@DISPATCH.op("workbench.stop")
-def _workbench_stop(args):
-    if WorkbenchOp.stop(args["loc"], args["port"]):
-        return {"ok": True}
-    return {"ok": False, "error": "no workbench active"}
-
-
-@DISPATCH.op("drain.start")
-def _drain_start(args):
-    err = DrainOp.start(args["loc"], args["port"], load_config())
-    return {"ok": False, "error": err} if err else {"ok": True}
-
-
-@DISPATCH.op("drain.stop")
-def _drain_stop(args):
-    if DrainOp.stop(args["loc"], args["port"]):
-        return {"ok": True}
-    return {"ok": False, "error": "no drain test running"}
+_register_lifecycle(ChargeOp, "charge", "no charge running")
+_register_lifecycle(WorkbenchOp, "workbench", "no workbench active")
+_register_lifecycle(DrainOp, "drain", "no drain test running")
 
 
 @DISPATCH.op("drain.history")
