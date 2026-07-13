@@ -23,6 +23,10 @@ _WEB_TEMPLATE = """\
     /* Fixed top bar: left/right pinned so varying string lengths (the
        update stamp) can never reposition their neighbours. */
     .topbar{display:flex;justify-content:space-between;color:#6e7681;font-size:11px;margin-bottom:2px}
+    .alert{color:#d29922;font-size:12px;margin-bottom:6px;min-height:1.2em}
+    .alert a{color:#58a6ff;text-decoration:none}
+    .scrn{cursor:pointer;color:#d29922;margin-left:6px;animation:bpulse 1.4s infinite;-webkit-tap-highlight-color:transparent}
+    .scrn:hover{color:#f0b429}
     .hdr{text-align:center}
     /* Control Center overlay */
     .cn{cursor:pointer;border-bottom:1px dotted #4d5561}
@@ -114,6 +118,7 @@ _WEB_TEMPLATE = """\
 </head>
 <body>
   <div class="topbar"><span id="ts">loading&hellip;</span><span id="ver"></span></div>
+  <div id="alert" class="alert"></div>
   <div class="hdr">
   <h1><span class="hdim">&#x2728;  &#x22C6;  &#x02DA; </span>&#x2726;<span class="htxt">  asteroid-docking-bay  </span>&#x2726;<span class="hdim"> &#x02DA;  &#x22C6;  &#x2728;</span></h1>
   <p class="meta"><a href="#" id="histlink" onclick="toggleHistory();return false" style="color:#388bfd;text-decoration:none">show drain history</a> &nbsp;&middot;&nbsp; <a href="#" id="hidlink" onclick="toggleShowHidden();return false" style="color:#6e7681;text-decoration:none">show all ports</a></p>
@@ -174,6 +179,12 @@ function mkadbrow(p){
 function render(data){
   const tb=document.getElementById('tb');
   const hubs=(data&&data.hubs)||[];
+  // Catch a forgotten screen-force-on (mcetool -D on) anywhere in the fleet:
+  // it drains the watch invisibly, so surface it loudly with a release-all.
+  const forced=[];hubs.forEach(h=>h.ports.forEach(p=>{if(p.screen_forced)forced.push(p.codename||p.serial)}));
+  const al=document.getElementById('alert');
+  al.innerHTML=forced.length?`&#9888; screen forced ON, draining: <b>${forced.map(esc).join(', ')}</b> `+
+    `<a href="#" onclick="releaseAllScreens();return false">release all</a>`:'';
   const lo=(data&&data.thresholds&&data.thresholds.low)||40;
   const hi=(data&&data.thresholds&&data.thresholds.high)||80;
   const floor=(data&&data.drain_floor)||15;
@@ -274,7 +285,7 @@ function render(data){
           `<td class="tc">${tree}</td>` +
           `<td>`+(p.adb==='device'
             ?`<b class="cn" onclick="openCC('${p.serial}','${p.codename}',event)" title="open Control Center">${esc(p.codename)}</b>`
-            :`<b>${esc(p.codename)}</b>`)+`</td>` +
+            :`<b>${esc(p.codename)}</b>`)+(p.screen_forced?`<span class="scrn" onclick="releaseScreen('${p.serial}')" title="screen forced ON (draining) — click to release">&#9728;</span>`:'')+`</td>` +
           `<td>${mkport(p)}</td>` +
           `<td><button class="${pwrCls}"${dp}${noSwT} onclick="${pwrFn}">${pwrLbl}</button><button class="ico"${dp} onclick="doCy('${slot}')" title="Power-cycle port">&#x21BA;</button></td>` +
           `<td>${mksmt(p.smart)}</td>` +
@@ -367,6 +378,8 @@ function renderCC(d){
 }
 function ccBuzz(){fetch('/api/watch/'+encodeURIComponent(ccSerial)+'/buzz',{method:'POST'}).then(()=>toast('buzzed'));}
 function ccScreen(on){fetch('/api/watch/'+encodeURIComponent(ccSerial)+'/screen/'+(on?'on':'off'),{method:'POST'}).then(()=>toast(on?'screen forced on \u2014 release it when done!':'screen released'));}
+function releaseScreen(s){fetch('/api/watch/'+encodeURIComponent(s)+'/screen/off',{method:'POST'}).then(()=>{toast('screen released');refresh()});}
+function releaseAllScreens(){fetch('/api/screen/release-all',{method:'POST'}).then(r=>r.json()).then(d=>{toast('released '+((d.released||[]).length)+' screen(s)');refresh()});}
 function ccToggle(tech,on){
   document.querySelectorAll('.cc-tgl').forEach(b=>b.classList.add('busy'));
   fetch('/api/watch/'+encodeURIComponent(ccSerial)+'/toggle/'+tech+'/'+(on?'on':'off'),{method:'POST'})

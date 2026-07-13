@@ -96,6 +96,19 @@ def _watch_screen(args):
     return {"ok": Watch(args["serial"]).screen(bool(args["on"]))}
 
 
+@DISPATCH.op("screen.release_all")
+def _screen_release_all(args):
+    """Release every on-adb watch's forced-on screen (mcetool -D off) — the
+    panic button for a demo mode left draining a watch. Harmless on watches
+    that were not forced (a no-op release)."""
+    released = []
+    for serial, entry in adb_devices().items():
+        status = entry.get("status") if isinstance(entry, dict) else entry
+        if status == "device" and Watch(serial).screen(False):
+            released.append(serial)
+    return {"ok": True, "released": released}
+
+
 @DISPATCH.op("watch.screenshot")
 def _watch_screenshot(args):
     """JPEG as base64 in the response — keeps the protocol single-channel

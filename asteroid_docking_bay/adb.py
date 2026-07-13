@@ -125,6 +125,30 @@ def get_battery_level(serial: str) -> int | None:
     return None
 
 
+def battery_and_screen(serial: str) -> "tuple[int | None, bool]":
+    """One adb round-trip for the status path: (battery_pct, screen_forced).
+    screen_forced = mce is holding the display on (a `mcetool -D on` demo mode
+    that was never released), which drains the watch on battery. Detected via
+    mce's Blank inhibit != 'disabled' — the anchored grep excludes the
+    unrelated 'Kbd slide blank inhibit' line. Safe on non-mce watches (grep
+    empty -> not forced)."""
+    paths = " ".join(_BATTERY_SYSFS_PATHS)
+    # The whole pipeline must run on the *watch*: _run uses shell=True, so an
+    # unquoted `; mcetool | grep` would be parsed by the host shell (where
+    # mcetool doesn't exist) instead of the device. Double-quoting keeps the
+    # embedded `grep '^Blank inhibit'` single-quotes intact for the watch shell.
+    remote = (f"cat {paths} 2>/dev/null | head -1; echo ---SCR---; "
+              f"mcetool 2>/dev/null | grep '^Blank inhibit'")
+    rc, out, _ = adb_shell(serial, f'"{remote}"')
+    if rc != 0:
+        return None, False
+    bat_part, _, scr_part = out.partition("---SCR---")
+    battery = int(bat_part.strip()) if bat_part.strip().isdigit() else None
+    scr = scr_part.strip().lower()
+    forced = bool(scr) and "disabled" not in scr
+    return battery, forced
+
+
 def _wait_adb_state(serial: str, present: bool, timeout: float) -> bool:
     """Poll `adb devices` until serial is present/absent. True if reached.
 

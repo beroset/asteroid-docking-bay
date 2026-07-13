@@ -61,3 +61,68 @@ def test_adb_state_absent_is_none():
 
 def test_adb_state_plain_string_defensive():
     assert _adb_state({"s": "device"}, "s") == "device"
+
+
+# ── battery_and_screen: parsing + the shell-quoting regression guard ──────────
+#
+# battery_and_screen packs battery + mce demo-mode state into one round-trip.
+# The pipeline (`... | head; echo; mcetool | grep`) MUST run on the watch, not
+# the host: _run uses shell=True, so an unquoted command has the host shell
+# parse the pipes/semicolons and run `mcetool` on the *host* (where it doesn't
+# exist), silently returning (None, False) — a stuck screen that reads "fine".
+# This shipped once and was caught only on hardware; the quoting test pins it.
+
+import asteroid_docking_bay.adb as adbmod
+from asteroid_docking_bay.adb import battery_and_screen
+
+
+def _fake_shell(rc, out):
+    captured = {}
+
+    def shell(serial, cmd, timeout=8):
+        captured["cmd"] = cmd
+        return rc, out, ""
+
+    return shell, captured
+
+
+def test_battery_and_screen_wraps_whole_pipeline_for_device(monkeypatch):
+    shell, captured = _fake_shell(0, "100\n---SCR---\nBlank inhibit: stay-on")
+    monkeypatch.setattr(adbmod, "adb_shell", shell)
+    battery_and_screen("SERIAL")
+    cmd = captured["cmd"]
+    # The remote command is passed as a single quoted arg so the host shell
+    # hands the entire pipeline to the device rather than running mcetool locally.
+    assert cmd.startswith('"') and cmd.endswith('"'), cmd
+    assert "mcetool" in cmd and "|" in cmd
+
+
+def test_battery_and_screen_forced(monkeypatch):
+    shell, _ = _fake_shell(0, "83\n---SCR---\nBlank inhibit:      stay-on")
+    monkeypatch.setattr(adbmod, "adb_shell", shell)
+    assert battery_and_screen("S") == (83, True)
+
+
+def test_battery_and_screen_not_forced(monkeypatch):
+    shell, _ = _fake_shell(0, "83\n---SCR---\nBlank inhibit:      disabled")
+    monkeypatch.setattr(adbmod, "adb_shell", shell)
+    assert battery_and_screen("S") == (83, False)
+
+
+def test_battery_and_screen_no_mce(monkeypatch):
+    # Watches without mce (or where the line is absent) read as not-forced.
+    shell, _ = _fake_shell(0, "50\n---SCR---\n")
+    monkeypatch.setattr(adbmod, "adb_shell", shell)
+    assert battery_and_screen("S") == (50, False)
+
+
+def test_battery_and_screen_no_battery(monkeypatch):
+    shell, _ = _fake_shell(0, "\n---SCR---\nBlank inhibit: stay-on")
+    monkeypatch.setattr(adbmod, "adb_shell", shell)
+    assert battery_and_screen("S") == (None, True)
+
+
+def test_battery_and_screen_rc_fail(monkeypatch):
+    shell, _ = _fake_shell(1, "")
+    monkeypatch.setattr(adbmod, "adb_shell", shell)
+    assert battery_and_screen("S") == (None, False)

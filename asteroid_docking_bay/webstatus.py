@@ -8,7 +8,8 @@ from __future__ import annotations
 import time
 
 from .util import log
-from .adb import _adb_state, adb_devices, get_battery_level, get_watch_codename
+from .adb import (_adb_state, adb_devices, battery_and_screen,
+                  get_watch_codename)
 from .config import _config_lock, find_codename_for_serial, load_config, save_config
 from .usb import (_parse_hub_port_path, _port_device_present, _sysfs_hub_scan,
                   _sysfs_path_to_serial_map, _sysfs_usb_mode, uhubctl_list)
@@ -196,7 +197,10 @@ def _web_status_data(cfg: dict) -> list[dict]:
                 adb_state = "fastboot"
             if adb_state is None and _sysfs_usb_mode(f"{loc}.{port_num}") == "ssh":
                 adb_state = "ssh"
-            battery   = get_battery_level(serial) if adb_state == "device" else None
+            if adb_state == "device":
+                battery, screen_forced = battery_and_screen(serial)
+            else:
+                battery, screen_forced = None, False
             watch_os  = _watch_os_for(serial) if adb_state == "device" else None
             # Powered + hub sees a connection + nothing ever enumerates:
             # flat-battery bootloop or bad cable. Flag after a boot grace.
@@ -249,6 +253,7 @@ def _web_status_data(cfg: dict) -> list[dict]:
                 "slot_loc": loc,
                 "power": power, "smart": smart, "connected": connect,
                 "adb": adb_state, "battery": battery, "os": watch_os,
+                "screen_forced": screen_forced,
                 "not_enumerating": not_enumerating,
                 "flashing": flashing, "empty": False,
                 "charging_active": charging_active,

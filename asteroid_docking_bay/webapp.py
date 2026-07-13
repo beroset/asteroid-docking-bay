@@ -52,6 +52,7 @@ _JSON_ROUTES = [
     ("POST", "/api/workbench/stop/<loc>/<port:int>", "workbench.stop", {},            True),
     ("POST", "/api/drain/<loc>/<port:int>",        "drain.start",     {},             True),
     ("POST", "/api/drain/stop/<loc>/<port:int>",   "drain.stop",      {},             True),
+    ("POST", "/api/screen/release-all",            "screen.release_all", {},          True),
     ("GET",  "/api/drain/history",                 "drain.history",   {},             False),
 ]
 
