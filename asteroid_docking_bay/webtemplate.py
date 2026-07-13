@@ -20,6 +20,11 @@ _WEB_TEMPLATE = """\
     .hdim{color:#30363d;font-weight:400;font-size:16px;letter-spacing:3px}
     .htxt{letter-spacing:3px}
     .meta{color:#6e7681;font-size:11px;margin-bottom:20px}
+    /* Each toggle reserves the width of its longest label (monospace) and
+       centres its text, so swapping "show all ports" <-> "hide avoided ports"
+       cannot re-flow this centred line and shift its neighbour. */
+    .meta a{display:inline-block;text-align:center}
+    #histlink{min-width:18ch}#hidlink{min-width:18ch}
     /* Fixed top bar: left/right pinned so varying string lengths (the
        update stamp) can never reposition their neighbours. */
     .topbar{display:flex;justify-content:space-between;color:#6e7681;font-size:11px;margin-bottom:2px}
@@ -66,7 +71,13 @@ _WEB_TEMPLATE = """\
     .menu-hd{padding:3px 10px 5px;font-size:10px;color:#6e7681}
     #toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(20px);background:#161b22;border:1px solid #30363d;color:#c9d1d9;padding:9px 16px;border-radius:7px;font-size:12px;opacity:0;pointer-events:none;transition:.2s;z-index:200}
     #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
-    table{width:100%;border-collapse:collapse}
+    /* Fixed layout: column widths come from the colgroup, never from cell
+       content — so the per-second Battery countdown and the varying
+       Connection text can never reposition their neighbours (mo's rule).
+       Narrower viewports scroll horizontally rather than collapsing columns. */
+    .tblwrap{overflow-x:auto}
+    table{width:100%;min-width:1100px;table-layout:fixed;border-collapse:collapse}
+    td[id^="act-"]{white-space:nowrap}
     th{color:#6e7681;text-align:left;padding:5px 12px;border-bottom:1px solid #21262d;font-size:11px;text-transform:uppercase;letter-spacing:1px;font-weight:normal}
     th:first-child,td.tc{width:22px;padding-right:0}
     td{padding:7px 12px;border-bottom:1px solid #161b22;vertical-align:middle}
@@ -123,13 +134,20 @@ _WEB_TEMPLATE = """\
   <h1><span class="hdim">&#x2728;  &#x22C6;  &#x02DA; </span>&#x2726;<span class="htxt">  asteroid-docking-bay  </span>&#x2726;<span class="hdim"> &#x02DA;  &#x22C6;  &#x2728;</span></h1>
   <p class="meta"><a href="#" id="histlink" onclick="toggleHistory();return false" style="color:#388bfd;text-decoration:none">show drain history</a> &nbsp;&middot;&nbsp; <a href="#" id="hidlink" onclick="toggleShowHidden();return false" style="color:#6e7681;text-decoration:none">show all ports</a></p>
   </div>
+  <div class="tblwrap">
   <table>
+    <colgroup>
+      <col style="width:24px"><col style="width:120px"><col style="width:130px">
+      <col style="width:120px"><col style="width:64px"><col style="width:130px">
+      <col><col style="width:360px">
+    </colgroup>
     <thead><tr>
       <th></th><th>Watch</th><th>Port</th><th>Power</th><th>Smart</th>
-      <th>Connection</th><th style="min-width:7em">Battery</th><th>Actions</th>
+      <th>Connection</th><th>Battery</th><th>Actions</th>
     </tr></thead>
     <tbody id="tb"></tbody>
   </table>
+  </div>
   <div id="hist" style="display:none"></div>
   <div id="cc" class="cc" onmouseleave="ccLeave()" onmouseenter="ccEnter()"></div>
   <div id="menu" class="menu" onmouseleave="menuLeave()" onmouseenter="menuEnter()"></div>
