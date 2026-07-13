@@ -12,7 +12,8 @@ from .adb import adb_devices_checked, get_battery_level, wait_serial_online
 from .config import (ChargeConfig, FlashConfig, charge_config, find_codename_for_loc_port,
                      find_port_for_codename, find_serial_for_loc_port,
                      is_port_smart, is_slot_smart, load_config)
-from .usb import uhubctl_cycle, uhubctl_get_power, uhubctl_set_power
+from . import fastboot, usb
+from .usb import uhubctl_get_power, uhubctl_set_power
 from .fastboot import (_clear_ssh_known_hosts, _detect_rndis, _download_nightly,
                        _fastboot_devices, _flash_watch, _wait_for_fastboot)
 from .events import (_DRAIN_FLOOR_PCT, _DRAIN_POLL_SEC, event_log,
@@ -152,6 +153,39 @@ def charge_to_target(codename: str, serial: "str | None", charge_cfg: ChargeConf
     log.warning("%s: target %d%% not reached within charge_max_minutes — "
                 "stopping at %d%%", codename, target, level)
     return level
+
+
+def _background_warmer() -> None:
+    """Background daemon feeding the two slow caches so the status path never
+    blocks: usb's port-power cache (a `disable` read is a slow, variable USB
+    query) and fastboot's device list (a multi-second scan). Lives with the
+    operations: whichever process runs the ops (monolithic serve, or the
+    split backend) starts exactly one warmer. Sequential and gently paced:
+    parallel USB reads are what wedges the bus."""
+    while True:
+        try:
+            if time.time() - fastboot._fb_list_cache["ts"] > 60:
+                fastboot._fastboot_poll()
+            cfg = load_config()
+            for hub in cfg.get("hubs", []):
+                loc = hub["location"]
+                for iface in usb._SYSFS_USB.glob(f"{loc}:*"):
+                    for pd in sorted(iface.glob(f"{loc}-port*")):
+                        try:
+                            n = int(pd.name.rsplit("port", 1)[1])
+                        except ValueError:
+                            continue
+                        if (usb._SYSFS_USB / f"{loc}.{n}").exists():
+                            continue            # occupied → known powered
+                        if usb.power_cache.get((loc, n)) is not None:
+                            continue            # still fresh, skip the slow read
+                        v = usb._sysfs_get_power(loc, n)
+                        if v is not None:
+                            usb.power_cache.put((loc, n), v)
+                        time.sleep(0.25)        # gentle on the bus
+        except Exception as e:
+            log.debug("cache warmer: %s", e)
+        time.sleep(5)
 
 
 class Operation:
@@ -440,14 +474,15 @@ class WorkbenchOp(Operation):
         except Exception as exc:
             log.warning("%s: workbench failed: %s", codename, exc)
         finally:
-            try:
-                uhubctl_set_power(loc, port, False)
-            except Exception:
-                pass
+            # Return to true rest: graceful poweroff then cut VBUS, the same as
+            # drain and charge. A raw power cut here left the watch running on
+            # battery, invisibly draining behind an "off" port (audit F8).
+            _end_port(loc, port, find_serial_for_loc_port(cfg, loc, port),
+                      charge_cfg, "workbench ended")
             task["done"] = True
             _workbench_stop.pop(slot, None)
             task_store.unpersist("workbench", slot)
-            log.info("%s: workbench ended — returned to fleet (port off)", codename)
+            log.info("%s: workbench ended — returned to fleet at rest", codename)
 
 
 
@@ -553,7 +588,7 @@ def _resume_persisted_tasks() -> None:
     """On web startup, re-spawn workers for any op that was running when the
     service last stopped, so charge/drain/workbench survive restarts."""
     cfg = load_config()
-    hub_locs = {h["location"] for h in cfg.get("hubs", [])}
+    hub_locs = {hub["location"] for hub in cfg.get("hubs", [])}
     kinds = {op.kind: op for op in (ChargeOp, DrainOp, WorkbenchOp)}
     resumed = 0
     for p in task_store.load_all():

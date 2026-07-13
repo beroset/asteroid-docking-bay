@@ -5,7 +5,6 @@
 
 import logging
 import subprocess
-import sys
 
 log = logging.getLogger("asteroid-docking-bay")
 

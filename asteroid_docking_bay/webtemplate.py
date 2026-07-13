@@ -18,6 +18,9 @@ _WEB_TEMPLATE = """\
     .hdim{color:#30363d;font-weight:400;font-size:16px;letter-spacing:3px}
     .htxt{letter-spacing:3px}
     .meta{color:#6e7681;font-size:11px;margin-bottom:20px}
+    /* Fixed top bar: left/right pinned so varying string lengths (the
+       update stamp) can never reposition their neighbours. */
+    .topbar{display:flex;justify-content:space-between;color:#6e7681;font-size:11px;margin-bottom:2px}
     .hdr{text-align:center}
     /* Control Center overlay */
     .cn{cursor:pointer;border-bottom:1px dotted #4d5561}
@@ -108,9 +111,10 @@ _WEB_TEMPLATE = """\
   </style>
 </head>
 <body>
+  <div class="topbar"><span id="ts">loading&hellip;</span><span id="ver"></span></div>
   <div class="hdr">
   <h1><span class="hdim">&#x2728;  &#x22C6;  &#x02DA; </span>&#x2726;<span class="htxt">  asteroid-docking-bay  </span>&#x2726;<span class="hdim"> &#x02DA;  &#x22C6;  &#x2728;</span></h1>
-  <p class="meta"><a href="#" id="histlink" onclick="toggleHistory();return false" style="color:#388bfd;text-decoration:none">show drain history</a> &nbsp;&middot;&nbsp; <a href="#" id="hidlink" onclick="toggleShowHidden();return false" style="color:#6e7681;text-decoration:none">show all ports</a> &nbsp;&middot;&nbsp; <span id="ts">loading&hellip;</span></p>
+  <p class="meta"><a href="#" id="histlink" onclick="toggleHistory();return false" style="color:#388bfd;text-decoration:none">show drain history</a> &nbsp;&middot;&nbsp; <a href="#" id="hidlink" onclick="toggleShowHidden();return false" style="color:#6e7681;text-decoration:none">show all ports</a></p>
   </div>
   <table>
     <thead><tr>
@@ -435,7 +439,7 @@ document.addEventListener('click',e=>{
   const m=document.getElementById('menu');if(m.style.display==='block'&&!m.contains(e.target))closeMenu();
 });
 function refresh(){
-  fetch('/api/status').then(r=>r.json()).then(d=>{render(d);document.getElementById('ts').textContent='updated '+new Date().toLocaleTimeString()}).catch(()=>{document.getElementById('ts').textContent='connection error'});
+  fetch('/api/status').then(r=>r.json()).then(d=>{render(d);document.getElementById('ts').textContent='updated '+new Date().toLocaleTimeString();if(d.version)document.getElementById('ver').textContent='v'+d.version}).catch(()=>{document.getElementById('ts').textContent='connection error'});
 }
 function _api(s){return s.replace(':','/');}
 function doRefresh(c){
@@ -454,13 +458,11 @@ function doOn(c){
   });
 }
 function doOff(c){
-  _haltClear(c);
   fetch('/api/off/'+_api(c),{method:'POST'}).then(rr=>rr.json()).then(d=>{
     if(d.confirmed===false)_pwrFlash(c);else refresh();
   });
 }
 function doPoweroff(c){
-  _haltClear(c);
   fetch('/api/poweroff/'+_api(c),{method:'POST'}).then(rr=>rr.json()).then(d=>{
     // adb_shutdown false = the watch never got the command (it keeps
     // running on battery even though the port is now off) — flag it.
@@ -468,14 +470,10 @@ function doPoweroff(c){
     else setTimeout(refresh,4000);
   });
 }
-const halting={};const haltTimers={};
-function _haltClear(c){delete halting[c];clearTimeout(haltTimers[c]);}
 function doReboot(c){
-  _haltClear(c);
   fetch('/api/reboot/'+_api(c),{method:'POST'}).then(()=>setTimeout(refresh,3000));
 }
 function doBootloader(c){
-  _haltClear(c);
   fetch('/api/bootloader/'+_api(c),{method:'POST'}).then(()=>setTimeout(refresh,3000));
 }
 function doCy(c){

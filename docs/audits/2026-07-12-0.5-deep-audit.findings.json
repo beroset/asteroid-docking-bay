@@ -1,0 +1,138 @@
+{
+ "meta": {
+  "title": "0.5-containers deep audit (second pass)",
+  "started": "2026-07-12 (overnight autonomous run)",
+  "branch": "0.5-containers",
+  "branch_tip_at_start": "f260fe7",
+  "mandate": "surface undetected regressions (stale callers, hard-to-detect issues only found in real testing); build test suites; report survives compaction; fixes for 0.5-introduced regressions go on the branch, everything else filed for 0.6 after beroset's review",
+  "hardware_rules": "lenok (1-2.3.3:1) STAYS OFF (weak battery); skipjack on 1-2:1 is the sanctioned live watch; prod 0.4 web service untouched",
+  "status": "COMPLETE \u2014 branch tip b1a0a1c, 7 audit commits, 94 tests"
+ },
+ "findings": [
+  {
+   "id": "F1",
+   "sev": "trivial",
+   "what": "ops.py imported uhubctl_cycle unused (leftover from 0.4 lazy-import change)",
+   "status": "FIXED 2c9ddb3"
+  },
+  {
+   "id": "F2",
+   "sev": "trivial",
+   "what": "util.py imported sys unused",
+   "status": "FIXED 4743447"
+  },
+  {
+   "id": "F3",
+   "sev": "minor-structural",
+   "what": "_background_warmer lived in webapp; serve-backend imported the frontend module, breaking ARCHITECTURE.md's stated seam rationale",
+   "status": "FIXED 2c9ddb3 \u2014 moved to ops (simplifies documented seams 2->1); docs updated"
+  },
+  {
+   "id": "F4",
+   "sev": "docs",
+   "what": "usb.py comment referenced pre-0.4 name _power_cache_warmer",
+   "status": "FIXED 2c9ddb3"
+  },
+  {
+   "id": "F5",
+   "sev": "minor",
+   "what": "webapp load_config went dead during the warmer move \u2014 caught by the NEW static test on its first run (proof of test value)",
+   "status": "FIXED 4743447"
+  },
+  {
+   "id": "F6",
+   "sev": "ux-0.6",
+   "what": "split mode: /api/status returns {ok:false,error:'backend unreachable'} when backend is down \u2014 the browser render() expects .hubs and would freeze; needs a 'backend unreachable' banner in the UI",
+   "status": "DEFERRED 0.6"
+  },
+  {
+   "id": "F7",
+   "sev": "minor",
+   "what": "serve-backend died with raw traceback on occupied port (EADDRINUSE)",
+   "status": "FIXED on branch (friendly message like serve)"
+  },
+  {
+   "id": "F8",
+   "sev": "IMPORTANT-semantic",
+   "what": "WorkbenchOp end/finally cuts the port WITHOUT graceful poweroff (unlike drain/charge via _end_port) \u2014 'End checkout' leaves the watch RUNNING ON BATTERY, silently draining, while the UI shows the port off. Discovered live: skipjack was battery-running invisible after workbench stop. Fix candidate (0.6, needs mo's behavior decision): workbench finally should _end_port like drain",
+   "status": "DEFERRED 0.6 (behavior decision)"
+  },
+  {
+   "id": "F9",
+   "sev": "reference",
+   "what": "`uptime` COMMAND prints garbage on skipjack ('up 109 days'); /proc/uptime is sane \u2014 the uptime-verifies-reboot ground truth must use /proc/uptime",
+   "status": "memory updated"
+  },
+  {
+   "id": "F10",
+   "sev": "info",
+   "what": "unexplained cold boot of skipjack ~4min before poweroff experiment (during onboard PPPS window) \u2014 possible VBUS-transition reboot quirk on TicWatch C2+; watch for recurrence",
+   "status": "OBSERVED once"
+  },
+  {
+   "id": "F11",
+   "sev": "investigation-closed-partial",
+   "what": "mass-poweroff false-confirm night: tonight proven that (a) endpoint fields are honest, (b) solo delivered-halt REALLY halts skipjack (37s time-to-adb + /proc/uptime 21.7s = cold boot), (c) adb_shutdown:false happens when a prior op (e.g. workbench end, F8!) left the watch battery-running off-adb. The mass scenario (7x adb_shutdown:true yet watches stayed on) needs a MULTI-WATCH repro with per-watch /proc/uptime forensics \u2014 outside tonight's one-watch sanction",
+   "status": "DEFERRED 0.6 with protocol"
+  },
+  {
+   "id": "F12",
+   "sev": "IMPORTANT-container",
+   "what": "quadlet combined ReadOnly=true with default secret mount \u2014 podman cannot create /run/secrets on a read-only rootfs; the hardened frontend NEVER STARTED. Would have failed on beroset's first trial",
+   "status": "FIXED 14a7829 (secret type=mount into /tmp tmpfs; hardened container verified serving)"
+  },
+  {
+   "id": "F13",
+   "sev": "IMPORTANT-design",
+   "what": "host adb server unreachable from containers: adb binds 127.0.0.1; host.containers.internal refused (adb + raw TCP probes). Beroset's reviewed preference (host adb) is impossible without `adb -a` (LAN exposure, against the split's purpose). Backend now runs its own adb server; ADB_SERVER_SOCKET escape hatch documented. RELAY TO BEROSET \u2014 this contradicts his review answer with evidence",
+   "status": "FIXED 4ef63cc"
+  },
+  {
+   "id": "F14",
+   "sev": "minor-container",
+   "what": "both containers ignored SIGTERM as PID 1 (no default dispositions) \u2014 every stop burned the 10s kill timeout",
+   "status": "FIXED b1a0a1c (explicit handlers; stop now ~450ms)"
+  },
+  {
+   "id": "F15",
+   "sev": "info",
+   "what": "TokenGate shutdown + systemd Restart=on-failure = restart loop under sustained attack (each cycle logs + re-shuts). Acceptable (RestartSec throttles, unit visibly failing) but worth a note in beroset's trial",
+   "status": "documented"
+  }
+ ],
+ "fixed_on_branch": [],
+ "deferred_to_0.6": [
+  "F6: frontend 'backend unreachable' banner (UI chokes on error envelope as status)",
+  "F8: workbench end leaves watch running on battery (no graceful poweroff, unlike drain/charge) \u2014 needs mo's behavior decision, then _end_port in the finally",
+  "F11: mass-poweroff repro protocol \u2014 power 4+ watches, mass poweroff, per-watch /proc/uptime forensics after re-power to separate halt-delivery vs halt-effectiveness vs battery-running-invisible (F8 may be a big part of the original observation)",
+  "F10: watch for recurrence of unexplained TicWatch C2+ cold boot on VBUS transitions",
+  "frontend-wiring-test-gap partially closed by test_webui.py; headless-browser click test still open"
+ ],
+ "test_suites_added": [
+  "test_static.py (symtable undefined-names + unused-imports, every module)",
+  "test_webui.py (onclick handlers defined, getElementById targets exist, JS fetch paths hit routes, node --check) \u2014 each check validated against planted historical bugs",
+  "test_rpcops.py (frontend ops all registered, allow-list IS the documented contract, handler behavior w/ mocked hardware)"
+ ],
+ "verified_ok": [
+  "cache-bust parity: all 26 routes identical main vs 0.5",
+  "webtemplate byte-identical to main (hotfixes flowed correctly)",
+  "no stale references to moved names (_sse_*_gen, _QueueHandler) anywhere",
+  "name-resolution sweep clean (known nested-scope false positives only)",
+  "94 tests green after suite additions",
+  "tri-mode status equality: 0.5-mono == 0.5-split byte-exact; v0.4 diffs fully explained (cold PowerCache + prod in-memory drain residue); cache warms in <75s",
+  "CC stable fields identical across v0.4/mono/split on live skipjack",
+  "screenshot via split: real 65KB JPEG through base64/RPC",
+  "screen on->off, settime(Europe/Berlin), notify, buzz, wifi toggle round-trip (state restored) all green over RPC",
+  "onboard stream survives client disconnect at 8s; op completed server-side (config updated, PPPS ran)",
+  "split-mode kill/resume: backend killed mid-workbench -> clean error envelope -> restart -> auto-resume -> stop -> 0 residue",
+  "12+12 concurrent status requests: all 200, both modes",
+  "TokenGate live: 41 rejections logged, escalating backoff (~19.5s/40), listener shutdown at threshold, process exit, no oracle on the wire",
+  "clean poweroff with adb alive = genuine halt (cold-boot proven via /proc/uptime)",
+  "teardown: fleet at rest, lenok untouched all night, prod v0.4 active throughout",
+  "hardened frontend container (read-only, cap-drop ALL, non-root, no volumes) serves after F12 fix",
+  "in-container adb server starts cleanly (rc=0, empty device list)",
+  "token rotation procedure end-to-end: rm secret -> new secret -> restart -> stack up on v2",
+  "container SIGTERM stop: 449ms after F14 fix",
+  "94 tests green at branch tip b1a0a1c"
+ ]
+}

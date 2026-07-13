@@ -82,3 +82,32 @@ def test_resumed_charge_sheds_stale_blind_countdown(monkeypatch):
     assert persists, "target mode must persist its state"
     assert all("charge_end_ts" not in p for p in persists)
     assert _charge_tasks.pop(slot)["done"] is True
+
+
+def test_workbench_end_powers_down_gracefully(monkeypatch):
+    """Audit F8: ending a workbench must _end_port (graceful poweroff then
+    cut), not a raw power cut that leaves the watch running on battery."""
+    import threading
+    from asteroid_docking_bay import ops
+    from asteroid_docking_bay.tasks import _workbench_stop, _workbench_tasks
+
+    slot = "8-8:1"
+    _workbench_tasks[slot] = {"done": False}
+    stop = _workbench_stop[slot] = threading.Event()
+    stop.set()                       # make run() exit its loop immediately
+
+    ended = {}
+    monkeypatch.setattr(ops, "_end_port",
+                        lambda loc, port, serial, cfg, reason: ended.update(
+                            loc=loc, port=port, reason=reason))
+    monkeypatch.setattr(ops, "uhubctl_set_power", lambda *a, **k: True)
+    monkeypatch.setattr(ops, "wait_serial_online", lambda *a, **k: True)
+    monkeypatch.setattr(ops, "get_battery_level", lambda s: 60)
+    monkeypatch.setattr(ops, "find_serial_for_loc_port", lambda c, l, p: "SER")
+    monkeypatch.setattr(ops, "find_codename_for_loc_port", lambda c, l, p: "skipjack")
+    monkeypatch.setattr(ops, "_ensure_port_powered", lambda *a, **k: None)
+
+    ops.WorkbenchOp(slot, "8-8", 1, {"charge": {}}).run()
+
+    assert ended.get("loc") == "8-8" and ended.get("reason") == "workbench ended"
+    assert _workbench_tasks.pop(slot)["done"] is True

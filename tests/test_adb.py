@@ -13,8 +13,8 @@ TKQ7N17406001852       offline usb:1-2.3.3.3 transport_id:11
 
 
 def test_parse_full_line():
-    devs = parse_adb_devices(SAMPLE)
-    lenok = devs["411KPCA0121867"]
+    devices = parse_adb_devices(SAMPLE)
+    lenok = devices["411KPCA0121867"]
     assert lenok["status"] == "device"
     assert lenok["usb"] == "1-2.3.3.1"
     assert lenok["product"] == "lenok"
@@ -22,9 +22,9 @@ def test_parse_full_line():
 
 
 def test_parse_states():
-    devs = parse_adb_devices(SAMPLE)
-    assert devs["TKQ7N17406001852"]["status"] == "offline"
-    assert devs["510KPWQ0314577"]["status"] == "unauthorized"
+    devices = parse_adb_devices(SAMPLE)
+    assert devices["TKQ7N17406001852"]["status"] == "offline"
+    assert devices["510KPWQ0314577"]["status"] == "unauthorized"
 
 
 def test_parse_empty_list():
@@ -39,21 +39,21 @@ def test_parse_ignores_noise():
              "* daemon started successfully\n"
              "List of devices attached\n"
              "S1 device usb:1-2\n")
-    devs = parse_adb_devices(noisy)
-    assert list(devs) == ["S1"]
+    devices = parse_adb_devices(noisy)
+    assert list(devices) == ["S1"]
     # Stray short lines after the header are skipped, not crashed on.
     assert parse_adb_devices("List of devices attached\nX\n") == {}
 
 
 def test_adb_state_present():
-    devs = parse_adb_devices(SAMPLE)
-    assert _adb_state(devs, "411KPCA0121867") == "device"
-    assert _adb_state(devs, "TKQ7N17406001852") == "offline"
+    devices = parse_adb_devices(SAMPLE)
+    assert _adb_state(devices, "411KPCA0121867") == "device"
+    assert _adb_state(devices, "TKQ7N17406001852") == "offline"
 
 
 def test_adb_state_absent_is_none():
     # The normal "watch not present yet / went offline" case: must be
-    # None-safe, never raise (this crashed once as devs.get(x)['status']).
+    # None-safe, never raise (this crashed once as devices.get(x)['status']).
     assert _adb_state({}, "nope") is None
     assert _adb_state(parse_adb_devices(SAMPLE), "unknown-serial") is None
     assert _adb_state({}, None) is None

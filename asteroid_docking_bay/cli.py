@@ -30,6 +30,38 @@ def cmd_serve(args, cfg: dict):
     serve(args, cfg)
 
 
+def cmd_serve_backend(args, cfg: dict):
+    """Start the RPC backend: the host-touching half of the container split.
+    Owns the operations (resume + cache warmer) and serves the op table over
+    a token-gated socket. No bottle dependency."""
+    import signal
+    import threading
+    from .rpc import RpcServer, load_token
+    from . import rpcops
+    from .usb import _sysfs_switch_mode
+    from .ops import _background_warmer, _resume_persisted_tasks
+
+    token = load_token(args.token_file)
+    if not token:
+        log.error("serve-backend requires a token: pass --token-file PATH "
+                  "or set ADB_RPC_TOKEN")
+        sys.exit(1)
+
+    # As container PID 1 the default signal dispositions don't apply —
+    # without a handler, SIGTERM is ignored and every stop waits for the
+    # runtime's kill timeout.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+
+    _resume_persisted_tasks()
+    threading.Thread(target=_background_warmer, daemon=True).start()
+    log.info("Port switching: %s", _sysfs_switch_mode(cfg))
+    log.info("RPC backend starting on %s:%d", args.host, args.port)
+    try:
+        RpcServer(args.host, args.port, token, rpcops.DISPATCH).serve_forever()
+    except KeyboardInterrupt:
+        log.info("RPC backend stopped.")
+
+
 def cmd_status(args, cfg: dict):
     devices = adb_devices()
     rows: list[tuple] = []
@@ -395,7 +427,7 @@ def cmd_map(args, cfg: dict):
     # USB 3.0 companion buses expose the same physical ports as their USB 2.0
     # counterparts. Watches are USB 2.0 devices and only enumerate on the 2.x bus.
     # Scanning 3.x hubs causes double-detection and incorrect PPPS results.
-    hubs = [h for h in hubs if ", USB 3." not in h.get("description", "")]
+    hubs = [hub for hub in hubs if ", USB 3." not in hub.get("description", "")]
     if not hubs:
         print("No USB hubs found by uhubctl.")
         print("See udev/70-asteroid-docking-bay.rules for permission setup.")
@@ -517,15 +549,15 @@ def cmd_map(args, cfg: dict):
             "port_serials": port_serials,
         })
 
-    touched_locs = {h["location"] for h in new_hubs}
-    new_codenames = {cn for h in new_hubs for cn in h.get("ports", {}).values()}
+    touched_locs = {hub["location"] for hub in new_hubs}
+    new_codenames = {codename for hub in new_hubs for codename in hub.get("ports", {}).values()}
     # Preserve old hub entries only when they contain codenames NOT found in this
     # scan.  An old entry whose watches all reappeared at a new location is stale
     # (hub moved to a different USB path) and should be dropped to avoid duplicates.
     cfg["hubs"] = new_hubs + [
-        h for h in cfg.get("hubs", [])
-        if h["location"] not in touched_locs
-        and not any(cn in new_codenames for cn in h.get("ports", {}).values())
+        hub for hub in cfg.get("hubs", [])
+        if hub["location"] not in touched_locs
+        and not any(codename in new_codenames for codename in hub.get("ports", {}).values())
     ]
     save_config(cfg)
 
@@ -702,6 +734,27 @@ def main():
         "--port", type=int, default=8080, metavar="PORT",
         help="port to listen on (default: 8080)",
     )
+    p_sv.add_argument(
+        "--backend", metavar="HOST:PORT",
+        help="proxy all operations to a remote RPC backend (split mode) "
+             "instead of running them in-process",
+    )
+    p_sv.add_argument(
+        "--token-file", metavar="PATH",
+        help="shared secret for --backend (else the ADB_RPC_TOKEN env var)",
+    )
+
+    p_sb = sub.add_parser(
+        "serve-backend",
+        help="start the RPC backend (host-touching half of the container split)",
+    )
+    p_sb.add_argument("--host", default="127.0.0.1", metavar="HOST",
+                      help="bind address (default: 127.0.0.1)")
+    p_sb.add_argument("--port", type=int, default=8099, metavar="PORT",
+                      help="RPC port to listen on (default: 8099)")
+    p_sb.add_argument("--token-file", metavar="PATH",
+                      help="file holding the shared secret token "
+                           "(else read from the ADB_RPC_TOKEN env var)")
 
     p_fa = sub.add_parser(
         "flash",
@@ -744,6 +797,7 @@ def main():
         "discover": cmd_discover,
         "flash": cmd_flash_all,
         "serve": cmd_serve,
+        "serve-backend": cmd_serve_backend,
     }
 
     try:

@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# The host-touching half of the split (see docs/CONTAINERS.md): serves the op
+# table over the token-gated RPC socket, needs USB device + sysfs access.
+FROM python:3.12-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        uhubctl android-tools-adb android-tools-fastboot wget \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY asteroid_docking_bay /app/asteroid_docking_bay
+COPY bin/asteroid-docking-bay /app/bin/asteroid-docking-bay
+WORKDIR /app
+ENV PYTHONPATH=/app
+
+EXPOSE 8099
+ENTRYPOINT ["python3", "bin/asteroid-docking-bay", "serve-backend", \
+            "--host", "0.0.0.0", "--port", "8099", \
+            "--token-file", "/run/secrets/adb-token"]

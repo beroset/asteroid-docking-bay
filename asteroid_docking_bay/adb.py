@@ -53,13 +53,13 @@ def adb_devices() -> dict[str, str | list[str]]:
     return adb_devices_checked() or {}
 
 
-def _adb_state(devs: dict, serial: "str | None") -> "str | None":
+def _adb_state(devices: dict, serial: "str | None") -> "str | None":
     """State string ('device'/'offline'/…) for a serial in an adb_devices() map,
     or None if the serial isn't present. None-safe: adb_devices() values are now
-    per-device dicts (`{"status": …, "usb": …}`), and `devs.get(serial)` is None
+    per-device dicts (`{"status": …, "usb": …}`), and `devices.get(serial)` is None
     for an absent/offline watch — `None['status']` would raise, so callers go
     through here instead of indexing the entry directly."""
-    entry = devs.get(serial)
+    entry = devices.get(serial)
     if isinstance(entry, dict):
         return entry.get("status")
     return entry  # None, or a plain string (defensive)
@@ -133,8 +133,8 @@ def _wait_adb_state(serial: str, present: bool, timeout: float) -> bool:
     """
     deadline = time.time() + timeout
     while True:
-        devs = adb_devices_checked()
-        if devs is not None and ((_adb_state(devs, serial) == "device") is present):
+        devices = adb_devices_checked()
+        if devices is not None and ((_adb_state(devices, serial) == "device") is present):
             return True
         if time.time() >= deadline:
             return False
@@ -187,8 +187,8 @@ def wait_serial_online(serial: str, wait_secs: int, retries: int,
     attempts = 2 if recover_loc_port else 1
     for attempt in range(attempts):
         for _ in range(retries):
-            devs = adb_devices_checked()
-            if devs is not None and _adb_state(devs, serial) == "device":
+            devices = adb_devices_checked()
+            if devices is not None and _adb_state(devices, serial) == "device":
                 return True
             if stop_event is not None:
                 if stop_event.wait(timeout=wait_secs):

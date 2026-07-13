@@ -48,13 +48,14 @@ util -> adb -> config -> usb -> fastboot/events/tasks -> watchctl -> ops
      -> webstatus -> webapp -> cli
 ```
 
-Two deliberate seams keep that acyclic:
+One deliberate seam keeps that acyclic:
 
 - `adb.wait_serial_online()` can power-cycle a port as enumeration recovery;
   it imports `usb` lazily inside the function rather than at module level.
-- The background cache warmer needs both `usb` (port power cache) and
-  `fastboot` (device poll), so it lives in `webapp`, the only place it is
-  started.
+
+The background cache warmer (needs both `usb` and `fastboot`) lives in
+`ops`, with the operations: whichever process runs the ops — monolithic
+serve, or the split backend — starts exactly one warmer.
 
 ## Where the classes are — and where they aren't
 

@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# The exposed half of the split (see docs/CONTAINERS.md): bottle + the UI,
+# proxies every op to the backend over RPC. No devices, no volumes, no
+# privileges — a compromise here yields only the ops the UI already offers.
+FROM python:3.12-slim
+
+RUN pip install --no-cache-dir bottle
+
+COPY asteroid_docking_bay /app/asteroid_docking_bay
+COPY bin/asteroid-docking-bay /app/bin/asteroid-docking-bay
+WORKDIR /app
+ENV PYTHONPATH=/app
+
+EXPOSE 8080
+ENTRYPOINT ["python3", "bin/asteroid-docking-bay", "serve", \
+            "--host", "0.0.0.0", "--port", "8080", \
+            "--backend", "adb-backend:8099", \
+            "--token-file", "/tmp/adb-token"]

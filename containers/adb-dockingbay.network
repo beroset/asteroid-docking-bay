@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# The network the two containers share. It is NOT marked Internal: the
+# backend needs host.containers.internal to reach the host adb server, and
+# the frontend publishes a port. Isolation of the backend comes from simply
+# never publishing its RPC port (reachable only on this container network)
+# plus the token gate — not from network-level egress blocking.
+[Network]
+Label=app=asteroid-docking-bay
