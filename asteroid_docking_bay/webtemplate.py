@@ -28,6 +28,8 @@ _WEB_TEMPLATE = """\
     /* Fixed top bar: left/right pinned so varying string lengths (the
        update stamp) can never reposition their neighbours. */
     .topbar{display:flex;justify-content:space-between;color:#6e7681;font-size:11px;margin-bottom:2px}
+    .berr{color:#f85149;font-size:12px;margin-bottom:6px}
+    .berr:empty{display:none}
     .alert{color:#d29922;font-size:12px;margin-bottom:6px;min-height:1.2em}
     .alert a{color:#58a6ff;text-decoration:none}
     .scrn{cursor:pointer;color:#d29922;margin-left:6px;animation:bpulse 1.4s infinite;-webkit-tap-highlight-color:transparent}
@@ -129,6 +131,7 @@ _WEB_TEMPLATE = """\
 </head>
 <body>
   <div class="topbar"><span id="ts">loading&hellip;</span><span id="ver"></span></div>
+  <div id="berr" class="berr"></div>
   <div id="alert" class="alert"></div>
   <div class="hdr">
   <h1><span class="hdim">&#x2728;  &#x22C6;  &#x02DA; </span>&#x2726;<span class="htxt">  asteroid-docking-bay  </span>&#x2726;<span class="hdim"> &#x02DA;  &#x22C6;  &#x2728;</span></h1>
@@ -471,8 +474,21 @@ document.addEventListener('click',e=>{
   const cc=document.getElementById('cc');if(cc.style.display==='block'&&!cc.contains(e.target)&&!e.target.classList.contains('cn'))closeCC();
   const m=document.getElementById('menu');if(m.style.display==='block'&&!m.contains(e.target))closeMenu();
 });
+function showBackendError(msg){
+  // Split mode: the page is served but the backend RPC failed, so status.get
+  // came back as an {ok:false,error} envelope with no hubs. Keep the last table
+  // on screen (don't blank it) and say clearly that it's stale.
+  const b=document.getElementById('berr');
+  if(b)b.innerHTML='&#9888; backend unreachable &mdash; showing last known state <span class="dim">'+esc(msg||'')+'</span>';
+  document.getElementById('ts').textContent='stale (backend down)';
+}
+function clearBackendError(){const b=document.getElementById('berr');if(b&&b.innerHTML)b.innerHTML='';}
 function refresh(){
-  fetch('/api/status').then(r=>r.json()).then(d=>{render(d);document.getElementById('ts').textContent='updated '+new Date().toLocaleTimeString();if(d.version)document.getElementById('ver').textContent='v'+d.version}).catch(()=>{document.getElementById('ts').textContent='connection error'});
+  fetch('/api/status').then(r=>r.json()).then(d=>{
+    if(d&&d.error&&!d.hubs){showBackendError(d.error);return;}
+    clearBackendError();
+    render(d);document.getElementById('ts').textContent='updated '+new Date().toLocaleTimeString();if(d.version)document.getElementById('ver').textContent='v'+d.version
+  }).catch(()=>{document.getElementById('ts').textContent='connection error'});
 }
 function _api(s){return s.replace(':','/');}
 function doRefresh(c){
