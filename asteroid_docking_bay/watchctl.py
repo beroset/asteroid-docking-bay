@@ -133,6 +133,7 @@ echo "net_rx=$(cat /sys/class/net/wlan0/statistics/rx_bytes 2>/dev/null)"
 echo "net_tx=$(cat /sys/class/net/wlan0/statistics/tx_bytes 2>/dev/null)"
 echo "btcount=$(hcitool con 2>/dev/null | grep -c "<")"
 echo "btmac=$(hcitool con 2>/dev/null | grep -o "[0-9A-F:]\{17\}" | head -1)"
+echo "blank_inhibit=$(mcetool 2>/dev/null | grep "^Blank inhibit" | cut -d: -f2 | tr -d " ")"
 echo "--connman--"
 connmanctl technologies 2>/dev/null'''
 
@@ -190,6 +191,11 @@ class Watch:
         info["serial"] = self.serial
         info["wifi"] = tech.get("wifi")
         info["bluetooth"] = tech.get("bluetooth")
+        # mce demo mode (mcetool -D on) forces the screen on and drains the
+        # watch. Blank inhibit is 'disabled' normally, 'stay-on' when forced;
+        # empty on watches without mce. Surface it as the Screen toggle's state.
+        bi = info.get("blank_inhibit", "").lower()
+        info["screen_forced"] = bool(bi) and bi != "disabled"
         return info
 
     def toggle(self, tech: str, on: bool) -> bool:
