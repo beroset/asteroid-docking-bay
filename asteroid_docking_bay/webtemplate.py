@@ -93,6 +93,11 @@ _WEB_TEMPLATE = """\
     .on{color:#3fb950}.off{color:#6e7681}.warn{color:#d29922}.err{color:#f85149}.dim{color:#6e7681}
     .dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px;vertical-align:middle}
     .don{background:#3fb950}.doff{background:#30363d}
+    /* Connection-column badges for the abnormal USB modes, so a watch sitting
+       in the bootloader or SSH/developer mode stands out from a normal ADB row. */
+    .cbadge{display:inline-block;padding:1px 7px;border-radius:10px;font-size:11px;border:1px solid;vertical-align:middle}
+    .cbadge.fb{border-color:#f0883e;color:#f0883e}
+    .cbadge.ssh{border-color:#d29922;color:#d29922}
     .tgl{display:inline-flex;align-items:center;gap:4px;background:none;border:1px solid;padding:3px 9px 3px 6px;border-radius:20px;cursor:pointer;font:12px monospace;vertical-align:middle;margin-right:3px;touch-action:manipulation;-webkit-tap-highlight-color:transparent;transition:background .12s,transform .12s}
     .tgl-on{border-color:#3fb950;color:#3fb950}.tgl-on:hover{background:#0f2a18}
     .tgl-off{border-color:#30363d;color:#6e7681}.tgl-off:hover{background:#161b22}
@@ -185,8 +190,8 @@ function mkadb(adb,fbprod,os){
     if(os&&os!=='unknown')return `<span class="on" title="${esc(os)} on ADB">ADB <span class="dim">${esc(os)}</span></span>`;
     return '<span class="on">ADB</span>';
   }
-  if(adb==='ssh')return `${os==='asteroidos'?AOSLOGO:''}<span class="warn" title="watch is in SSH/developer USB mode — reachable over SSH, no ADB functions">SSH</span>`;
-  if(adb==='fastboot'){const l=fbprod?`fastboot: ${esc(fbprod)}`:'fastboot';return `<span class="warn">${l}</span>`;}
+  if(adb==='ssh')return `${os==='asteroidos'?AOSLOGO:''}<span class="cbadge ssh" title="watch is in SSH/developer USB mode — reachable over SSH, no ADB functions">SSH</span>`;
+  if(adb==='fastboot'){const l=fbprod?`fastboot: ${esc(fbprod)}`:'fastboot';return `<span class="cbadge fb" title="watch is in the bootloader (fastboot) — flash/backup only, no ADB or watch functions">&#9889; ${l}</span>`;}
   if(adb)return `<span class="dim">${esc(adb)}</span>`;
   return '<span class="dim">&mdash;</span>';
 }

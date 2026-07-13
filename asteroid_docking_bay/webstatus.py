@@ -8,8 +8,8 @@ from __future__ import annotations
 import time
 
 from .util import log
-from .adb import (_adb_state, adb_devices, battery_and_screen,
-                  get_watch_codename)
+from .adb import (_adb_state, _resolve_conn_state, adb_devices,
+                  battery_and_screen, get_watch_codename)
 from .config import _config_lock, find_codename_for_serial, load_config, save_config
 from .usb import (_parse_hub_port_path, _port_device_present, _sysfs_hub_scan,
                   _sysfs_path_to_serial_map, _sysfs_usb_mode, uhubctl_list)
@@ -192,11 +192,10 @@ def _web_status_data(cfg: dict) -> list[dict]:
                 serial = (next((x for x in serials_for_codename if x in devices), None)
                           or next((x for x in serials_for_codename if x in fb_devices), None)
                           or (serials_for_codename[0] if serials_for_codename else None))
-            adb_state = _adb_state(devices, serial) if serial else None
-            if adb_state is None and serial and serial in fb_devices:
-                adb_state = "fastboot"
-            if adb_state is None and _sysfs_usb_mode(f"{loc}.{port_num}") == "ssh":
-                adb_state = "ssh"
+            adb_state = _resolve_conn_state(
+                _adb_state(devices, serial) if serial else None,
+                bool(serial and serial in fb_devices),
+                lambda: _sysfs_usb_mode(f"{loc}.{port_num}") == "ssh")
             if adb_state == "device":
                 battery, screen_forced = battery_and_screen(serial)
             else:
@@ -284,10 +283,10 @@ def _web_status_data(cfg: dict) -> list[dict]:
                 # power state is free from the single full scan above
                 "power": phys.get("power", {}).get(port_num),
                 "smart": port_smart.get(str(port_num)),
-                "adb": (_adb_state(devices, adb_serial) if adb_serial
-                        else ("fastboot" if fb_serial
-                              else ("ssh" if _sysfs_usb_mode(sysfs_path) == "ssh"
-                                    else None))),
+                "adb": _resolve_conn_state(
+                    _adb_state(devices, adb_serial) if adb_serial else None,
+                    bool(fb_serial),
+                    lambda: _sysfs_usb_mode(sysfs_path) == "ssh"),
                 "os": (_watch_os_for(adb_serial)
                        if adb_serial and _adb_state(devices, adb_serial) == "device" else None),
                 "battery": None,

@@ -67,6 +67,24 @@ def _adb_state(devices: dict, serial: "str | None") -> "str | None":
     return entry  # None, or a plain string (defensive)
 
 
+def _resolve_conn_state(adb_status: "str | None", in_fastboot: bool,
+                        ssh_probe) -> "str | None":
+    """Row connection state, in priority order: a live adb status (device/
+    offline/…) wins; else 'fastboot' if the watch is in the bootloader; else
+    'ssh' if it enumerated in SSH/developer USB mode; else None (nothing there).
+
+    ssh_probe is a zero-arg callable, evaluated only when the cheaper checks
+    fail — it does a sysfs read, and the status builder must not pay for it on
+    every already-on-adb port. Pure given its inputs — see tests."""
+    if adb_status is not None:
+        return adb_status
+    if in_fastboot:
+        return "fastboot"
+    if ssh_probe():
+        return "ssh"
+    return None
+
+
 def adb_shell(serial: str, cmd: str, timeout: int = 8) -> tuple[int, str, str]:
     # Always bounded: a sluggish/half-attached watch must never stall a
     # status refresh for minutes.

@@ -126,3 +126,40 @@ def test_battery_and_screen_rc_fail(monkeypatch):
     shell, _ = _fake_shell(1, "")
     monkeypatch.setattr(adbmod, "adb_shell", shell)
     assert battery_and_screen("S") == (None, False)
+
+
+# ── _resolve_conn_state: the row connection-state priority (fastboot/ssh) ──────
+
+from asteroid_docking_bay.adb import _resolve_conn_state
+
+
+def test_conn_state_adb_wins():
+    # A live adb status short-circuits everything, and the ssh probe (a sysfs
+    # read) must not run for an already-on-adb port.
+    calls = []
+    assert _resolve_conn_state("device", True, lambda: calls.append(1) or True) == "device"
+    assert calls == []
+
+
+def test_conn_state_offline_is_a_status():
+    # 'offline' is a real adb status, not "nothing there" — it wins over fastboot.
+    assert _resolve_conn_state("offline", True, lambda: True) == "offline"
+
+
+def test_conn_state_fastboot():
+    assert _resolve_conn_state(None, True, lambda: False) == "fastboot"
+
+
+def test_conn_state_fastboot_beats_ssh_probe():
+    # In the bootloader we never fall through to the ssh probe.
+    calls = []
+    assert _resolve_conn_state(None, True, lambda: calls.append(1) or True) == "fastboot"
+    assert calls == []
+
+
+def test_conn_state_ssh():
+    assert _resolve_conn_state(None, False, lambda: True) == "ssh"
+
+
+def test_conn_state_nothing():
+    assert _resolve_conn_state(None, False, lambda: False) is None
