@@ -88,6 +88,8 @@ def test_no_unused_imports(path):
     imported: dict = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
+            if node.module == "__future__":
+                continue   # `from __future__ import annotations` has no use site
             for a in node.names:
                 imported[a.asname or a.name] = node.lineno
         elif isinstance(node, ast.Import):

@@ -3,6 +3,8 @@
 # SPDX-FileCopyrightText: 2023 Ed Beroset <beroset@ieee.org>
 """argparse commands and the CLI entry point."""
 
+from __future__ import annotations
+
 import argparse
 import dataclasses
 import sys

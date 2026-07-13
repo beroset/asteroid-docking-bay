@@ -15,6 +15,8 @@ names to handlers, and both the in-process (monolithic) and remote (split)
 callers go through the same table, so the contract has one implementation.
 """
 
+from __future__ import annotations
+
 import hmac
 import json
 import os

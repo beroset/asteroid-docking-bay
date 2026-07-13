@@ -3,6 +3,8 @@
 # SPDX-FileCopyrightText: 2023 Ed Beroset <beroset@ieee.org>
 """Builder for the /api/status document + live soft-remap of moved watches."""
 
+from __future__ import annotations
+
 import time
 
 from .util import log

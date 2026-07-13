@@ -3,6 +3,8 @@
 # SPDX-FileCopyrightText: 2023 Ed Beroset <beroset@ieee.org>
 """Fastboot device polling, nightly download + verify, flash sequence."""
 
+from __future__ import annotations
+
 import time
 from pathlib import Path
 

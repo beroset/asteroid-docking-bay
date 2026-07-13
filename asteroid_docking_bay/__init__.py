@@ -3,4 +3,6 @@
 # SPDX-FileCopyrightText: 2023 Ed Beroset <beroset@ieee.org>
 """asteroid-docking-bay — see docs/ARCHITECTURE.md for the module map."""
 
+from __future__ import annotations
+
 __version__ = "0.5"

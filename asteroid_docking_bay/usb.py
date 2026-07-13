@@ -3,6 +3,8 @@
 # SPDX-FileCopyrightText: 2023 Ed Beroset <beroset@ieee.org>
 """Port power control: direct sysfs, uhubctl discovery/fallback, PPPS test."""
 
+from __future__ import annotations
+
 import fcntl
 import glob
 import os

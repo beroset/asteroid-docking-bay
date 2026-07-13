@@ -3,6 +3,8 @@
 # SPDX-FileCopyrightText: 2023 Ed Beroset <beroset@ieee.org>
 """Subprocess and logging plumbing shared by every module."""
 
+from __future__ import annotations
+
 import logging
 import subprocess
 

@@ -3,6 +3,8 @@
 # SPDX-FileCopyrightText: 2023 Ed Beroset <beroset@ieee.org>
 """Watch-level control: identification waits, OS detect, Control Center."""
 
+from __future__ import annotations
+
 import os
 import shlex
 import tempfile

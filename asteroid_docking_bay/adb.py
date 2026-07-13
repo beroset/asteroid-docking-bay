@@ -3,6 +3,8 @@
 # SPDX-FileCopyrightText: 2023 Ed Beroset <beroset@ieee.org>
 """ADB primitives: device list parsing, per-serial state, shell, battery."""
 
+from __future__ import annotations
+
 import time
 
 from .util import _run, log

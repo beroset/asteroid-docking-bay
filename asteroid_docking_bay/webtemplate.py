@@ -3,6 +3,8 @@
 # SPDX-FileCopyrightText: 2023 Ed Beroset <beroset@ieee.org>
 """The single-page web UI (HTML/CSS/JS), served verbatim by webapp."""
 
+from __future__ import annotations
+
 _WEB_TEMPLATE = """\
 <!DOCTYPE html>
 <html lang="en">

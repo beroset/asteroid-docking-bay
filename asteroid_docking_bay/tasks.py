@@ -3,6 +3,8 @@
 # SPDX-FileCopyrightText: 2023 Ed Beroset <beroset@ieee.org>
 """Operation registries and durable (restart-surviving) task state."""
 
+from __future__ import annotations
+
 import json
 import threading
 from pathlib import Path

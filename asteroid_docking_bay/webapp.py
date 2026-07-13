@@ -9,6 +9,8 @@ the op table in rpcops. It touches no hardware itself; in monolithic mode it
 starts the ops machinery (resume + warmer) that the split backend otherwise
 owns."""
 
+from __future__ import annotations
+
 import base64
 import json
 import signal

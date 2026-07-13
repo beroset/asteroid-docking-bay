@@ -16,6 +16,8 @@ strings — an empty string is a keep-alive heartbeat — which the frontend
 turns into SSE frames.
 """
 
+from __future__ import annotations
+
 import base64
 import copy
 import json

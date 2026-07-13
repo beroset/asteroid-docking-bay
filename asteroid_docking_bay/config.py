@@ -13,6 +13,8 @@ The hubs/serials mappings stay as plain dicts inside the raw config: their
 shape is the config *file's* shape (ports, sockets, excludes, per-port
 serials), edited in place by map/remap/soft-remap."""
 
+from __future__ import annotations
+
 import json
 import threading
 from dataclasses import dataclass, fields

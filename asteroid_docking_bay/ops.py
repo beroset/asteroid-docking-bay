@@ -3,6 +3,8 @@
 # SPDX-FileCopyrightText: 2023 Ed Beroset <beroset@ieee.org>
 """Long-running operations: charge, drain test, workbench, flash, resume."""
 
+from __future__ import annotations
+
 import threading
 import time
 from pathlib import Path
