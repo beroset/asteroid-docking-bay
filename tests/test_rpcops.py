@@ -307,8 +307,10 @@ def _cap_cmd(monkeypatch, in_fastboot):
     monkeypatch.setattr(ro, "_run", fake_run)
     monkeypatch.setattr(ro, "find_serial_for_loc_port", lambda *a, **k: "S1")
     monkeypatch.setattr(ro, "load_config", lambda: {"hubs": []})
+    # {fastboot_serial: usb_path}; the port is 1-2:1 → path "1-2.1". The op
+    # resolves fastboot by path, so the key here is the port's path, not a name.
     monkeypatch.setattr(ro, "_fastboot_list",
-                        lambda: ({"S1": "sturgeon"} if in_fastboot else {}))
+                        lambda: ({"S1": "1-2.1"} if in_fastboot else {}))
     return ro, seen
 
 
@@ -337,6 +339,47 @@ def test_power_actions_use_adb_when_watch_is_booted(monkeypatch):
     assert seen["cmd"] == "adb -s S1 reboot recovery", seen["cmd"]
 
 
+def test_power_action_targets_the_fastboot_serial_not_the_mapped_serial(monkeypatch):
+    """A watch's fastboot serial differs from its adb serial, so the port's
+    MAPPED (adb) serial is not in the fastboot list. Resolving fastboot by that
+    serial misses it and routes reboot/continue to a dead adb link (beluga, and
+    a swapped un-onboarded watch). The action must resolve the fastboot device
+    by PORT and command it with its own fastboot serial."""
+    import asteroid_docking_bay.rpcops as ro
+    seen = {}
+    monkeypatch.setattr(ro, "_run",
+                        lambda cmd, **kw: (seen.__setitem__("cmd", cmd), (0, "", ""))[1])
+    monkeypatch.setattr(ro, "find_serial_for_loc_port", lambda *a, **k: "MAPPED_ADB")
+    monkeypatch.setattr(ro, "load_config", lambda: {"hubs": []})
+    monkeypatch.setattr(ro, "_mark_booting", lambda s: None)
+    # fastboot serial differs from the mapped adb serial, at this port's path
+    monkeypatch.setattr(ro, "_fastboot_list", lambda: {"FBSERIAL": "1-2.1"})
+    r = ro.DISPATCH._data["port.reboot"]({"loc": "1-2", "port": 1})
+    assert r["ok"] is True and r["via"] == "fastboot", r
+    assert seen["cmd"] == "fastboot -s FBSERIAL reboot", seen["cmd"]
+    # continue is fastboot-only — it was dead when routed over the mapped serial
+    ro.DISPATCH._data["port.continue"]({"loc": "1-2", "port": 1})
+    assert seen["cmd"] == "fastboot -s FBSERIAL continue", seen["cmd"]
+
+
+def test_fastboot_poweroff_targets_the_fastboot_serial(monkeypatch):
+    """Shelving a watch in the bootloader must oem-poweroff its FASTBOOT serial,
+    not the differing / stale mapped adb serial — otherwise the halt goes to a
+    dead adb link and the watch is stranded running on battery in fastboot."""
+    import asteroid_docking_bay.rpcops as ro
+    order = []
+    monkeypatch.setattr(ro, "_run",
+                        lambda cmd, **kw: (order.append(cmd), (0, "", ""))[1])
+    monkeypatch.setattr(ro, "find_serial_for_loc_port", lambda *a, **k: "MAPPED_ADB")
+    monkeypatch.setattr(ro, "load_config", lambda: {"hubs": []})
+    monkeypatch.setattr(ro, "_fastboot_list", lambda: {"FBSERIAL": "1-2.1"})
+    monkeypatch.setattr(ro, "uhubctl_set_power",
+                        lambda *a, **k: order.append("VBUS_OFF") or True)
+    r = ro.DISPATCH._data["port.poweroff"]({"loc": "1-2", "port": 1})
+    assert r["ok"] is True, r
+    assert order == ["fastboot -s FBSERIAL oem poweroff", "VBUS_OFF"], order
+
+
 def test_continue_is_rejected_on_a_booted_watch(monkeypatch):
     """`fastboot continue` resumes a boot chain; a running watch has none.
     Offering it over adb would send a meaningless command and report ok."""
@@ -356,7 +399,7 @@ def test_fastboot_poweroff_uses_oem_poweroff_then_cuts_vbus(monkeypatch):
                         lambda cmd, **kw: (order.append(cmd), (0, "", ""))[1])
     monkeypatch.setattr(ro, "find_serial_for_loc_port", lambda *a, **k: "S1")
     monkeypatch.setattr(ro, "load_config", lambda: {"hubs": []})
-    monkeypatch.setattr(ro, "_fastboot_list", lambda: {"S1": "sturgeon"})
+    monkeypatch.setattr(ro, "_fastboot_list", lambda: {"S1": "1-2.1"})
     monkeypatch.setattr(ro, "uhubctl_set_power",
                         lambda *a, **k: order.append("VBUS_OFF") or True)
     r = ro.DISPATCH._data["port.poweroff"]({"loc": "1-2", "port": 1})
@@ -374,7 +417,7 @@ def test_failed_fastboot_poweroff_does_not_cut_vbus(monkeypatch):
     monkeypatch.setattr(ro, "_run", lambda cmd, **kw: (1, "", "unknown command"))
     monkeypatch.setattr(ro, "find_serial_for_loc_port", lambda *a, **k: "S1")
     monkeypatch.setattr(ro, "load_config", lambda: {"hubs": []})
-    monkeypatch.setattr(ro, "_fastboot_list", lambda: {"S1": "rover"})
+    monkeypatch.setattr(ro, "_fastboot_list", lambda: {"S1": "1-2.1"})
     monkeypatch.setattr(ro, "uhubctl_set_power",
                         lambda *a, **k: cut.setdefault("done", True))
     r = ro.DISPATCH._data["port.poweroff"]({"loc": "1-2", "port": 1})
@@ -651,7 +694,7 @@ def test_reboot_and_continue_track_the_boot_but_bootloader_does_not(monkeypatch)
     ro.DISPATCH._data["port.bootloader"]({"loc": "1-2", "port": 1})
     assert marks == [], "reboot-to-bootloader must not claim an OS boot"
 
-    monkeypatch.setattr(ro, "_fastboot_list", lambda: {"S9": {}})   # continue is fb-only
+    monkeypatch.setattr(ro, "_fastboot_list", lambda: {"S9": "1-2.1"})   # continue is fb-only (path = port 1-2:1)
     marks.clear()
     ro.DISPATCH._data["port.continue"]({"loc": "1-2", "port": 1})
     assert marks and "booting_since" in marks[-1][1]

@@ -798,6 +798,20 @@ def _port_cycle(args):
     return {"ok": True, "smart": smart, "reason": reason}
 
 
+def _fastboot_serial_for_port(loc, port):
+    """The fastboot serial of the device physically at this port, or None.
+
+    A watch's fastboot (bootloader) serial differs from its adb serial, so a
+    port can't be matched to a fastboot device by its mapped serial — resolve
+    by USB path (loc.port), the one identity that survives the adb↔fastboot
+    boundary. The connection-column pill already resolves this way; the power
+    actions must too, or they route to a dead adb link when the serials differ
+    (beluga), or the port's mapping is stale (a swapped, un-onboarded watch).
+    (webstatus builds the same path→serial map inline for the pill.)"""
+    path = f"{loc}.{port}"
+    return next((s for s, p in _fastboot_list().items() if p == path), None)
+
+
 @DISPATCH.op("port.poweroff")
 def _port_poweroff(args):
     """Graceful shutdown then cut VBUS immediately — the shutdown command is
@@ -815,25 +829,30 @@ def _port_poweroff(args):
     if busy:
         return busy
     serial = find_serial_for_loc_port(load_config(), loc, port)
+    fb_serial = _fastboot_serial_for_port(loc, port)
     graceful = False   # was a graceful shutdown actually delivered?
-    if serial:
+    if fb_serial:
+        # In the bootloader: oem-poweroff its OWN fastboot serial. That serial
+        # differs from the mapped adb serial (and the port's mapping may be
+        # stale after a swap), so keying off the mapped serial sent the halt to
+        # a dead adb link and stranded the watch running in fastboot.
+        rc, _, err = _run(f"fastboot -s {fb_serial} oem poweroff",
+                          check=False, timeout=10)
+        graceful = (rc == 0)
+        if not graceful:
+            # `oem poweroff` is NOT universal — rover's bootloader has no
+            # such command. Cutting VBUS after a failed shutdown would
+            # strand the watch running on battery in the bootloader,
+            # invisible to the host. Leaving it powered is the safe failure.
+            log.warning("poweroff %s:%s (fastboot %s): shutdown failed: %s",
+                        loc, port, fb_serial, err.strip() or f"rc={rc}")
+            return {"ok": False, "adb_shutdown": False,
+                    "error": "this bootloader has no 'oem poweroff' — "
+                             "power left on so the watch is not stranded "
+                             "running on battery"}
+    elif serial:
         ip = ssh_ip_for_serial(load_config(), serial)
-        if serial in _fastboot_list():
-            rc, _, err = _run(f"fastboot -s {serial} oem poweroff",
-                              check=False, timeout=10)
-            graceful = (rc == 0)
-            if not graceful:
-                # `oem poweroff` is NOT universal — rover's bootloader has no
-                # such command. Cutting VBUS after a failed shutdown would
-                # strand the watch running on battery in the bootloader,
-                # invisible to the host. Leaving it powered is the safe failure.
-                log.warning("poweroff %s:%s (%s): fastboot shutdown failed: %s",
-                            loc, port, serial, err.strip() or f"rc={rc}")
-                return {"ok": False, "adb_shutdown": False,
-                        "error": "this bootloader has no 'oem poweroff' — "
-                                 "power left on so the watch is not stranded "
-                                 "running on battery"}
-        elif _adb_state(adb_devices(), serial) == "device":
+        if _adb_state(adb_devices(), serial) == "device":
             rc, _, err = _run(f"adb -s {serial} shell poweroff",
                               check=False, timeout=10)
             graceful = (rc == 0)
@@ -894,19 +913,26 @@ def _watch_action(loc, port, adb_cmd, fb_cmd, fail_msg, boots_os=False):
     if busy:
         return busy
     serial = find_serial_for_loc_port(load_config(), loc, port)
-    if not serial:
+    # Fastboot presence is resolved by PORT PATH, not by the mapped serial: a
+    # watch's fastboot serial differs from its adb serial, so `serial in
+    # _fastboot_list()` misses it and the action wrongly routes to a dead adb
+    # link (the bootloader has no adb). Command the fastboot device bound to
+    # THIS port by its own fastboot serial.
+    fb_serial = _fastboot_serial_for_port(loc, port)
+    in_fb = fb_serial is not None
+    target = fb_serial if in_fb else serial
+    if not target:
         return {"ok": False, "error": "no serial found for port"}
-    in_fb = serial in _fastboot_list()
     cmd = fb_cmd if in_fb else adb_cmd
     if cmd is None:
         return {"ok": False,
                 "error": f"action not available over {'fastboot' if in_fb else 'adb'}"}
     tool = "fastboot" if in_fb else "adb"
-    rc, _, err = _run(f"{tool} -s {serial} {cmd}", check=False, timeout=20)
+    rc, _, err = _run(f"{tool} -s {target} {cmd}", check=False, timeout=20)
     if rc != 0:
         return {"ok": False, "error": err or fail_msg}
     if boots_os:
-        _mark_booting(serial)
+        _mark_booting(serial or fb_serial)
     return {"ok": True, "via": tool}
 
 
