@@ -1117,12 +1117,17 @@ function ctlFetch(){
     ctlCache[s]=d;
     // Push EVERY tab's metrics on every poll, so a tab's graph is already full
     // the instant you switch to it — the continuity a single window buys.
-    graphPush('load',_load1(d)); graphPush('mem',_memPct(d));
-    graphPushRate('rx',d.net_rx); graphPushRate('tx',d.net_tx);
-    graphPush('bcap',d.bat_cap==null?null:+d.bat_cap);
-    graphPush('bvolt',d.bat_volt?+d.bat_volt/1e6:null);
-    graphPush('bcur',d.bat_curr?+d.bat_curr/1000:null);
-    graphPush('btemp',d.bat_temp==null?null:+d.bat_temp/10);
+    // BUT only for a live poll: a stale poll is the same last-known values
+    // repeated (watch off the bus), and pushing those advances the graph with
+    // fake live motion. Freeze while stale — keep the real history already drawn.
+    if(!d.stale){
+      graphPush('load',_load1(d)); graphPush('mem',_memPct(d));
+      graphPushRate('rx',d.net_rx); graphPushRate('tx',d.net_tx);
+      graphPush('bcap',d.bat_cap==null?null:+d.bat_cap);
+      graphPush('bvolt',d.bat_volt?+d.bat_volt/1e6:null);
+      graphPush('bcur',d.bat_curr?+d.bat_curr/1000:null);
+      graphPush('btemp',d.bat_temp==null?null:+d.bat_temp/10);
+    }
     renderControl(d);
     clearTimeout(ctlPoll); ctlPoll=setTimeout(ctlFetch,panelPollMs(d));   // keep live while open
   }).catch(()=>{
