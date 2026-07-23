@@ -541,9 +541,15 @@ class WorkbenchOp(Operation):
 
 
 class DrainOp(Operation):
-    """Standby drain test: power off the watch, poll the battery every 30
-    minutes, compute the drain rate, stop at the floor or on request.
-    Results are saved as JSON for the history/wearability views."""
+    """Standby drain test: cut USB power so the watch runs on battery in its
+    normal standby config, and poll the battery every 30 minutes to measure
+    the RUNTIME standby drain rate.
+
+    The watch is deliberately NOT powered off — a halted watch barely drains,
+    so the point is the standby figure (days/weeks), which the WiFi/BT/AoD
+    capture at start exists to attribute. Each poll briefly re-powers the port
+    to read the battery, then cuts it again. Stops at the floor or on request;
+    results are saved as JSON for the history/wearability views."""
 
     kind = "drain"
     tasks = _drain_tasks
