@@ -575,7 +575,18 @@ class DrainOp(Operation):
                 task["serial"] = serial
                 start_pct = _adb_read_battery(loc, port, serial, charge_cfg, stop_event)
                 if start_pct is None:
-                    log.warning("%s: drain test: could not read initial battery — aborting", codename)
+                    # Could not read the battery to start: the watch is
+                    # unreadable (brownout / not enumerating), NOT something we
+                    # deliberately powered down. Take the same unreadable-abort
+                    # path as a mid-drain blind read so the finally leaves the
+                    # port powered instead of running a graceful poweroff — the
+                    # latter stamps safe_off_ts, which then renders the watch as
+                    # "shelved" (a deliberate, safe halt) for a drain that never
+                    # even started. Leaving it docked-and-powered is the honest
+                    # state and avoids the false claim.
+                    log.warning("%s: drain test: could not read initial battery "
+                                "— aborting without shelving", codename)
+                    task["blind_abort"] = True
                     # Remove task so the UI doesn't show a stale done/null state.
                     _drain_tasks.pop(slot, None)
                     task_store.unpersist("drain", slot)

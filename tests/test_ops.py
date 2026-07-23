@@ -230,6 +230,20 @@ def test_blind_abort_leaves_the_port_powered(monkeypatch):
         f"port left unpowered after a blind abort: {power}")
 
 
+def test_unreadable_initial_battery_does_not_shelve(monkeypatch):
+    """A drain whose very first battery read fails (brownout / not
+    enumerating) must not fall through to the graceful poweroff — that stamps
+    safe_off_ts and renders the watch "shelved", a false "deliberately, safely
+    halted" claim for a drain that never started. It takes the unreadable-abort
+    path: port left powered (as docked), no graceful shelve."""
+    opsmod, power, slot, task = _drain_env(monkeypatch, [None])
+    opsmod.DrainOp(slot, "1-2", 2, {}).run()
+    assert task.get("blind_abort") is True, (
+        "drain that could not read its start battery shelved the watch")
+    assert power.get("on") is True, (
+        f"unreadable drain-start powered the watch off (shelved): {power}")
+
+
 def test_a_single_failed_read_does_not_abort(monkeypatch):
     """One transient miss is normal; aborting on it would make drain tests
     useless. The guard must tolerate misses below the cap."""
