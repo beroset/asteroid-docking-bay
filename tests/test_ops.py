@@ -244,6 +244,23 @@ def test_unreadable_initial_battery_does_not_shelve(monkeypatch):
         f"unreadable drain-start powered the watch off (shelved): {power}")
 
 
+def test_resumed_drain_cuts_vbus_before_polling(monkeypatch):
+    """A fresh drain powers the port off only as a side effect of its initial
+    battery read. The resume path (restored after a restart) skips that read,
+    so without an explicit cut the watch sits CHARGING on a powered port until
+    the first 30-min poll — the opposite of a drain. The cut must be explicit."""
+    opsmod, power, slot, task = _drain_env(monkeypatch, [14])  # first poll hits floor
+    calls = []
+    monkeypatch.setattr(opsmod, "uhubctl_set_power",
+                        lambda loc, port, on: calls.append(on))
+    # Look like a task restored from disk (has readings -> resuming=True).
+    task.update({"readings": [{"ts": 1.0, "pct": 100}], "start_ts": 1.0,
+                 "start_pct": 100, "last_pct": 100, "last_ts": 1.0})
+    opsmod.DrainOp(slot, "1-2", 2, {}).run()
+    assert False in calls, (
+        "resumed drain never cut VBUS — the watch charges instead of draining")
+
+
 def test_a_single_failed_read_does_not_abort(monkeypatch):
     """One transient miss is normal; aborting on it would make drain tests
     useless. The guard must tolerate misses below the cap."""

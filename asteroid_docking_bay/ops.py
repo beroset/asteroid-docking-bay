@@ -614,6 +614,18 @@ class DrainOp(Operation):
                 event_log.log(serial, codename, "drain_reading", pct=start_pct)
                 log.info("%s: drain test started at %d%%", codename, start_pct)
 
+            # Cut VBUS so the watch discharges on battery — the whole point of
+            # the test. A fresh start's initial read already left the port off
+            # (reading powers it back down), but the resume path never touched
+            # power, so a drain resumed after a restart would sit CHARGING on a
+            # powered port until the first 30-min poll. Make the cut explicit
+            # for both paths instead of relying on the read's side effect.
+            try:
+                uhubctl_set_power(loc, port, False)
+            except RuntimeError as exc:
+                log.warning("%s: could not cut power at drain start: %s",
+                            codename, exc)
+
             blind = 0   # consecutive failed battery reads
             while not stop_event.wait(timeout=_DRAIN_POLL_SEC):
                 # Reload config in case serial mapping changed.
