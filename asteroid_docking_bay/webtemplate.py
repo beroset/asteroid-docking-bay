@@ -252,6 +252,7 @@ _WEB_TEMPLATE = """\
     .cbadge.fb{border-color:#f0883e;color:#f0883e}
     .cbadge.adb{border-color:#3fb950;color:#3fb950}
     .cbadge.ssh{border-color:#d29922;color:#d29922}
+    .cbadge.drain{border-color:#d29922;color:#d29922}
     .cbadge.wifi{border-color:#39c5cf;color:#39c5cf}
     .cbadge.bat{border-color:#6e7681;color:#c9d1d9}
     .orbit-hint{color:#a78bfa;font-size:.85em;opacity:.85}
@@ -672,6 +673,14 @@ function mkadbrow(p){
   // invisible, until flat. That is how sturgeon reached 0%.
   if(p.fb_draining)
     return '<span class="err" title="last seen in FASTBOOT, port now unpowered — a watch in the bootloader does NOT stop when power is cut, it keeps running on battery until flat and is invisible while it does. Power the port back on, then either boot it or power it off from the on-screen fastboot menu.">draining in fastboot?</span>';
+  // A running standby drain test: the watch is deliberately off the bus (port
+  // cut, on battery), so without this the row falls through to a bare dash /
+  // "no link". Name it AND the feature combo under test, so the connection
+  // column reads the run at a glance (drainCfg: idle = baseline, all off).
+  if(p.drain&&p.drain.active){
+    const feat=drainCfg(p.drain.features);
+    return `<span class="cbadge drain" title="standby drain test running${feat?' — consumers: '+feat:''}; port cut, watch on battery">drain test${feat?' '+esc(feat):''}</span>`;
+  }
   // A boot we deliberately triggered: white pulse while it is expected up,
   // then a red-flashing "boot failed?" once the ~40s window lapses. Both beat
   // the generic no-link/not-enumerating messages below — we have positive

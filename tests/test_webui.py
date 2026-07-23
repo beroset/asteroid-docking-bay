@@ -810,6 +810,29 @@ def test_boot_pill_shows_in_connection_column_and_outranks_no_link(tmp_path):
     assert ">not enumerating<" in out["plain"]
 
 
+def test_drain_pill_shows_in_connection_column_with_the_feature_combo(tmp_path):
+    """A running standby drain test cuts VBUS, so the watch is off the bus by
+    design — the row would otherwise fall through to a bare dash / no-link. The
+    connection column names the run AND the feature combo under test (idle =
+    the all-off baseline), so a glance shows which combination is running."""
+    import json
+    h = tmp_path / "drain.js"
+    h.write_text(_DOM_STUBS + JS +
+                 "\nconst base={adb:null,power:false,connected:false};"
+                 "console.log(JSON.stringify({"
+                 "wifi:mkadbrow({...base,drain:{active:true,features:{wifi:true,bt:false,aod:false}}}),"
+                 "base0:mkadbrow({...base,drain:{active:true,features:{wifi:false,bt:false,aod:false}}}),"
+                 "off:mkadbrow({...base,drain:{active:false}})}));"
+                 "\nprocess.exit(0);\n")
+    r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
+    assert r.returncode == 0, r.stderr[:400]
+    out = json.loads(r.stdout.strip().splitlines()[-1])
+    assert "cbadge drain" in out["wifi"] and "drain test wifi" in out["wifi"]
+    assert "drain test idle" in out["base0"]     # all-off baseline reads 'idle'
+    # An inactive drain must NOT paint the pill — the row shows its normal state.
+    assert "drain test" not in out["off"]
+
+
 def test_column_order_is_the_ground_truth_order():
     """Columns run in the fleet's ground-truth order: the port everything
     originates from, its controls (power, smart), then the connection/battery
