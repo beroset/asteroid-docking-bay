@@ -172,6 +172,22 @@ def test_conn_state_nothing():
     assert _resolve_conn_state(None, False, lambda: False) is None
 
 
+def test_get_battery_level_wraps_command_for_device(monkeypatch):
+    # The read command carries a glob (nanohub_fuelgauge-*) and a pipe. It must
+    # reach the device as a single quoted arg; unquoted, the host shell expands
+    # the glob against the HOST's /sys (BAT0) and the watch gets a path it lacks,
+    # so the read returns None and every drain/charge that relies on it silently
+    # fails. This regression shipped with the fuel-gauge glob (921b713) and was
+    # caught only on hardware — the quoting guard pins it, like the status path's.
+    from asteroid_docking_bay.adb import get_battery_level
+    shell, captured = _fake_shell(0, "100")
+    monkeypatch.setattr(adbmod, "adb_shell", shell)
+    assert get_battery_level("SERIAL") == 100
+    cmd = captured["cmd"]
+    assert cmd.startswith('"') and cmd.endswith('"'), cmd
+    assert "*" in cmd and "|" in cmd   # glob + pipe must stay device-side
+
+
 def test_battery_paths_prefer_fuel_gauge():
     # The named hardware fuel gauge must be read before the generic `battery`
     # node — on some watches `battery` is a separate, miscalibrated source.

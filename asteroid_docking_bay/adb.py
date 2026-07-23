@@ -143,7 +143,13 @@ def get_battery_level(serial: str) -> int | None:
     read in one shell invocation — at most one exists on any given watch.
     """
     paths = " ".join(_BATTERY_SYSFS_PATHS)
-    rc, out, _ = adb_shell(serial, f"cat {paths} 2>/dev/null | head -1")
+    # Pass the whole command as one quoted arg so the glob (nanohub_fuelgauge-*),
+    # the redirect and the pipe all run on the *watch*. Unquoted, adb_shell uses
+    # shell=True, so the host shell expands the glob against the HOST's /sys
+    # (where the only supply is the laptop's BAT0) and the watch is handed a path
+    # it lacks — the read returns None, which silently breaks every drain/charge
+    # that reads the battery. Same reason battery_and_screen quotes its pipeline.
+    rc, out, _ = adb_shell(serial, f'"cat {paths} 2>/dev/null | head -1"')
     if rc == 0 and out.strip().isdigit():
         return int(out.strip())
     return None
