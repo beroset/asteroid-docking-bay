@@ -106,7 +106,7 @@ class ConfigManager:
         with self.path.open() as f:
             cfg = json.load(f)
         for key, default in (("hubs", []), ("serials", {}),
-                             ("charge", {}), ("flash", {})):
+                             ("charge", {}), ("flash", {}), ("hub_names", {})):
             cfg.setdefault(key, default)
         return cfg
 
@@ -147,6 +147,75 @@ def find_port_for_codename(cfg: dict, codename: str) -> tuple[str | None, int | 
             if cname.lower() == codename.lower():
                 return hub["location"], int(port_str)
     return None, None
+
+
+# ── Hub naming ────────────────────────────────────────────────────────────────
+# A physical hub (an A16) presents as a tree of cascaded chips at several USB
+# locations (1-2, 1-2.3, 1-2.3.3, …). Users think in physical boxes, not chip
+# locations — and when one A16 hangs off a dock its locations nest INSIDE the
+# dock's (the second A16 is 1-9.1 under Lenovo dock 1-9), so which row belongs to
+# which box is not obvious from the address alone. hub_names maps a location
+# PREFIX to a friendly name; a port inherits the name of the longest prefix that
+# covers it, so naming the physical top names every chip and port beneath it.
+
+_A16_VENDOR = "0bda"          # Realtek — the A16 smart-hub chipset
+_DOCK_VENDORS = {"17ef"}      # Lenovo dock and kin
+
+
+def _loc_covers(prefix: str, location: str) -> bool:
+    """True if `prefix` is `location` or an ancestor of it, matched on
+    dot-separated component boundaries (1-9.1 covers 1-9.1.3 but not 1-9.10)."""
+    return location == prefix or location.startswith(prefix + ".")
+
+
+def hub_name_for(cfg: dict, location: str) -> "str | None":
+    """Friendly name covering this hub location — the longest matching prefix in
+    cfg['hub_names'] — or None if unnamed."""
+    best = None
+    for prefix in cfg.get("hub_names", {}):
+        if _loc_covers(prefix, location) and (best is None or len(prefix) > len(best)):
+            best = prefix
+    return cfg["hub_names"][best] if best is not None else None
+
+
+def set_hub_name(cfg: dict, prefix: str, name: str) -> None:
+    """Assign the friendly name for a hub address; an empty name clears it."""
+    names = cfg.setdefault("hub_names", {})
+    if name.strip():
+        names[prefix] = name.strip()
+    else:
+        names.pop(prefix, None)
+
+
+def derive_hub_names(hubs: "list[dict]") -> "dict[str, str]":
+    """Auto-name the physical hubs from a topology scan. `hubs` is a list of
+    {'location', 'vendor'}. A physical box is a maximal run of same-vendor
+    cascaded chips; its name is keyed to the shallowest (top) location, whose
+    parent chip — if any — is a different vendor. A16 boxes are numbered in
+    discovery order; a Lenovo dock is named as such."""
+    vendor = {h["location"]: (h.get("vendor") or "") for h in hubs}
+    locs = set(vendor)
+
+    def parent_loc(loc: str) -> "str | None":
+        p = loc.rpartition(".")[0]
+        return p if p in locs else None
+
+    tops = [loc for loc in locs
+            if (p := parent_loc(loc)) is None or vendor[p] != vendor[loc]]
+
+    names: dict[str, str] = {}
+    a16_n = dock_n = 0
+    for loc in sorted(tops, key=lambda l: (l.count("."), l)):
+        v = vendor[loc]
+        if v == _A16_VENDOR:
+            a16_n += 1
+            names[loc] = f"A16 #{a16_n}"
+        elif v in _DOCK_VENDORS:
+            dock_n += 1
+            names[loc] = "Lenovo dock" if dock_n == 1 else f"Lenovo dock #{dock_n}"
+        else:
+            names[loc] = f"Hub @ {loc}"
+    return names
 
 
 # ── exact codenames ──────────────────────────────────────────────────────────

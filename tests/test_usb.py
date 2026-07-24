@@ -84,6 +84,28 @@ def test_port_power_spans_both_usb2_and_usb3_sides(tmp_path, monkeypatch):
     assert a.read_text() == "1" and b.read_text() == "1"   # BOTH cut — the fix
 
 
+def test_hub_vendors_skips_superspeed_and_non_hubs(tmp_path, monkeypatch):
+    """hub_vendors names physical boxes off the USB2 side only. It must skip the
+    SuperSpeed companion (else every A16 counts twice) and any non-hub device."""
+    from asteroid_docking_bay import usb as u
+    monkeypatch.setattr(u, "_SYSFS_USB", tmp_path)
+
+    def mk(name, cls, speed, vid):
+        d = tmp_path / name; d.mkdir()
+        (d / "bDeviceClass").write_text(cls + "\n")
+        (d / "speed").write_text(speed + "\n")
+        (d / "idVendor").write_text(vid + "\n")
+
+    mk("1-2", "09", "480", "0bda")      # USB2 A16 — kept
+    mk("3-2", "09", "5000", "0bda")     # USB3 companion — skipped
+    mk("1-9", "09", "480", "17ef")      # USB2 dock — kept
+    mk("1-2.1", "00", "480", "18d1")    # a watch (not a hub) — skipped
+    (tmp_path / "1-2:1.0").mkdir()      # an interface dir — skipped
+
+    locs = {h["location"] for h in u.hub_vendors()}
+    assert locs == {"1-2", "1-9"}
+
+
 def test_sysfs_power_complete_only_when_all_vbus_sides_reachable(tmp_path, monkeypatch):
     """A hub behind a dock (Hub B) exposes only the USB2-side `disable` — no leaf
     `peer`, no USB3-side sysfs — so cutting via sysfs leaves the shared VBUS up.

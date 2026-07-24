@@ -3,7 +3,52 @@
 
 from asteroid_docking_bay.config import (ChargeConfig, ConfigManager,
                                          FlashConfig, charge_config,
-                                         flash_config)
+                                         derive_hub_names, flash_config,
+                                         hub_name_for, set_hub_name)
+
+
+# The rig's real topology: two A16 boxes (0bda) — one direct (1-2), one hanging
+# off the Lenovo dock (17ef 1-9) at 1-9.1 — plus the dock itself. The nested
+# case is the hard one: 1-9.1.x must read as the second A16, never the dock.
+_RIG_HUBS = [
+    {"location": "1-2",        "vendor": "0bda"},
+    {"location": "1-2.3",      "vendor": "0bda"},
+    {"location": "1-2.3.3",    "vendor": "0bda"},
+    {"location": "1-2.4",      "vendor": "0bda"},
+    {"location": "1-9",        "vendor": "17ef"},
+    {"location": "1-9.1",      "vendor": "0bda"},
+    {"location": "1-9.1.3",    "vendor": "0bda"},
+    {"location": "1-9.1.3.3",  "vendor": "0bda"},
+    {"location": "1-9.1.4",    "vendor": "0bda"},
+]
+
+
+def test_derive_hub_names_separates_nested_a16_from_dock():
+    names = derive_hub_names(_RIG_HUBS)
+    # Only the physical tops get named — not every cascade chip.
+    assert names == {"1-2": "A16 #1", "1-9": "Lenovo dock", "1-9.1": "A16 #2"}
+    cfg = {"hub_names": names}
+    # Every chip/port inherits its box by longest-prefix.
+    assert hub_name_for(cfg, "1-2.3.3") == "A16 #1"
+    assert hub_name_for(cfg, "1-9.1.3.3") == "A16 #2"   # longer prefix beats "1-9"
+    assert hub_name_for(cfg, "1-9") == "Lenovo dock"
+    assert hub_name_for(cfg, "1-9.1.4") == "A16 #2"
+
+
+def test_loc_covers_respects_component_boundaries():
+    # A sibling that merely shares a text prefix must NOT inherit the name.
+    cfg = {"hub_names": {"1-9.1": "A16 #2"}}
+    assert hub_name_for(cfg, "1-9.1.3") == "A16 #2"
+    assert hub_name_for(cfg, "1-9.10") is None          # not a child of 1-9.1
+    assert hub_name_for(cfg, "1-2") is None
+
+
+def test_set_hub_name_assigns_and_clears():
+    cfg: dict = {}
+    set_hub_name(cfg, "1-9.1", "A16 #2")
+    assert cfg["hub_names"]["1-9.1"] == "A16 #2"
+    set_hub_name(cfg, "1-9.1", "  ")                     # blank clears
+    assert "1-9.1" not in cfg["hub_names"]
 
 
 def test_charge_defaults():

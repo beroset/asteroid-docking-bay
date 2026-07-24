@@ -206,6 +206,29 @@ def _sysfs_hub_scan(cfg: dict) -> list[dict]:
     return hubs
 
 
+def hub_vendors() -> "list[dict]":
+    """Every USB2-side hub chip under the host, as {'location', 'vendor'}. Used
+    to auto-name physical hubs (Realtek A16 chips vs a Lenovo dock differ by
+    vendor). SuperSpeed (USB3) companion hubs are skipped: they mirror the same
+    physical box as their USB2 peer and bear no watches (watches are USB2), so
+    counting them would double every box. One cheap idVendor read per hub; hubs
+    are bDeviceClass 09."""
+    out: list[dict] = []
+    for dev in _SYSFS_USB.glob("*-*"):
+        if ":" in dev.name:                       # skip interface dirs
+            continue
+        try:
+            if (dev / "bDeviceClass").read_text().strip() != "09":
+                continue
+            if int((dev / "speed").read_text().strip().split(".")[0]) >= 5000:
+                continue                          # USB3 companion — skip
+            vendor = (dev / "idVendor").read_text().strip()
+        except OSError:
+            continue
+        out.append({"location": dev.name, "vendor": vendor})
+    return out
+
+
 def _sysfs_switch_mode(cfg: dict) -> str:
     """Human-readable: is port switching going via direct sysfs (instant) or
     falling back to uhubctl (slow)? Determined by whether a configured hub's
