@@ -225,6 +225,35 @@ def test_drain_start_releases_a_forced_screen(monkeypatch):
     assert released["n"] == 0 and feats["screen_forced_at_start"] is False
 
 
+def test_drain_start_reads_battery_after_the_feature_window(monkeypatch):
+    """start_pct must be the battery at the moment the drain BEGINS — read after
+    the feature/screen round-trips (the port charges through them), right before
+    VBUS is cut, so the rate anchors on the true start, not a pre-charge value
+    taken seconds earlier (audit B7)."""
+    import threading
+    import asteroid_docking_bay.ops as opsmod
+    from asteroid_docking_bay.config import charge_config
+    order = []
+    monkeypatch.setattr(opsmod, "uhubctl_set_power", lambda *a, **k: None)
+    monkeypatch.setattr(opsmod, "wait_serial_online", lambda *a, **k: True)
+    monkeypatch.setattr(opsmod, "battery_and_screen", lambda s: (100, False, "Full"))
+    monkeypatch.setattr(opsmod, "get_battery_level",
+                        lambda s: (order.append("battery"), 88)[1])
+
+    class _W:
+        def __init__(self, s): pass
+        def standby_features(self):
+            order.append("features")
+            return {"wifi": False, "bt": False, "aod": False}
+        def screen(self, on): pass
+    monkeypatch.setattr(opsmod, "Watch", _W)
+    pct, _ = opsmod._adb_read_battery(
+        "1-2", 1, "S", charge_config({}), threading.Event(), with_features=True)
+    assert pct == 88
+    assert order == ["features", "battery"], \
+        f"battery read before the feature window inflates the anchor: {order}"
+
+
 # ── drain blind-read guard (rubyfish incident, 2026-07-14) ──────────────────
 #
 # The drain loop deliberately discharges a watch. When rubyfish stopped

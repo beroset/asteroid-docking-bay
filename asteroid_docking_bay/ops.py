@@ -480,7 +480,6 @@ def _adb_read_battery(loc: str, port: int, serial: str | None,
         retries = max(1, charge_cfg.adb_wait_seconds * charge_cfg.adb_wait_retries // poll)
         if wait_serial_online(serial, poll, retries,
                               stop_event, recover_loc_port=(loc, port)):
-            pct = get_battery_level(serial)
             if with_features:
                 feats = None
                 try:
@@ -502,8 +501,13 @@ def _adb_read_battery(loc: str, port: int, serial: str | None,
                 except Exception as exc:
                     log.debug("drain feature/screen capture failed for %s: %s",
                               serial, exc)
-                return pct, feats
-            return pct
+                # Read the battery LAST — after the feature/screen round-trips,
+                # right before the finally cuts VBUS — so start_pct is the level
+                # at the moment the drain actually BEGINS, not a value taken
+                # seconds of charging earlier that the whole rate then anchors
+                # on (audit B7).
+                return get_battery_level(serial), feats
+            return get_battery_level(serial)
         if not stop_event.is_set():
             log.warning("drain: ADB timeout for %s on %s:%s", serial, loc, port)
         return (None, None) if with_features else None
