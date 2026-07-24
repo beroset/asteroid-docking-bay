@@ -617,6 +617,28 @@ def test_execute_menu_folds_every_group_under_a_header(tmp_path):
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_reidentify_and_onboard_are_one_flow_two_buttons(tmp_path):
+    """'Re-identify / power on' (occupied rows) and 'Onboard' (empty rows) are
+    the SAME action — the onboard flow — reached from two buttons, not two code
+    paths. Both must call doRemap; the old separate doRefresh path is gone (no
+    duplicated logic)."""
+    ev = ("{stopPropagation(){},currentTarget:{getBoundingClientRect:()=>"
+          "({left:0,right:0,top:0,bottom:0})}}")
+    h = tmp_path / "ri.js"
+    h.write_text(_DOM_CAPTURE + JS +
+                 f"\nmenuExecute({ev},'1-2:1',false,false,false,true,false,"
+                 "'S9',false,'device','192.168.13.37',0,true);"
+                 "console.log(global.__els['menu'].innerHTML);\nprocess.exit(0);\n")
+    r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
+    assert r.returncode == 0, r.stderr[:400]
+    menu = r.stdout
+    assert "doRemap('1-2:1')" in menu, menu[:300]     # Re-identify runs the onboard flow
+    assert "doRefresh" not in menu                    # not the old light path
+    # The Onboard button uses the same function; the duplicated path is deleted.
+    assert "doRemap(" in _WEB_TEMPLATE and "function doRefresh" not in _WEB_TEMPLATE
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
 def test_workbench_menu_no_longer_carries_the_usb_ip(tmp_path):
     """The USB IP moved out of the menu — it lives in the Connection column's
     Network Center now, a better place to find it — so the workbench group must

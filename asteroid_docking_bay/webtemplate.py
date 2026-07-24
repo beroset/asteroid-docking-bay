@@ -2013,7 +2013,7 @@ function menuExecute(ev,slot,isFb,charging,draining,powered,noSw,serial,wb,mode,
     grpHd('Power')+grpBox(isFb?grpPowerFb(slot,powered):grpPower(slot,charging,draining,powered,noSw))+
     grpHd('Flashing')+grpBox(grpFlash(slot))+
     (!isFb?grpHd('Workbench')+grpBox(grpWorkbench(slot,serial,wb,mode,sshIp)):'')+
-    grpHd('Refresh')+grpBox(mi('','Re-identify / power on',`doRefresh('${slot}',${needPwr})`)));
+    grpHd('Refresh')+grpBox(mi('','Re-identify / power on',`doRemap('${slot}')`)));
 }
 // Wear is the one menu item that stays a button — pink, the deliberate off-rig
 // action, distinct from the plain text links around it.
@@ -2099,18 +2099,6 @@ function refresh(){
   }).catch(()=>{document.getElementById('ts').textContent='connection error'});
 }
 function _api(s){return s.replace(':','/');}
-function doRefresh(c,needPwr){
-  // A powered-down port has nothing to identify — a watch plugged in while the
-  // port was down stays invisible, and the row keeps showing whoever sat there
-  // last. So when the port is off, bring VBUS up first and give the watch time
-  // to boot and enumerate; the pulse runs for that whole window, not just the
-  // instant client-side re-read that a live port needs.
-  if(c){refreshing.add(c);setTimeout(()=>refreshing.delete(c),needPwr?45000:10000);}
-  if(!needPwr){refresh();return;}
-  fetch('/api/on/'+_api(c),{method:'POST'})
-    .then(()=>{[0,5000,15000,30000,44000].forEach(t=>setTimeout(refresh,t));})
-    .catch(()=>refresh());
-}
 function _pwrFlash(c){
   const r=document.getElementById('wr-'+c);
   if(!r)return;
@@ -2276,13 +2264,14 @@ function doRemap(c){
   const box=document.getElementById('log-'+c);
   if(!box)return;
   box.textContent='';box.classList.add('show');
+  refreshing.add(c);                                   // pulse the row while it re-identifies
   const r=document.getElementById('wr-'+c);
   if(r)r.querySelectorAll('button').forEach(b=>b.disabled=true);
   const es=new EventSource('/api/remap/'+_api(c));
   srcs[c]=es;
   es.onmessage=ev=>{box.textContent+=ev.data+'\\n';box.scrollTop=box.scrollHeight};
-  es.addEventListener('done',()=>{box.textContent+='\\n\\u2500\\u2500 done \\u2500\\u2500\\n';box.scrollTop=box.scrollHeight;es.close();delete srcs[c];setTimeout(refresh,1000)});
-  es.onerror=()=>{box.textContent+='\\n\\u2500\\u2500 connection lost \\u2500\\u2500\\n';es.close();delete srcs[c];refresh()};
+  es.addEventListener('done',()=>{box.textContent+='\\n\\u2500\\u2500 done \\u2500\\u2500\\n';box.scrollTop=box.scrollHeight;es.close();delete srcs[c];refreshing.delete(c);setTimeout(refresh,1000)});
+  es.onerror=()=>{box.textContent+='\\n\\u2500\\u2500 connection lost \\u2500\\u2500\\n';es.close();delete srcs[c];refreshing.delete(c);refresh()};
 }
 // Seeded starfield (mulberry32 PRNG → same field every load), painted once into
 // the fixed backdrop. Ported from moWerk's Depth Drift generator: 150 stars,
