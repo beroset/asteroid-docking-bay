@@ -39,6 +39,27 @@ _soft_remap_unknown: set[str] = set()
 _enum_stuck_since: dict[str, float] = {}
 _ENUM_STUCK_GRACE_SEC = 60  # normal boots enumerate well within this
 
+
+def _enum_stuck(slot: str, power, adb_state, present: bool, now: float) -> bool:
+    """Whether a mapped, powered port has failed to enumerate a watch.
+
+    Every port in the status loop is config-mapped, so a watch is EXPECTED
+    here. If the port is powered but has no adb link and no enumerated device
+    node — after a boot grace — the docked watch never came up: flat-battery
+    bootloop, bad contact, or removed.
+
+    The old inline guard also required a `connect` bit, but on the sysfs rig
+    `connect` was derived from the very device-node existence checked here
+    (`connect == present`), so `connect and not present` was always False and
+    this never fired — a docked-but-stuck watch instead read as "no link / no
+    watch docked", the inverse of the truth (audit A1, 2026-07-24)."""
+    if power and adb_state is None and not present:
+        _enum_stuck_since.setdefault(slot, now)
+    else:
+        _enum_stuck_since.pop(slot, None)
+    return (slot in _enum_stuck_since
+            and now - _enum_stuck_since[slot] > _ENUM_STUCK_GRACE_SEC)
+
 # Fake-power self-heal (opt-in): a mapped port that reports power but never
 # enumerates a connection is the stale-node wedge. Track how long it's been
 # wedged and when we last auto-cycled it, so recovery fires once per episode.
@@ -511,14 +532,9 @@ def _web_status_data(cfg: dict) -> list[dict]:
             # Powered + hub sees a connection + nothing ever enumerates:
             # flat-battery bootloop or bad cable. Flag after a boot grace.
             connect = phys.get("connect", {}).get(port_num)
-            if (power and connect and adb_state is None
-                    and not _port_device_present(loc, port_num)):
-                _enum_stuck_since.setdefault(slot, time.time())
-            else:
-                _enum_stuck_since.pop(slot, None)
-            not_enumerating = (slot in _enum_stuck_since
-                               and time.time() - _enum_stuck_since[slot]
-                                   > _ENUM_STUCK_GRACE_SEC)
+            not_enumerating = _enum_stuck(
+                slot, power, adb_state,
+                _port_device_present(loc, port_num), time.time())
             # A watch that vanished from an unpowered port while it was in the
             # bootloader is almost certainly still running on battery, because
             # LK does not shut down when USB goes away. Nothing else in the UI

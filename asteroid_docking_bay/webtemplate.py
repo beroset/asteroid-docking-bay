@@ -692,7 +692,7 @@ function mkadbrow(p){
   if(p.adb===null&&p.lifecycle==='bootfail')
     return '<span class="cbadge life bootfail" title="triggered a boot but it has not come up in time — it may have failed to boot, or is simply not enumerating (flat battery, contact/cable)">boot failed?</span>';
   if(p.adb===null&&p.not_enumerating)
-    return '<span class="err" title="port is powered and the hub sees a connection, but the device never enumerates — flat battery bootloop or bad cable. Tip: holding the watch in fastboot draws less than booting and lets a flat battery charge past the boot threshold.">not enumerating</span>';
+    return '<span class="err" title="a watch is mapped to this powered port but never enumerated — flat-battery bootloop, bad contact, or the watch was removed. Tip: holding the watch in fastboot draws less than booting and lets a flat battery charge past the boot threshold.">not enumerating</span>';
   if(p.adb===null&&p.power===true&&p.connected===false)
     return '<span class="warn" title="port is powered but nothing is electrically connected — no watch docked, or a dead cable/contact. No claim which: the plug being pulled and a bad contact look identical from here.">no link</span>';
   // A safely-down or worn watch is offline on purpose — say so here rather than

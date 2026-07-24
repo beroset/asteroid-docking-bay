@@ -411,3 +411,25 @@ def test_ssh_battery_none_without_an_ip(monkeypatch):
     from asteroid_docking_bay import webstatus as ws
     monkeypatch.setattr(ws, "ssh_ip_for_serial", lambda cfg, s: None)
     assert ws._ssh_battery({}, "S1") == (None, False, None)
+
+
+def test_enum_stuck_flags_a_powered_port_that_never_enumerates():
+    """A mapped, powered port with no adb link and no device node is a docked
+    watch that never came up (audit A1). The old inline guard required a
+    `connect` bit that, on the sysfs rig, equalled node-existence — so
+    `connect and not present` was always False and 'not enumerating' never
+    fired; the row misreported 'no watch docked / dead cable'. It must now fire
+    after the boot grace, independent of connect, and self-clear."""
+    ws._enum_stuck_since.clear()
+    t0 = 1000.0
+    g = ws._ENUM_STUCK_GRACE_SEC
+    # powered, no adb, no device node -> arms now, still within grace
+    assert ws._enum_stuck("1-2:1", power=True, adb_state=None, present=False, now=t0) is False
+    # past the grace -> fires (this is the case that never fired before)
+    assert ws._enum_stuck("1-2:1", True, None, False, t0 + g + 1) is True
+    # a device node appears -> clears
+    assert ws._enum_stuck("1-2:1", True, None, present=True, now=t0 + g + 2) is False
+    assert "1-2:1" not in ws._enum_stuck_since
+    # an unpowered port never arms; an on-adb port is not stuck
+    assert ws._enum_stuck("1-2:2", power=False, adb_state=None, present=False, now=t0 + 999) is False
+    assert ws._enum_stuck("1-2:3", True, "device", False, t0) is False
