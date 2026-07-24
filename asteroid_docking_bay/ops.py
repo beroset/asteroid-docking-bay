@@ -465,8 +465,23 @@ def _adb_read_battery(loc: str, port: int, serial: str | None,
                 feats = None
                 try:
                     feats = Watch(serial).standby_features()
+                    # A forced-on display (a leftover `mcetool -D on` from live
+                    # view / screenshots / a Screen:ON click) would drain the
+                    # watch at full-panel rate and be recorded as standby (audit
+                    # B5). Detect it, release it so the run measures a clean
+                    # standby, and record that we found it so the result is
+                    # honest about the state it started from.
+                    _, forced, _ = battery_and_screen(serial)
+                    if forced:
+                        log.warning("drain start %s: display was forced ON — "
+                                    "releasing it for a clean standby measurement",
+                                    serial)
+                        Watch(serial).screen(False)
+                    if isinstance(feats, dict):
+                        feats["screen_forced_at_start"] = bool(forced)
                 except Exception as exc:
-                    log.debug("drain feature capture failed for %s: %s", serial, exc)
+                    log.debug("drain feature/screen capture failed for %s: %s",
+                              serial, exc)
                 return pct, feats
             return pct
         if not stop_event.is_set():

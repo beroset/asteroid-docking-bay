@@ -173,20 +173,56 @@ def test_drain_captures_features_while_the_port_is_still_powered(monkeypatch):
                         lambda loc, port, on: power.__setitem__("on", on))
     monkeypatch.setattr(opsmod, "wait_serial_online", lambda *a, **k: True)
     monkeypatch.setattr(opsmod, "get_battery_level", lambda s: 100)
+    monkeypatch.setattr(opsmod, "battery_and_screen", lambda s: (100, False, "Full"))
 
     class _W:
         def __init__(self, s): pass
         def standby_features(self):
             seen["powered_when_read"] = power["on"]     # must be True here
             return {"wifi": True, "bt": False, "aod": False}
+        def screen(self, on): pass
     monkeypatch.setattr(opsmod, "Watch", _W)
 
     pct, feats = opsmod._adb_read_battery(
         "1-2", 1, "S", charge_config({}), threading.Event(), with_features=True)
     assert pct == 100
-    assert feats == {"wifi": True, "bt": False, "aod": False}
+    assert {k: feats[k] for k in ("wifi", "bt", "aod")} == {"wifi": True, "bt": False, "aod": False}
     assert seen["powered_when_read"] is True, "features read after VBUS was cut"
     assert power["on"] is False, "port must still be cut on the way out"
+
+
+def test_drain_start_releases_a_forced_screen(monkeypatch):
+    """A forced-on display (a leftover `mcetool -D on`) would drain the watch at
+    full-panel rate and be recorded as standby (audit B5). The drain-start read
+    must detect it, release it (screen(False)), and record the starting state in
+    the features so a contaminated run is at least self-documenting."""
+    import threading
+    import asteroid_docking_bay.ops as opsmod
+    from asteroid_docking_bay.config import charge_config
+    released = {"n": 0}
+    monkeypatch.setattr(opsmod, "uhubctl_set_power", lambda l, p, on: None)
+    monkeypatch.setattr(opsmod, "wait_serial_online", lambda *a, **k: True)
+    monkeypatch.setattr(opsmod, "get_battery_level", lambda s: 100)
+
+    class _W:
+        def __init__(self, s): pass
+        def standby_features(self): return {"wifi": False, "bt": False, "aod": False}
+        def screen(self, on): released["on"] = on; released["n"] += 1; return True
+    monkeypatch.setattr(opsmod, "Watch", _W)
+
+    # forced ON → released, recorded True
+    monkeypatch.setattr(opsmod, "battery_and_screen", lambda s: (100, True, "Full"))
+    _, feats = opsmod._adb_read_battery(
+        "1-2", 1, "S", charge_config({}), threading.Event(), with_features=True)
+    assert released["n"] == 1 and released["on"] is False, "did not release a forced screen"
+    assert feats["screen_forced_at_start"] is True
+
+    # not forced → no release, recorded False
+    monkeypatch.setattr(opsmod, "battery_and_screen", lambda s: (100, False, "Full"))
+    released["n"] = 0
+    _, feats = opsmod._adb_read_battery(
+        "1-2", 1, "S", charge_config({}), threading.Event(), with_features=True)
+    assert released["n"] == 0 and feats["screen_forced_at_start"] is False
 
 
 # ── drain blind-read guard (rubyfish incident, 2026-07-14) ──────────────────
