@@ -343,6 +343,30 @@ def test_finished_persisted_op_does_not_block(monkeypatch, tmp_path):
     assert tasks.active_op_on_slot("1-2:1") is None
 
 
+def test_start_refuses_when_another_op_owns_the_slot(monkeypatch):
+    """One long-running op per slot, enforced symmetrically in Operation.start.
+    A charge starting on a draining slot would power the port on and recharge
+    the watch mid-measurement (audit B1) — every pair must refuse, not just the
+    workbench case that used to be checked. is_slot_smart is forced False so a
+    missed cross-op check would fall through to 'non-smart', not the op name."""
+    import asteroid_docking_bay.ops as opsmod
+    import asteroid_docking_bay.tasks as tasksmod
+    monkeypatch.setattr(opsmod, "is_slot_smart", lambda *a, **k: False)
+    slot = "1-2:1"
+    # drain active → charge and workbench both refused, naming the drain
+    monkeypatch.setitem(tasksmod._drain_tasks, slot, {"done": False})
+    assert "drain" in (opsmod.ChargeOp.start("1-2", 1, {}) or ""), "charge ran on a draining slot"
+    assert "drain" in (opsmod.WorkbenchOp.start("1-2", 1, {}) or "")
+    monkeypatch.delitem(tasksmod._drain_tasks, slot)
+    # charge active → drain refused, naming the charge (the B1 direction)
+    monkeypatch.setitem(tasksmod._charge_tasks, slot, {"done": False})
+    assert "charge" in (opsmod.DrainOp.start("1-2", 1, {}) or ""), "drain ran on a charging slot"
+    monkeypatch.delitem(tasksmod._charge_tasks, slot)
+    # flash active → drain refused (drain never checked flash before)
+    monkeypatch.setitem(tasksmod._flash_tasks, slot, {"done": False})
+    assert "flash" in (opsmod.DrainOp.start("1-2", 1, {}) or "")
+
+
 def test_workbench_records_who_claimed_the_watch(monkeypatch):
     """On a rig several sessions share, "workbench active" does not tell you
     whether to wait or take over. The claim must name its holder."""

@@ -28,7 +28,7 @@ from .events import (_DRAIN_FLOOR_PCT, _DRAIN_MAX_BLIND_POLLS,
                      _save_drain_results)
 from .tasks import (_charge_stop, _charge_tasks, _drain_stop,
                     _drain_tasks, _flash_tasks, task_store,
-                    _workbench_stop, _workbench_tasks)
+                    _workbench_stop, _workbench_tasks, active_op_on_slot)
 from .watchctl import Watch, wait_for_adb
 
 
@@ -269,6 +269,17 @@ class Operation:
         slot = f"{loc}:{port}"
         if cls.is_active(slot):
             return f"{cls.kind} already running"
+        # One long-running op per slot, enforced symmetrically HERE rather than
+        # in each subclass's conflict(). Charge and drain used to each check
+        # only workbench, so a charge could start on a draining slot and power
+        # the port ON mid-measurement, silently recharging the watch and
+        # corrupting the run (audit B1, 2026-07-24). active_op_on_slot is the
+        # single source of truth (in-memory + persisted, across processes).
+        owner_kind = active_op_on_slot(slot)
+        if owner_kind and owner_kind != cls.kind:
+            return f"a {owner_kind} operation owns this port"
+        if slot in _flash_tasks and not _flash_tasks[slot].get("done", True):
+            return "flash in progress"
         err = cls.conflict(slot)
         if err:
             return err
@@ -303,11 +314,8 @@ class ChargeOp(Operation):
     tasks = _charge_tasks
     stops = _charge_stop
 
-    @classmethod
-    def conflict(cls, slot):
-        if WorkbenchOp.is_active(slot):
-            return "watch is checked out (workbench)"
-        return None
+    # Cross-op exclusion (vs drain/workbench/flash) is enforced in
+    # Operation.start via active_op_on_slot — no per-kind conflict() needed.
 
     def run(self) -> None:
         slot, loc, port, cfg = self.slot, self.loc, self.port, self.cfg
@@ -479,14 +487,8 @@ class WorkbenchOp(Operation):
     tasks = _workbench_tasks
     stops = _workbench_stop
 
-    @classmethod
-    def conflict(cls, slot):
-        for other, what in ((ChargeOp, "charge"), (DrainOp, "drain test")):
-            if other.is_active(slot):
-                return f"{what} in progress"
-        if slot in _flash_tasks and not _flash_tasks[slot].get("done", True):
-            return "flash in progress"
-        return None
+    # Cross-op exclusion (vs charge/drain/flash) is enforced in
+    # Operation.start via active_op_on_slot — no per-kind conflict() needed.
 
     def run(self) -> None:
         slot, loc, port, cfg = self.slot, self.loc, self.port, self.cfg
@@ -571,11 +573,8 @@ class DrainOp(Operation):
     tasks = _drain_tasks
     stops = _drain_stop
 
-    @classmethod
-    def conflict(cls, slot):
-        if WorkbenchOp.is_active(slot):
-            return "watch is checked out (workbench)"
-        return None
+    # Cross-op exclusion (vs charge/workbench/flash) is enforced in
+    # Operation.start via active_op_on_slot — no per-kind conflict() needed.
 
     def run(self) -> None:
         slot, loc, port, cfg = self.slot, self.loc, self.port, self.cfg
