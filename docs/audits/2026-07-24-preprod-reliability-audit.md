@@ -263,12 +263,22 @@ tested, single-concern commit (planted-bug validated), suite green (447):
 | A2 adb-server wedge | Self-heal a wedged adb server |
 | D2 (missing test) | Test the whole drain mechanic against a synthetic battery |
 
-**Still open (lower priority, deferred for review):** A3 (register power
-can't see an external VBUS cut; the self-heal shouldn't imply a recovery
-it can't deliver), A4 (`wait_serial_online` recovery can cycle the wrong
-port after a physical move), B7 (initial read's extra round-trips inflate
-the start anchor — needs hardware quantification), B9 (warmer vs drain-poll
-bus lock), C3 (weather_sync strips apostrophes).
+**The deferred items were then also fixed** (same day), each tested +
+planted-bug validated:
+
+| Finding | Fix commit |
+|---|---|
+| C3 weather apostrophes stripped | Escape apostrophes in weather city names, don't strip them |
+| A4 recovery cycles the wrong port | Don't power-cycle the recovery port if another watch moved onto it |
+| B9 warmer vs drain-poll bus race | Defer the warmer's USB scan while a drain poll is on the bus |
+| A3 self-heal implies impossible recovery | Stop the fake-power self-heal from cycling a wedge it can't fix |
+| B7 start anchor inflated | Anchor the drain rate on the battery at the true start |
+
+So **every a-d-b finding is closed.** B2 (the 30-min poll perturbs the
+measurement) is inherent to the poll design and left as documented — its
+magnitude only matters once the upstream sleep bug is fixed, and it should
+be quantified then (30-min vs 6-h poll vs the pollless
+`standby_off_to_on_rate` baseline).
 
 **Upstream (not a-d-b), for the maintainers:** the asteroid-launcher /
 pulseaudio sink-stays-RUNNING sleep bug — the actual cause of the
