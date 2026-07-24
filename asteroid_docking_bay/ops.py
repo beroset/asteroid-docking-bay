@@ -106,22 +106,31 @@ def _end_port(loc: str, port: int, serial: "str | None", charge_cfg: ChargeConfi
             # (it's already booted, so ADB returns in a few seconds).
             if uhubctl_get_power(loc, port) is not True:
                 uhubctl_set_power(loc, port, True)
-                wait_serial_online(serial, 5, 4)
-            log.info("%s: graceful poweroff (%s)", serial, reason or "op end")
-            # Snapshot battery % at power-off: compared to the % at the next
-            # boot it yields a TRUE standby-drain rate — on battery the whole
-            # time with no reads, so none of the drain-test charge-bump that
-            # overrates standby. Best-effort. (A watch taken off the rig to be
-            # worn is excluded downstream by the battery-rise / wear guards.)
-            off_pct = get_battery_level(serial)
-            if off_pct is not None:
-                cn = find_codename_for_loc_port(load_config(), loc, port)
-                event_log.log(serial, cn, "power_off", pct=off_pct)
-            _run(f"adb -s {serial} shell poweroff", check=False, timeout=10)
-            # Same graceful-shutdown marker as the manual Power-off — this ends
-            # an op the proven way, so the watch is safely down (the "down"
-            # pill), not ambiguously cut.
-            last_seen.mark(serial, safe_off_ts=time.time())
+            # ONLY claim a safe-off if the watch is actually reachable to receive
+            # the poweroff. A shutdown sent to a watch that never came online is
+            # not delivered — stamping safe_off_ts then would show it "down"
+            # while it is really running on battery, invisible to the host
+            # (audit B3; the sturgeon-to-0% failure mode). If it won't wake, cut
+            # VBUS anyway (finally) but leave the state honestly unmarked.
+            if not wait_serial_online(serial, 5, 4):
+                log.warning("%s: could not reach the watch to power it off (%s) "
+                            "— cutting VBUS without a safe-off marker; it may be "
+                            "running on battery", serial, reason or "op end")
+            else:
+                log.info("%s: graceful poweroff (%s)", serial, reason or "op end")
+                # Snapshot battery % at power-off: compared to the % at the next
+                # boot it yields a TRUE standby-drain rate — on battery the whole
+                # time with no reads, so none of the drain-test charge-bump that
+                # overrates standby. Best-effort.
+                off_pct = get_battery_level(serial)
+                if off_pct is not None:
+                    cn = find_codename_for_loc_port(load_config(), loc, port)
+                    event_log.log(serial, cn, "power_off", pct=off_pct)
+                _run(f"adb -s {serial} shell poweroff", check=False, timeout=10)
+                # Same graceful-shutdown marker as the manual Power-off — the
+                # watch was reachable and told to halt, so it is safely down
+                # (the "down" pill), not ambiguously cut.
+                last_seen.mark(serial, safe_off_ts=time.time())
     except Exception as exc:
         log.debug("graceful poweroff of %s failed: %s", serial, exc)
     finally:

@@ -367,6 +367,35 @@ def test_start_refuses_when_another_op_owns_the_slot(monkeypatch):
     assert "flash" in (opsmod.DrainOp.start("1-2", 1, {}) or "")
 
 
+def test_end_port_marks_safe_off_only_when_the_watch_is_reachable(monkeypatch):
+    """_end_port powers a post-drain watch up to deliver the poweroff. If it
+    never comes online the shutdown isn't delivered — stamping safe_off_ts
+    would render it "down" while it runs on battery, invisible (audit B3). The
+    marker (and the power_off event) must be gated on reachability."""
+    import asteroid_docking_bay.ops as opsmod
+    from asteroid_docking_bay.config import charge_config
+    marks = []
+    monkeypatch.setattr(opsmod, "adb_devices_checked", lambda: {})   # adb healthy
+    monkeypatch.setattr(opsmod, "uhubctl_get_power", lambda l, p: True)
+    monkeypatch.setattr(opsmod, "uhubctl_set_power", lambda l, p, on: True)
+    monkeypatch.setattr(opsmod, "_run", lambda *a, **k: (0, "", ""))
+    monkeypatch.setattr(opsmod, "get_battery_level", lambda s: 50)
+    monkeypatch.setattr(opsmod.last_seen, "mark", lambda s, **k: marks.append(k))
+    monkeypatch.setattr(opsmod.event_log, "log", lambda *a, **k: None)
+    cc = charge_config({})
+    # unreachable → NO safe-off marker
+    monkeypatch.setattr(opsmod, "wait_serial_online", lambda *a, **k: False)
+    opsmod._end_port("1-2", 1, "S", cc, "drain ended")
+    assert not any("safe_off_ts" in m for m in marks), \
+        f"marked safe-off for an unreachable watch: {marks}"
+    # reachable → safe-off IS stamped
+    marks.clear()
+    monkeypatch.setattr(opsmod, "wait_serial_online", lambda *a, **k: True)
+    opsmod._end_port("1-2", 1, "S", cc, "drain ended")
+    assert any("safe_off_ts" in m for m in marks), \
+        "did not mark safe-off for a reachable watch"
+
+
 def test_workbench_records_who_claimed_the_watch(monkeypatch):
     """On a rig several sessions share, "workbench active" does not tell you
     whether to wait or take over. The claim must name its holder."""
