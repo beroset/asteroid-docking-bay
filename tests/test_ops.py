@@ -407,6 +407,27 @@ def test_drain_measures_a_known_discharge_rate_end_to_end(monkeypatch):
         f"recovered rate {task['drain_rate']} != known {KNOWN}"
 
 
+def test_adb_read_battery_marks_the_bus_busy_for_the_warmer(monkeypatch):
+    """The warmer defers its USB scan while a drain poll is on the bus, so its
+    libusb fastboot sweep can't race the enumeration and wedge it (audit B9).
+    _adb_read_battery must raise the busy counter for the read and reset it."""
+    import threading
+    import asteroid_docking_bay.ops as opsmod
+    from asteroid_docking_bay.config import charge_config
+    monkeypatch.setattr(opsmod, "uhubctl_set_power", lambda *a, **k: None)
+    monkeypatch.setattr(opsmod, "wait_serial_online", lambda *a, **k: True)
+    seen = {}
+
+    def gbl(s):
+        seen["busy_during"] = opsmod._bus_read_active
+        return 50
+    monkeypatch.setattr(opsmod, "get_battery_level", gbl)
+    opsmod._bus_read_active = 0
+    opsmod._adb_read_battery("1-2", 1, "S", charge_config({}), threading.Event())
+    assert seen["busy_during"] == 1, "did not mark the bus busy during the read"
+    assert opsmod._bus_read_active == 0, "did not reset the busy counter after"
+
+
 # ── who owns a port, across processes ───────────────────────────────────────
 
 def test_active_op_on_slot_sees_in_memory_ops(monkeypatch, tmp_path):

@@ -195,11 +195,16 @@ def _background_warmer() -> None:
     parallel USB reads are what wedges the bus."""
     while True:
         try:
-            if time.time() - fastboot._fb_list_cache["ts"] > 60:
+            # Defer the warmer's own USB/adb sweeps while a drain poll is on the
+            # bus: the fastboot scan is a libusb sweep that races enumeration and
+            # can wedge the bus (audit B9). It just runs a cycle later.
+            bus_busy = _bus_read_active > 0
+            if not bus_busy and time.time() - fastboot._fb_list_cache["ts"] > 60:
                 fastboot._fastboot_poll()
             # Recover a wedged adb server (lists nothing though watches are on
             # the bus) — the whole rig looks dead otherwise (audit A2).
-            maybe_heal_wedged_adb()
+            if not bus_busy:
+                maybe_heal_wedged_adb()
             cfg = load_config()
             for hub in cfg.get("hubs", []):
                 loc = hub["location"]
@@ -434,6 +439,15 @@ class ChargeOp(Operation):
 
 
 
+# A drain poll (its _adb_read_battery) touches the USB bus WITHOUT holding
+# _adb_lock. The warmer's fastboot scan is a libusb sweep that races such
+# enumeration and can wedge the bus (ARCHITECTURE: parallel USB reads), causing
+# a transient failed poll read → a spurious blind increment (audit B9). This
+# counter lets the warmer defer its scan while a drain poll is on the bus.
+_bus_read_lock = threading.Lock()
+_bus_read_active = 0
+
+
 def _adb_read_battery(loc: str, port: int, serial: str | None,
                       charge_cfg: ChargeConfig,
                       stop_event: threading.Event,
@@ -454,6 +468,9 @@ def _adb_read_battery(loc: str, port: int, serial: str | None,
     """
     if not serial:
         return (None, None) if with_features else None
+    global _bus_read_active
+    with _bus_read_lock:
+        _bus_read_active += 1
     try:
         uhubctl_set_power(loc, port, True)
         # Fast poll to minimise the charge window (the port charges the whole
@@ -491,6 +508,8 @@ def _adb_read_battery(loc: str, port: int, serial: str | None,
             log.warning("drain: ADB timeout for %s on %s:%s", serial, loc, port)
         return (None, None) if with_features else None
     finally:
+        with _bus_read_lock:
+            _bus_read_active -= 1
         try:
             uhubctl_set_power(loc, port, False)
         except Exception:
