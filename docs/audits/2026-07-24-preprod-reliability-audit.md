@@ -241,3 +241,35 @@ sink-stays-RUNNING sleep bug — the actual cause of the scary numbers.
 All device observations were made on triggerfish (`C3F9275E1467`) and sparrow
 (`H1NZCJ010087020`), powered on for inspection and left charging (both were
 drained by the flawed tests). Those overnight drain results are to be discarded.
+
+---
+
+## Resolution (2026-07-24, same day)
+
+Fixed and deployed the critical + high + key-medium findings, each a
+tested, single-concern commit (planted-bug validated), suite green (447):
+
+| Finding | Fix commit |
+|---|---|
+| B1 charge/drain mutually blind | Enforce one long-running op per slot symmetrically |
+| B3 false safe-off | Mark a watch safely-down only when it was reachable to halt |
+| B5 forced screen | Release a forced-on display at drain start |
+| A1 not_enumerating dead code | Report a docked-but-stuck watch honestly on the sysfs rig |
+| C1 set_datetime quoting | Set the watch clock with a command that survives adb re-split |
+| C2 aod-on-failed-read | Report AoD as unknown, not on, when its read fails |
+| B8 orphaned recorder | Never leave an orphaned mic recorder running |
+| B6 serial mis-attribution | Stop a drain if the port's watch changes mid-run |
+| B4 min-samples | Require enough samples before trusting a drain rate |
+| A2 adb-server wedge | Self-heal a wedged adb server |
+| D2 (missing test) | Test the whole drain mechanic against a synthetic battery |
+
+**Still open (lower priority, deferred for review):** A3 (register power
+can't see an external VBUS cut; the self-heal shouldn't imply a recovery
+it can't deliver), A4 (`wait_serial_online` recovery can cycle the wrong
+port after a physical move), B7 (initial read's extra round-trips inflate
+the start anchor — needs hardware quantification), B9 (warmer vs drain-poll
+bus lock), C3 (weather_sync strips apostrophes).
+
+**Upstream (not a-d-b), for the maintainers:** the asteroid-launcher /
+pulseaudio sink-stays-RUNNING sleep bug — the actual cause of the
+implausible drain numbers.
