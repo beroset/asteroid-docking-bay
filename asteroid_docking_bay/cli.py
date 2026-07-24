@@ -585,7 +585,8 @@ def cmd_map(args, cfg: dict):
     for hub in hubs:
         loc = hub["location"]
         entry = {**existing.get(loc, {}), "location": loc,
-                 "ppps": hub.get("ppps", False)}
+                 "ppps": hub.get("ppps", False),
+                 "description": hub.get("description", "")}
         entry.setdefault("ports", {})
         entry.setdefault("port_smart", {})
         registered.append(entry)

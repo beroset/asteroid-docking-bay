@@ -401,33 +401,46 @@ def _web_status_data(cfg: dict) -> list[dict]:
     webapp's background warmer.
     """
     _t0 = time.perf_counter()
+    # Per-phase timing so a slow refresh names the culprit instead of guessing —
+    # e.g. an empty, powered-down hub whose `disable` reads hang for seconds.
+    _ph: dict[str, float] = {}
+
+    def _timed(name, fn):
+        t = time.perf_counter()
+        r = fn()
+        _ph[name] = _ph.get(name, 0.0) + (time.perf_counter() - t)
+        return r
+
     # serial -> exact codename learned this pass (flushed to config at the end).
     _detected_exact: dict[str, str] = {}
-    devices = adb_devices()
-    fb_devices = _fastboot_list()   # {serial: sysfs_path | None}
+    devices = _timed("adb", adb_devices)
+    fb_devices = _timed("fastboot", _fastboot_list)   # {serial: sysfs_path | None}
     # Reverse maps for empty-port detection: sysfs_path → serial
     fb_by_path: dict[str, str] = {
         path: serial
         for serial, path in fb_devices.items()
         if path is not None
     }
-    adb_by_path: dict[str, str] = _sysfs_path_to_serial_map(set(devices.keys()))
+    adb_by_path: dict[str, str] = _timed(
+        "path_map", lambda: _sysfs_path_to_serial_map(set(devices.keys())))
     # Live soft-remap: follow booted watches that were physically moved.
     online_by_path = {p: s for p, s in adb_by_path.items()
                       if _adb_state(devices, s) == "device"}
-    cfg = _soft_remap(cfg, online_by_path) or cfg
+    cfg = _timed("soft_remap", lambda: _soft_remap(cfg, online_by_path)) or cfg
     # Evict OS cache entries for offline watches → re-detected on next boot.
     for serial in list(_watch_os):
         if _adb_state(devices, serial) != "device":
             _watch_os.pop(serial)
-    physical = {hub["location"]: hub for hub in (_sysfs_hub_scan(cfg) or uhubctl_list())}
+    physical = {hub["location"]: hub for hub in
+                _timed("hub_scan", lambda: _sysfs_hub_scan(cfg) or uhubctl_list())}
     # Every hub location, used to spot cascade ports: a port whose child is
     # itself a hub (e.g. 1-2 port 3 feeds sub-hub 1-2.3). Those are internal
     # chip-to-chip links, not watch sockets — powering one off cuts the whole
     # sub-hub and every watch below it, so they must never appear as
     # toggleable/refreshable rows.
     hub_locs = set(physical.keys())
-    drain_summaries = _latest_drain_summaries()
+    drain_summaries = _timed("drain", _latest_drain_summaries)
+    _t_render = time.perf_counter()
     result: list[dict] = []
     # Serials CURRENTLY connected on a physical port (adb/ssh/fastboot). A watch
     # that leaves the cradle but is still reachable in orbit hands off: it drops
@@ -446,7 +459,10 @@ def _web_status_data(cfg: dict) -> list[dict]:
 
         phys        = physical.get(loc, {})
         all_ports   = phys.get("ports", sorted(int(p) for p in mapped))
-        description = phys.get("description", "")
+        # Description is captured at map time (a live read here can block a
+        # minute+ on a wedged hub — see _sysfs_hub_scan); the live scan no
+        # longer provides one.
+        description = cfg_hub.get("description") or phys.get("description", "")
 
         mapped_nums = sorted(int(p) for p in mapped)
         empty_nums  = sorted(n for n in all_ports
@@ -701,13 +717,18 @@ def _web_status_data(cfg: dict) -> list[dict]:
         return (h.get("name") or h["location"].split(".")[0],
                 min(socks) if socks else 9999)
     result.sort(key=_hub_key)
-    orbit_view = _orbit_hub_view(cfg, connected_serials)
+    _ph["render"] = time.perf_counter() - _t_render
+    orbit_view = _timed("orbit", lambda: _orbit_hub_view(cfg, connected_serials))
     if orbit_view:
         result.append(orbit_view)          # always last, below the physical hubs
     _persist_exact_codenames(_detected_exact)
     elapsed = time.perf_counter() - _t0
-    if elapsed > 1.0:     # quiet when fast; flag only the occasional slow refresh
-        log.info("slow status refresh: %.2fs", elapsed)
+    if elapsed > 1.0:     # quiet when fast; flag only the occasional slow refresh,
+        # with the per-phase breakdown so the culprit is named, not guessed.
+        breakdown = ", ".join(f"{k} {v * 1000:.0f}ms"
+                              for k, v in sorted(_ph.items(), key=lambda x: -x[1])
+                              if v > 0.02)
+        log.info("slow status refresh: %.2fs — %s", elapsed, breakdown)
     return result
 
 

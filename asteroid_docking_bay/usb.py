@@ -195,13 +195,12 @@ def _sysfs_hub_scan(cfg: dict) -> list[dict]:
                     # variable USB query (some empty-off ports hang for seconds).
                     # Serve the cached value; the background warmer keeps it fresh.
                     power[n] = power_cache.get((loc, n))
-        desc = ""
-        if want:
-            try:
-                desc = (_SYSFS_USB / loc / "product").read_text().strip()
-            except OSError:
-                pass
-        hubs.append({"location": loc, "description": desc, "ppps": True,
+        # NEVER read the hub's `product` here. On a wedged hub that read blocks
+        # the kernel USB core for a minute+ (measured 88s on the rig for one
+        # flaky A16 chip), freezing EVERY status refresh — one bad hub takes the
+        # whole UI down. The description is static, so it is captured once at map
+        # time into the config; webstatus prefers that.
+        hubs.append({"location": loc, "ppps": True,
                      "ports": sorted(ports), "power": power, "connect": connect})
     return hubs
 
