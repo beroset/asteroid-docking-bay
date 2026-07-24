@@ -413,7 +413,15 @@ class Watch:
         ints are written bare. So the on-watch weather app + Today screen show it."""
         ok = True
         for key, typ, val in writeset:
-            gv = ("'" + str(val).replace("'", "") + "'") if typ == "string" else str(int(val))
+            if typ == "string":
+                # Escape into the gvariant string literal (\\ then '), don't
+                # STRIP the apostrophe — that silently mangled "St. John's" to
+                # "St. Johns" (audit C3). shlex.quote below carries it intact
+                # through the host shell + su -c to dconf's gvariant parser.
+                esc = str(val).replace("\\", "\\\\").replace("'", "\\'")
+                gv = "'" + esc + "'"
+            else:
+                gv = str(int(val))
             rc, _, err = self.user_cmd(
                 f"HOME=/home/ceres dconf write {shlex.quote(key)} {shlex.quote(gv)}",
                 timeout=10)

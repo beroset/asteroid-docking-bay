@@ -259,3 +259,17 @@ def test_set_datetime_survives_the_adb_argument_resplit():
     assert len(host_tokens) == 1, f"not wrapped — adb will re-split it: {seen['cmd']}"
     # and when the watch shell re-parses that token, the datetime stays one arg
     assert shlex.split(host_tokens[0]) == ["date", "-s", "2026-01-01 12:00:00"]
+
+
+def test_weather_sync_preserves_apostrophes_in_city_names(monkeypatch):
+    """A city like "St. John's" must not be silently mangled to "St. Johns"
+    (audit C3). The apostrophe is escaped into the gvariant literal and carried
+    through the shell layers, not stripped."""
+    from asteroid_docking_bay.watchctl import Watch
+    cmds = []
+    w = Watch("S", transport=None)
+    monkeypatch.setattr(w, "user_cmd",
+                        lambda cmd, timeout=None: (cmds.append(cmd), (0, "", ""))[1])
+    w.weather_sync([("/org/asteroidos/weather/city", "string", "St. John's")])
+    joined = " ".join(cmds)
+    assert "John" in joined and "Johns" not in joined, joined   # not stripped
