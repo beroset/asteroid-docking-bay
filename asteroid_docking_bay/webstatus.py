@@ -65,8 +65,10 @@ def _enum_stuck(slot: str, power, adb_state, present: bool, now: float) -> bool:
 # wedged and when we last auto-cycled it, so recovery fires once per episode.
 _fake_power_since: dict[str, float] = {}
 _fake_power_cycled: dict[str, float] = {}
+_fake_power_cycles: dict[str, int] = {}   # cycles this episode, to stop futile ones
 _FAKE_POWER_GRACE_SEC = 60
 _FAKE_POWER_BACKOFF_SEC = 300
+_FAKE_POWER_MAX_CYCLES = 2   # a register cycle can't fix a physical button cut
 
 
 def _maybe_self_heal_fake_power(slot: str, loc: str, port: int,
@@ -77,6 +79,7 @@ def _maybe_self_heal_fake_power(slot: str, loc: str, port: int,
     daemon thread)."""
     if not wedged or busy or not charge_config(cfg).fake_power_self_heal:
         _fake_power_since.pop(slot, None)
+        _fake_power_cycles.pop(slot, None)   # episode over — reset the count
         return
     now = time.time()
     if now - _fake_power_since.setdefault(slot, now) < _FAKE_POWER_GRACE_SEC:
@@ -84,7 +87,21 @@ def _maybe_self_heal_fake_power(slot: str, loc: str, port: int,
     if now - _fake_power_cycled.get(slot, 0) < _FAKE_POWER_BACKOFF_SEC:
         return
     _fake_power_cycled[slot] = now
-    log.info("%s: fake-power wedge (powered, no connect >%ds) — auto-cycling",
+    n = _fake_power_cycles.get(slot, 0) + 1
+    _fake_power_cycles[slot] = n
+    if n > _FAKE_POWER_MAX_CYCLES:
+        # Cycled and still wedged: a sysfs register cycle CANNOT restore VBUS
+        # cut by the hub's physical per-port button (LEDs are truth), and it is
+        # not a stale node either. Stop actuating and name the physical cause,
+        # rather than implying a recovery we can't deliver (audit A3).
+        if n == _FAKE_POWER_MAX_CYCLES + 1:   # warn once per episode
+            log.warning("%s: still wedged after %d auto-cycles — a register "
+                        "cycle can't restore a VBUS cut by the hub's physical "
+                        "port button; check the button/LED and cable",
+                        slot, _FAKE_POWER_MAX_CYCLES)
+        return
+    log.info("%s: fake-power wedge (powered, no connect >%ds) — auto-cycling "
+             "(best-effort; a register cycle can't fix a physical button cut)",
              slot, _FAKE_POWER_GRACE_SEC)
     threading.Thread(target=uhubctl_cycle, args=(loc, port), daemon=True).start()
 

@@ -21,6 +21,7 @@ def _setup(monkeypatch, enabled=True):
     monkeypatch.setattr(ws.threading, "Thread", _SyncThread)
     ws._fake_power_since.clear()
     ws._fake_power_cycled.clear()
+    ws._fake_power_cycles.clear()
     cfg = {"charge": {"fake_power_self_heal": enabled}}
     return calls, cfg
 
@@ -60,6 +61,26 @@ def test_backoff_prevents_repeat(monkeypatch):
     ws._fake_power_cycled["1-2:1"] = time.time()   # just cycled
     ws._maybe_self_heal_fake_power("1-2:1", "1-2", 1, wedged=True, busy=False, cfg=cfg)
     assert calls == []
+
+
+def test_stops_cycling_a_persistent_wedge_it_cannot_fix(monkeypatch):
+    """A sysfs register cycle can't restore a VBUS cut by the hub's physical
+    per-port button; after a couple of futile cycles the self-heal must STOP
+    actuating and name the physical cause, not keep implying an impossible
+    recovery (audit A3)."""
+    calls, cfg = _setup(monkeypatch)
+    ws._fake_power_since["1-2:1"] = 0        # wedged past grace
+
+    def heal():
+        ws._fake_power_cycled["1-2:1"] = 0   # clear the backoff so it can act
+        ws._maybe_self_heal_fake_power("1-2:1", "1-2", 1, wedged=True, busy=False, cfg=cfg)
+    for _ in range(4):
+        heal()
+    assert len(calls) == ws._FAKE_POWER_MAX_CYCLES, \
+        f"kept cycling a wedge a register cycle can't fix: {calls}"
+    # a clean episode (un-wedge) resets the count so a genuine future wedge heals
+    ws._maybe_self_heal_fake_power("1-2:1", "1-2", 1, wedged=False, busy=False, cfg=cfg)
+    assert "1-2:1" not in ws._fake_power_cycles
 
 
 # ── stale-value fallback (_battery_view) ─────────────────────────────────────
