@@ -671,6 +671,17 @@ class DrainOp(Operation):
             while not stop_event.wait(timeout=_DRAIN_POLL_SEC):
                 # Reload config in case serial mapping changed.
                 serial  = find_serial_for_loc_port(load_config(), loc, port)
+                if serial != task.get("serial"):
+                    # The port's mapped watch changed mid-test (a config edit or
+                    # a physical swap). Reading on would attribute a DIFFERENT
+                    # watch's battery to this run's serial (the reading is taken
+                    # on the re-resolved serial but logged/saved under the start
+                    # serial) — stop instead of corrupting the result (audit B6).
+                    # Readings so far belong to the original watch and stay valid.
+                    log.warning("%s: drain test: port serial changed %s → %s "
+                                "mid-run — stopping to avoid mis-attribution",
+                                codename, task.get("serial"), serial)
+                    break
                 new_pct = _adb_read_battery(loc, port, serial, charge_cfg, stop_event)
                 if stop_event.is_set():
                     break

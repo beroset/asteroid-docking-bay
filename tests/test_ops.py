@@ -329,6 +329,21 @@ def test_resumed_drain_cuts_vbus_before_polling(monkeypatch):
         "resumed drain never cut VBUS — the watch charges instead of draining")
 
 
+def test_drain_stops_if_the_port_serial_changes_mid_run(monkeypatch):
+    """If the port's mapped watch changes mid-drain (config edit / physical
+    swap), reading on attributes a different watch's battery to this run's
+    serial — the read is on the re-resolved serial but logged under the start
+    serial (audit B6). The loop must stop rather than mis-attribute."""
+    opsmod, power, slot, task = _drain_env(monkeypatch, [80, 70, 60, 20])
+    serials = iter(["S1", "S2", "S2", "S2"])   # start on S1, then the port remaps
+    monkeypatch.setattr(opsmod, "find_serial_for_loc_port",
+                        lambda *a, **k: next(serials, "S2"))
+    opsmod.DrainOp(slot, "1-2", 2, {}).run()
+    # the loop broke on the first poll's serial change → only the start reading
+    assert len(task["readings"]) == 1, \
+        f"kept reading after the serial changed: {task['readings']}"
+
+
 def test_a_single_failed_read_does_not_abort(monkeypatch):
     """One transient miss is normal; aborting on it would make drain tests
     useless. The guard must tolerate misses below the cap."""
