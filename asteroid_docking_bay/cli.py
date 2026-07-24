@@ -13,20 +13,20 @@ import time
 from pathlib import Path
 
 from .util import log, setup_logging
-from .adb import (_adb_state, _wait_for_new_adb_device, adb_devices,
+from .adb import (_adb_state, adb_devices,
                   get_battery_level, get_watch_codename)
 from .config import (CONFIG_FILE, ChargeConfig, charge_config, flash_config,
                      _resolve_targets, _store_smart_verdict, AmbiguousTargetError,
                      find_port_for_codename, find_ports_for_target,
                      find_serial_for_codename, resolve_single_port,
                      find_serial_for_loc_port, is_port_smart, is_slot_smart,
-                     exact_codename_for_serial, load_config,
-                     save_config)
-from .usb import (port_foreign_device, test_port_power_switching,
+                     exact_codename_for_serial, hub_name_for, load_config,
+                     save_config, seed_hub_names)
+from .usb import (hub_vendors, test_port_power_switching,
                   uhubctl_get_power, uhubctl_list, uhubctl_set_power)
 from .events import event_log
 from .fastboot import _fastboot_devices
-from .ops import _end_port, _flash_one_watch, charge_to_target
+from .ops import _flash_one_watch, charge_to_target
 from .tasks import active_op_on_slot
 from .watchctl import wait_for_adb
 
@@ -550,21 +550,21 @@ def cmd_flash_all(args, cfg: dict):
 
 def cmd_map(args, cfg: dict):
     """
-    Automatic port mapping: power each port on for up to 10 seconds, read
-    the codename from whatever watch appears in ADB, run PPPS test.
-    No prompts mid-run.  Summary at the end lists what was found and which
-    ports had no response (empty or ADB not working).
+    Map the hub topology: register every USB2-side hub so it and its ports
+    appear in the UI, and auto-name the physical boxes. No power is switched and
+    no watches are probed — watches are detected live as they dock, and a port's
+    PPPS switchability is verified at runtime the first time it is toggled with a
+    watch present. Existing watch mappings and per-port verdicts are preserved.
     """
     print()
-    print("   ✨  ⋆  ˚  ✦   asteroid-docking-bay   ✦  ˚  ⋆  ✨")
-    print("   ───── automatic port mapping & battery care ─────")
-    print("          Docking sequence initialized...")
+    print("   \u2728  \u22c6  \u02da  \u2726   asteroid-docking-bay   \u2726  \u02da  \u22c6  \u2728")
+    print("   \u2500\u2500\u2500\u2500\u2500\u2500 hub topology mapping \u2500\u2500\u2500\u2500\u2500\u2500")
     print()
 
     hubs = uhubctl_list()
-    # USB 3.0 companion buses expose the same physical ports as their USB 2.0
-    # counterparts. Watches are USB 2.0 devices and only enumerate on the 2.x bus.
-    # Scanning 3.x hubs causes double-detection and incorrect PPPS results.
+    # Watches are USB 2.0 devices and only enumerate on the 2.x bus; a USB 3.x
+    # companion mirrors the same physical ports, so scanning it would double
+    # every hub. Keep the USB 2.0 side only.
     hubs = [hub for hub in hubs if ", USB 3." not in hub.get("description", "")]
     if not hubs:
         print("No USB hubs found by uhubctl.")
@@ -573,158 +573,39 @@ def cmd_map(args, cfg: dict):
 
     print(f"Found {len(hubs)} hub(s):")
     for hub in hubs:
-        ppps_note = "PPPS advertised" if hub.get("ppps") else "PPPS not advertised"
-        print(f"  {hub['location']:12}  {hub['description']}  [{ppps_note}]")
-    print()
+        print(f"  {hub['location']:12}  {hub['description']}  ({len(hub['ports'])} ports)")
 
-    ans = input("Power off all ports and start mapping? [Y/n] ").strip().lower()
-    if ans not in ("", "y", "yes"):
-        print("Aborted.")
-        return
-
-    # Identify cascade ports: ports on a parent hub whose child hub is in our list.
-    # e.g. hub "1-2.4" → parent hub "1-2" owns port 4 as a cascade port.
-    # We must not power off cascade ports during the all-off phase — doing so would
-    # kill the sub-hub before we can scan it.
-    cascade_ports: dict[str, set[int]] = {}  # hub_location → set of cascade port numbers
+    # (Re)register each hub, preserving everything already learned for it — watch
+    # mappings, per-port smart verdicts, socket labels, excludes — and refreshing
+    # only the advertised ppps flag. Config entries for hubs not in this scan
+    # (temporarily unplugged) are kept untouched.
+    existing = {hub["location"]: hub for hub in cfg.get("hubs", [])}
+    scanned = {hub["location"] for hub in hubs}
+    registered: list[dict] = []
     for hub in hubs:
         loc = hub["location"]
-        if "." in loc:
-            parent_loc, _, parent_port_str = loc.rpartition(".")
-            cascade_ports.setdefault(parent_loc, set()).add(int(parent_port_str))
+        entry = {**existing.get(loc, {}), "location": loc,
+                 "ppps": hub.get("ppps", False)}
+        entry.setdefault("ports", {})
+        entry.setdefault("port_smart", {})
+        registered.append(entry)
+    cfg["hubs"] = registered + [hub for hub in cfg.get("hubs", [])
+                                if hub["location"] not in scanned]
 
-    # Baseline of foreign devices: any port with an enumerated non-watch
-    # device (keyboard, mouse, dock peripheral, an unswitchable sub-hub) is
-    # off-limits — map must never cut power to something it can't identify
-    # as a watch. adb/fastboot-visible serials count as watches even under
-    # non-standard vendor IDs (hacked or vendor-specific USB identities).
-    watch_serials = set(adb_devices().keys()) | set(_fastboot_devices().keys())
-    foreign: dict[tuple, str] = {}
-    for hub in hubs:
-        for port in hub["ports"]:
-            desc = port_foreign_device(hub["location"], port, watch_serials)
-            if desc:
-                foreign[(hub["location"], port)] = desc
-    if foreign:
-        print("Leaving non-watch devices untouched:")
-        for (loc, port), desc in sorted(foreign.items()):
-            print(f"  {loc}:p{port}  {desc}")
+    # Auto-name the physical boxes (idempotent — only fills an unset map).
+    if seed_hub_names(cfg, hub_vendors()):
+        print(f"\nNamed physical hubs: {cfg['hub_names']}")
 
-    print("\nPowering off all ports…")
-    for hub in hubs:
-        skip = cascade_ports.get(hub["location"], set())
-        for port in hub["ports"]:
-            if port in skip or (hub["location"], port) in foreign:
-                continue
-            try:
-                uhubctl_set_power(hub["location"], port, False)
-            except RuntimeError as e:
-                log.warning("hub %s port %d: %s", hub["location"], port, e)
-    time.sleep(2)
-
-    new_hubs: list[dict] = []
-    no_response: list[str] = []   # ports where no watch appeared
-
-    # Track serials already assigned so a reconnecting watch from a previous
-    # port's PPPS cycle doesn't get double-detected on the next port.
-    known_serials: set[str] = set(adb_devices().keys())
-
-    # Scan deepest child hubs first so parent cascade ports stay live throughout.
-    hubs_sorted = sorted(hubs, key=lambda h: h["location"].count("."), reverse=True)
-
-    for hub in hubs_sorted:
-        loc = hub["location"]
-        print(f"\n── Hub {loc}  {hub['description']} ──")
-
-        port_map: dict[str, str] = {}
-        port_smart: dict[str, bool] = {}
-        port_serials: dict[str, str] = {}
-
-        skip = cascade_ports.get(loc, set())
-        for port in hub["ports"]:
-            if port in skip:
-                print(f"  Port {port}: (cascade → sub-hub {loc}.{port})")
-                continue
-            if (loc, port) in foreign:
-                print(f"  Port {port}: (skipped — {foreign[(loc, port)]})")
-                continue
-
-            print(f"  Port {port}: ", end="", flush=True)
-
-            # Use known_serials as baseline: excludes watches already mapped on
-            # earlier ports even if they're still reconnecting after a PPPS cycle.
-            before = set(adb_devices().keys()) | known_serials
-            uhubctl_set_power(loc, port, True)
-
-            serial = _wait_for_new_adb_device(before, timeout=10)
-
-            if serial:
-                codename = get_watch_codename(serial) or serial
-                print(f"{codename}  ({serial})", end="", flush=True)
-                port_map[str(port)] = codename
-                port_serials[str(port)] = serial
-                cfg.setdefault("serials", {})[serial] = codename
-                known_serials.add(serial)
-
-                # PPPS test inline — port is ON, takes up to ~30 s.
-                print(f"  …testing PPPS…", end="", flush=True)
-                try:
-                    smart, msg = test_port_power_switching(loc, port, serial)
-                except RuntimeError as e:
-                    smart, msg = False, str(e)
-                port_smart[str(port)] = smart
-                print(f"  {'[smart]' if smart else '[NOT SMART]' if smart is False else '[unverified]'}")
-                # Return each mapped watch to rest — map only powered it on to
-                # identify it. Graceful (not a raw VBUS cut) so it doesn't sit
-                # running on battery; the fleet ends the scan default-off.
-                _end_port(loc, port, serial, charge_config(cfg), "map: identified")
-            else:
-                print("(no response)")
-                no_response.append(f"{loc}:p{port}")
-                uhubctl_set_power(loc, port, False)
-
-        new_hubs.append({
-            "location": loc,
-            "ppps": hub.get("ppps", False),
-            "port_smart": port_smart,
-            "ports": port_map,
-            "port_serials": port_serials,
-        })
-
-    touched_locs = {hub["location"] for hub in new_hubs}
-    new_codenames = {codename for hub in new_hubs for codename in hub.get("ports", {}).values()}
-    # Preserve old hub entries only when they contain codenames NOT found in this
-    # scan.  An old entry whose watches all reappeared at a new location is stale
-    # (hub moved to a different USB path) and should be dropped to avoid duplicates.
-    cfg["hubs"] = new_hubs + [
-        hub for hub in cfg.get("hubs", [])
-        if hub["location"] not in touched_locs
-        and not any(codename in new_codenames for codename in hub.get("ports", {}).values())
-    ]
     save_config(cfg)
 
-    # ── Summary ────────────────────────────────────────────────────────────────
-    print("\n=== Results ===\n")
-
-    any_non_smart = False
-    for hub in cfg["hubs"]:
-        for port_str, codename in sorted(hub["ports"].items(), key=lambda x: int(x[0])):
-            smart = hub.get("port_smart", {}).get(port_str)
-            tag = "smart" if smart is True else ("NOT SMART" if smart is False else "?")
-            if smart is False:
-                any_non_smart = True
-            print(f"  {hub['location']}:p{port_str}  →  {codename:<16}  [{tag}]")
-
-    if no_response:
-        print(f"\n  No watch detected on:")
-        for port_id in no_response:
-            print(f"    {port_id}")
-        print("  (empty port, disconnected cable, or ADB not enabled on the watch)")
-
-    if any_non_smart:
-        print("\nWARNING: ports marked NOT SMART cannot be power-managed.")
-
+    print("\n=== Mapped hubs ===")
+    for hub in sorted(cfg["hubs"], key=lambda h: h["location"]):
+        name = hub_name_for(cfg, hub["location"])
+        label = f"[{name}] " if name else ""
+        mapped = len(hub.get("ports", {}))
+        print(f"  {label}{hub['location']:14}  {mapped} watch(es) mapped")
     print(f"\nConfig saved to {CONFIG_FILE}")
+    print("Watches show up live as they dock; PPPS is verified per port at runtime.")
     print("Run 'asteroid-docking-bay status' to verify.")
 
 

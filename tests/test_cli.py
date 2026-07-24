@@ -164,3 +164,38 @@ def test_unique_image_name_and_serial_both_work(monkeypatch):
     cli.cmd_on(argparse.Namespace(codename="TUNNYA"), _addr_cfg())
     cli.cmd_on(argparse.Namespace(codename="ROVER1"), _addr_cfg())
     assert powered == [("1-2", 2), ("1-2.4", 1)], powered
+
+
+def test_cmd_map_registers_topology_and_never_switches_power(monkeypatch):
+    """The rewritten map records hub topology + names only: it must keep the
+    USB2 side, drop USB3 companions, preserve watch mappings and per-port
+    verdicts already learned, auto-name the boxes — and switch no power at all
+    (switchability is verified live at runtime instead)."""
+    import argparse
+    from asteroid_docking_bay import cli
+
+    monkeypatch.setattr(cli, "uhubctl_list", lambda: [
+        {"location": "1-2", "description": "USB2.1 Hub", "ppps": True,
+         "ports": [1, 2, 3, 4]},
+        {"location": "3-2", "description": "USB2.1 Hub, USB 3.0", "ppps": True,
+         "ports": [1, 2]},                         # USB3 companion — must drop
+    ])
+    monkeypatch.setattr(cli, "hub_vendors",
+                        lambda: [{"location": "1-2", "vendor": "0bda"}])
+    saved: dict = {}
+    monkeypatch.setattr(cli, "save_config", lambda cfg: saved.update(cfg=cfg))
+
+    def _no_power(*a, **k):
+        raise AssertionError("map must not switch power")
+    monkeypatch.setattr(cli, "uhubctl_set_power", _no_power)
+    monkeypatch.setattr(cli, "uhubctl_get_power", _no_power)
+
+    cfg = {"hubs": [{"location": "1-2", "ports": {"1": "skipjack"},
+                     "port_smart": {"1": True}}]}
+    cli.cmd_map(argparse.Namespace(), cfg)
+
+    hubs = {h["location"]: h for h in saved["cfg"]["hubs"]}
+    assert set(hubs) == {"1-2"}                     # USB3 companion filtered out
+    assert hubs["1-2"]["ports"] == {"1": "skipjack"}      # mapping preserved
+    assert hubs["1-2"]["port_smart"] == {"1": True}       # verdict preserved
+    assert saved["cfg"]["hub_names"] == {"1-2": "A16 #1"}  # auto-seeded
