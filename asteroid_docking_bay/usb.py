@@ -304,6 +304,34 @@ def uhubctl_get_power(location: str, port: int) -> bool | None:
     return None
 
 
+def _hub_has_usb3_companion(location: str) -> bool:
+    """Whether this hub is USB3-connected — its USB2 and USB3 sides are distinct
+    branches. Inferred from a `peer` link on the cascade port that leads to it
+    (that peer survives even when the leaf hub's own port peers do not, e.g. a
+    hub behind a dock), or, for a root-connected hub, on its own ports."""
+    parent, _, n = location.rpartition(".")
+    if parent and n.isdigit():
+        for iface in _SYSFS_USB.glob(f"{parent}:*"):
+            if (iface / f"{parent}-port{n}" / "peer").exists():
+                return True
+        return False
+    for peer in _SYSFS_USB.glob(f"{location}:*/{location}-port*/peer"):
+        if peer.exists():
+            return True
+    return False
+
+
+def _sysfs_power_is_complete(location: str, port: int) -> bool:
+    """Whether the sysfs `disable` attrs reach EVERY side of this port's shared
+    VBUS. False on a USB3-connected hub whose USB3 companion has no sysfs disable
+    (a hub behind a dock — no leaf `peer`): there sysfs cuts only the USB2 side
+    and VBUS stays up, so uhubctl (companion-aware) must drive it instead
+    (measured on the rig 2026-07-24 — shelving a Hub-B watch only rebooted it)."""
+    if len(_sysfs_disable_paths(location, port)) >= 2:
+        return True
+    return not _hub_has_usb3_companion(location)
+
+
 def uhubctl_set_power(location: str, port: int, on: bool) -> bool:
     """
     Set hub port power.  Returns True if the port state was confirmed to have
@@ -313,8 +341,13 @@ def uhubctl_set_power(location: str, port: int, on: bool) -> bool:
     Raises RuntimeError on uhubctl command failure.
     """
     action = "on" if on else "off"
-    # Fast path: write the port's power directly via sysfs (no bus scan).
-    if _sysfs_set_power(location, port, on):
+    # Fast path: write the port's power directly via sysfs (no bus scan) — but
+    # ONLY when sysfs can reach every side of the shared VBUS. On a USB3-
+    # connected hub whose USB3 companion has no sysfs disable, sysfs cuts only
+    # the USB2 side and VBUS stays up; fall through to uhubctl, which is
+    # companion-aware (cuts both sides AND updates the sysfs disable, so the
+    # fast read stays correct afterwards).
+    if _sysfs_power_is_complete(location, port) and _sysfs_set_power(location, port, on):
         actual = _sysfs_get_power(location, port)       # fresh read-back
         if actual is not None:
             power_cache.put((location, port), actual)

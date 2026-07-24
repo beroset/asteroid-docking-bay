@@ -82,3 +82,47 @@ def test_port_power_spans_both_usb2_and_usb3_sides(tmp_path, monkeypatch):
     assert a.read_text() == "0" and b.read_text() == "0"
     assert u._sysfs_set_power("1-2", 1, False) is True
     assert a.read_text() == "1" and b.read_text() == "1"   # BOTH cut — the fix
+
+
+def test_sysfs_power_complete_only_when_all_vbus_sides_reachable(tmp_path, monkeypatch):
+    """A hub behind a dock (Hub B) exposes only the USB2-side `disable` — no leaf
+    `peer`, no USB3-side sysfs — so cutting via sysfs leaves the shared VBUS up.
+    _sysfs_power_is_complete detects that (USB3-connected but < 2 disable paths)
+    so callers fall back to companion-aware uhubctl. Root-connected hubs (2 paths)
+    and true USB2-only hubs (1 path, no companion) stay on the fast sysfs path."""
+    from asteroid_docking_bay import usb as u
+    monkeypatch.setattr(u, "_SYSFS_USB", tmp_path)
+
+    # Hub B leaf: cascade port 1-9.1.3-port3 has a peer, leaf port has none.
+    casc = tmp_path / "1-9.1.3:1.0" / "1-9.1.3-port3"; casc.mkdir(parents=True)
+    (casc / "peer").symlink_to(tmp_path)                    # peer exists → USB3-connected
+    assert u._hub_has_usb3_companion("1-9.1.3.3") is True
+    monkeypatch.setattr(u, "_sysfs_disable_paths", lambda loc, port: [tmp_path / "d"])
+    assert u._sysfs_power_is_complete("1-9.1.3.3", 4) is False   # 1 path + companion
+
+    # Hub A root leaf: both sides reachable (2 disable paths).
+    monkeypatch.setattr(u, "_sysfs_disable_paths", lambda loc, port: [tmp_path / "d", tmp_path / "e"])
+    assert u._sysfs_power_is_complete("1-2.4", 2) is True
+
+    # True USB2-only hub: 1 path, no peer anywhere → sysfs is sufficient.
+    monkeypatch.setattr(u, "_sysfs_disable_paths", lambda loc, port: [tmp_path / "d"])
+    assert u._hub_has_usb3_companion("9-9.9") is False
+    assert u._sysfs_power_is_complete("9-9.9", 1) is True
+
+
+def test_set_power_uses_uhubctl_when_sysfs_cannot_reach_companion(tmp_path, monkeypatch):
+    """When sysfs can't cut every VBUS side, uhubctl_set_power must NOT trust the
+    sysfs fast path (it would half-cut and falsely confirm); it must drive the
+    companion-aware uhubctl instead."""
+    from asteroid_docking_bay import usb as u
+    monkeypatch.setattr(u, "_sysfs_power_is_complete", lambda loc, port: False)
+    sysfs_called = []
+    monkeypatch.setattr(u, "_sysfs_set_power", lambda l, p, o: sysfs_called.append((l, p, o)) or True)
+    calls = []
+    monkeypatch.setattr(u, "_uhubctl_exec", lambda cmd: calls.append(cmd) or (0, "", ""))
+    monkeypatch.setattr(u, "uhubctl_get_power", lambda l, p: False)
+    monkeypatch.setattr(u.power_cache, "put", lambda *a, **k: None)
+
+    assert u.uhubctl_set_power("1-9.1.3.3", 4, False) is True
+    assert sysfs_called == []                               # fast path skipped
+    assert calls and "-a off" in calls[0]                   # uhubctl drove it
