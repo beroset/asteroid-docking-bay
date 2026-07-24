@@ -157,3 +157,30 @@ def test_external_event_is_not_a_reading(tmp_path):
     assert rows[0]["event"] == "external"
     assert "pct" not in rows[0], "an external note carries no battery reading"
     assert rows[0]["note"] == "flashed" and rows[0]["source"] == "ui-track"
+
+
+def test_latest_drain_summaries_ignores_low_confidence_results(tmp_path, monkeypatch):
+    """A rate from one or two polls over a short span is dominated by per-read
+    noise and the re-power charge-bump — it must not become a watch's canonical
+    est_h and drive wearability / next_due_ts (audit B4). Only a run with enough
+    samples over enough time counts."""
+    import json
+    import asteroid_docking_bay.events as ev
+    monkeypatch.setattr(ev, "_DRAIN_RESULTS_DIR", tmp_path)
+
+    def write(name, readings, rate, ts):
+        (tmp_path / name).write_text(json.dumps({
+            "codename": "pike", "serial": "S", "start_ts": ts,
+            "drain_rate_pct_per_hour": rate, "readings": readings}))
+
+    # low-confidence: 2 readings over 0.5h → ignored
+    monkeypatch.setattr(ev, "_drain_summary_cache", {"mtime": None, "by_codename": {}})
+    write("pike-a.json", [{"ts": 0, "pct": 100}, {"ts": 1800, "pct": 92}], 16.0, 100)
+    assert "pike" not in ev._latest_drain_summaries(), "a 2-sample 0.5h rate became canonical"
+
+    # high-confidence: 4 readings over 2h → counts
+    monkeypatch.setattr(ev, "_drain_summary_cache", {"mtime": None, "by_codename": {}})
+    write("pike-b.json", [{"ts": 0, "pct": 100}, {"ts": 1800, "pct": 98},
+                          {"ts": 3600, "pct": 96}, {"ts": 7200, "pct": 92}], 4.0, 200)
+    s = ev._latest_drain_summaries()
+    assert "pike" in s and abs(s["pike"]["rate"] - 4.0) < 0.01

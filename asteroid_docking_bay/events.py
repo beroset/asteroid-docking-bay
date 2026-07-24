@@ -20,6 +20,11 @@ _DRAIN_POLL_SEC    = 30 * 60  # poll interval: 30 minutes
 # enumerating mid-test, froze the displayed reading at 71%, and discharged past
 # the floor to 0% / 3.18V unseen. Cap consecutive blind polls.
 _DRAIN_MAX_BLIND_POLLS = 3
+# A saved drain rate is only trusted as a watch's canonical standby figure once
+# it spans enough readings over enough time; below this it is per-read noise +
+# the re-power charge-bump, not a standby rate (audit B4).
+_DRAIN_MIN_SAMPLES = 3
+_DRAIN_MIN_HOURS   = 1.5
 _DRAIN_RESULTS_DIR = Path.home() / ".local/share/asteroid-docking-bay/drain-tests"
 
 
@@ -234,7 +239,16 @@ def _latest_drain_summaries() -> dict[str, dict]:
         cn   = (d.get("codename") or "").lower()
         rate = d.get("drain_rate_pct_per_hour")
         ts   = d.get("start_ts") or 0
-        if not cn or not rate or rate <= 0:
+        # A rate from too few readings over too short a span is dominated by
+        # per-read noise and the re-power charge-bump — refuse to let it become
+        # a watch's canonical est_h (drives wearability + next_due_ts). A single
+        # 30-min poll used to be enough (audit B4).
+        readings = d.get("readings") or []
+        span_h = ((readings[-1]["ts"] - readings[0]["ts"]) / 3600.0
+                  if len(readings) >= 2 else 0.0)
+        if (not cn or not rate or rate <= 0
+                or len(readings) < _DRAIN_MIN_SAMPLES
+                or span_h < _DRAIN_MIN_HOURS):
             continue
         if cn not in best or ts > best[cn]["ts"]:
             best[cn] = {"ts": ts, "rate": rate, "est_h": 85.0 / rate,
