@@ -353,6 +353,60 @@ def test_a_single_failed_read_does_not_abort(monkeypatch):
     assert task.get("last_pct") == 10, task
 
 
+def test_drain_measures_a_known_discharge_rate_end_to_end(monkeypatch):
+    """Over-arching guard the unit suite lacked (audit D2): drive a FULL
+    DrainOp.run against a synthetic battery discharging at a KNOWN rate and
+    assert the saved rate matches. Catches 'the whole mechanic measures
+    garbage' — a rising battery from a concurrent charge, a broken divisor,
+    wrong anchoring — rather than any single component. A synthetic clock
+    advances one poll interval per loop wait; the battery is a pure linear
+    discharge (no charge-bump), so the recovered rate must equal ground truth."""
+    import asteroid_docking_bay.ops as opsmod
+    import asteroid_docking_bay.tasks as tasksmod
+    import time as _time
+
+    KNOWN = 6.0                       # %/h — 30-min polls land on integers
+    clock = {"t": 1_000_000.0}
+    T0 = clock["t"]
+    monkeypatch.setattr(_time, "time", lambda: clock["t"])
+
+    def battery():
+        return max(0.0, 100.0 - KNOWN * (clock["t"] - T0) / 3600.0)
+
+    def read(loc, port, serial, cc, stop, with_features=False):
+        pct = int(round(battery()))
+        return (pct, {"wifi": False, "bt": False, "aod": False}) if with_features else pct
+    monkeypatch.setattr(opsmod, "_adb_read_battery", read)
+
+    class FakeStop:
+        _set = False
+        def wait(self, timeout=None):
+            clock["t"] += opsmod._DRAIN_POLL_SEC     # advance one poll interval
+            return self._set
+        def is_set(self): return self._set
+        def set(self): type(self)._set = True
+
+    slot = "1-2:1"
+    monkeypatch.setitem(tasksmod._drain_tasks, slot, {})
+    monkeypatch.setitem(tasksmod._drain_stop, slot, FakeStop())
+    monkeypatch.setattr(opsmod, "find_serial_for_loc_port", lambda *a, **k: "S1")
+    monkeypatch.setattr(opsmod, "load_config", lambda: {})
+    monkeypatch.setattr(opsmod, "uhubctl_set_power", lambda *a, **k: None)
+    monkeypatch.setattr(opsmod, "_end_port", lambda *a, **k: None)
+    monkeypatch.setattr(opsmod, "_save_drain_results", lambda *a, **k: None)
+    monkeypatch.setattr(opsmod.task_store, "persist", lambda *a, **k: None)
+    monkeypatch.setattr(opsmod.task_store, "unpersist", lambda *a, **k: None)
+    monkeypatch.setattr(opsmod.event_log, "log", lambda *a, **k: None)
+
+    opsmod.DrainOp(slot, "1-2", 1, {}).run()
+    task = tasksmod._drain_tasks[slot]
+    assert len(task["readings"]) > 20, \
+        f"mechanic did not run end-to-end: {len(task['readings'])} readings"
+    assert task["last_pct"] <= opsmod._DRAIN_FLOOR_PCT, "did not reach the floor"
+    assert abs(task["drain_rate"] - KNOWN) < 0.3, \
+        f"recovered rate {task['drain_rate']} != known {KNOWN}"
+
+
 # ── who owns a port, across processes ───────────────────────────────────────
 
 def test_active_op_on_slot_sees_in_memory_ops(monkeypatch, tmp_path):
