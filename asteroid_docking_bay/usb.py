@@ -98,40 +98,68 @@ class PowerCache:
 power_cache = PowerCache()
 
 
-def _sysfs_disable_path(location: str, port: int) -> "Path | None":
+def _sysfs_disable_paths(location: str, port: int) -> "list[Path]":
+    """The sysfs 'disable' paths that control this port's VBUS.
+
+    On a USB3-connected hub the physical VBUS is shared between the USB2 port
+    and its USB3 companion (the kernel `peer` link). Cutting only one side
+    leaves VBUS held on by the other — measured 2026-07-24 after the A16s moved
+    to USB3 ports, where every port read OFF in software while physically ON and
+    nothing switched. So return the port's disable AND its peer's when present.
+    A USB2-only hub has no peer and yields a single path (unchanged behaviour)."""
+    paths: list[Path] = []
     for iface in _SYSFS_USB.glob(f"{location}:*"):
-        p = iface / f"{location}-port{port}" / "disable"
-        if p.exists():
-            return p
-    return None
+        portdir = iface / f"{location}-port{port}"
+        d = portdir / "disable"
+        if d.exists():
+            paths.append(d)
+        peer = portdir / "peer"
+        if peer.exists():
+            try:
+                pd = peer.resolve() / "disable"
+                if pd.exists():
+                    paths.append(pd)
+            except OSError:
+                pass
+    return paths
 
 
 def _sysfs_get_power(location: str, port: int) -> "bool | None":
-    """True = on, False = off, None = attr unavailable (caller falls back)."""
-    p = _sysfs_disable_path(location, port)
-    if p is None:
+    """True = on, False = off, None = unavailable. VBUS is on if EITHER side
+    (the port or its USB3 peer) is enabled; off only when all are disabled."""
+    vals = []
+    for p in _sysfs_disable_paths(location, port):
+        try:
+            vals.append(p.read_text().strip())
+        except OSError:
+            pass
+    if not vals:
         return None
-    try:
-        v = p.read_text().strip()
-    except OSError:
-        return None
-    return True if v == "0" else (False if v == "1" else None)
+    if "0" in vals:
+        return True
+    if all(v == "1" for v in vals):
+        return False
+    return None
 
 
 def _sysfs_set_power(location: str, port: int, on: bool) -> bool:
-    """Write the port's power via sysfs. True on success, False if the attr is
-    missing or not writable (caller falls back to uhubctl)."""
-    p = _sysfs_disable_path(location, port)
-    if p is None:
+    """Write the port's power via sysfs on BOTH sides (USB2 + USB3 peer) so a
+    USB3-connected hub actually cuts/restores VBUS instead of the other side
+    holding it on. True only if EVERY side wrote — a partial write leaves VBUS
+    mixed, so the caller falls back to uhubctl."""
+    paths = _sysfs_disable_paths(location, port)
+    if not paths:
         return False
-    try:
-        p.write_text("0" if on else "1")
-        power_cache.put((location, port), on)
-        return True
-    except OSError as e:
-        log.debug("sysfs set_power %s:%d failed (%s) — falling back to uhubctl",
-                  location, port, e)
-        return False
+    val = "0" if on else "1"
+    for p in paths:
+        try:
+            p.write_text(val)
+        except OSError as e:
+            log.debug("sysfs set_power %s:%d (%s) failed (%s) — falling back",
+                      location, port, p, e)
+            return False
+    power_cache.put((location, port), on)
+    return True
 
 
 def _sysfs_hub_scan(cfg: dict) -> list[dict]:

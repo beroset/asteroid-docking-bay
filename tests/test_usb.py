@@ -64,3 +64,21 @@ def test_foreign_guard_accepts_known_serial(monkeypatch, tmp_path):
     assert usb.port_foreign_device("9-9", 1) == "Ticwatch E"
     assert usb.port_foreign_device("9-9", 1, {"M6600TB1Z300"}) is None
     assert usb.port_foreign_device("9-9", 1, {"other"}) == "Ticwatch E"
+
+
+def test_port_power_spans_both_usb2_and_usb3_sides(tmp_path, monkeypatch):
+    """On a USB3-connected hub VBUS is shared between the USB2 port and its USB3
+    peer; cutting only one side leaves it powered (measured on the rig 2026-07-24
+    — every port read OFF while physically ON). get/set must span both: on if
+    EITHER side is enabled, and a set writes BOTH sides."""
+    from asteroid_docking_bay import usb as u
+    a = tmp_path / "a"; b = tmp_path / "b"
+    a.write_text("1"); b.write_text("1")
+    monkeypatch.setattr(u, "_sysfs_disable_paths", lambda loc, port: [a, b])
+    assert u._sysfs_get_power("1-2", 1) is False           # both disabled → off
+    a.write_text("0")
+    assert u._sysfs_get_power("1-2", 1) is True            # one side on → on
+    assert u._sysfs_set_power("1-2", 1, True) is True
+    assert a.read_text() == "0" and b.read_text() == "0"
+    assert u._sysfs_set_power("1-2", 1, False) is True
+    assert a.read_text() == "1" and b.read_text() == "1"   # BOTH cut — the fix
