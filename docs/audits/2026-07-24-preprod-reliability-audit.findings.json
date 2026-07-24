@@ -1,0 +1,47 @@
+{
+  "audit": "2026-07-24 pre-production reliability audit",
+  "trigger": "0.9 feature load with thin integration testing; first overnight mass drain gave implausible 2-4h vs prior 6-8 days",
+  "method": "3 parallel code audits (drain, 0.9 features, power/USB) + live rig investigation (wakelocks/suspend/pulseaudio/mce)",
+  "root_cause_of_scary_result": {
+    "id": "ROOT",
+    "severity": "informational-upstream",
+    "confidence": "confirmed",
+    "finding": "asteroid-launcher holds an open pulseaudio sink-input, so the primary sink stays RUNNING (not SUSPENDED), keeping the audio hardware clocked and blocking SoC suspend -> 22-36%/h drain with the screen off",
+    "evidence": "sparrow (H1NZCJ010087020): pactl shows sink.primary RUNNING, sink-input from client asteroid-launcher; mce Display state=off, Blank inhibit=disabled; both watches HAS_SPEAKER=true (no-speaker hypothesis disproven)",
+    "owner": "upstream (asteroid-launcher / Qt6 / pulseaudio) — NOT asteroid-docking-bay",
+    "note": "matches mo's 'pulseaudio wont let it sleep' + Qt6 hypotheses"
+  },
+  "findings": [
+    {"id": "A1", "area": "rig-reliability", "severity": "critical", "confidence": "confirmed", "loc": "webstatus.py:513-521, usb.py:160-164 & 329-330", "summary": "not_enumerating warning is dead code on the sysfs rig; connect is derived from the same node-existence as present, so guard is always False; docked-but-not-enumerating reports as 'no link / no watch docked / dead cable' (inverse of truth)", "fix": "populate connect independent of node existence, or key on power and adb None and not present"},
+    {"id": "A2", "area": "rig-reliability", "severity": "high", "confidence": "confirmed-with-confound", "loc": "adb.py wait budget; adb server", "summary": "drained watches need real boot time to re-enumerate (longer than the wait budget); adb server may go stale with no a-d-b self-heal; both seen after the overnight drains", "fix": "detect/kill-start a wedged adb server; battery-aware re-enumeration budget"},
+    {"id": "A3", "area": "rig-reliability", "severity": "medium", "confidence": "confirmed", "loc": "usb.py:86-98, webstatus.py:577", "summary": "power state is a register read (cache TTL 300s) that cannot see a real VBUS cut (A16 buttons); fake-power self-heal rewrites disable and cannot restore a button cut but implies recovery", "fix": "treat register-power as claim not truth; do not imply un-deliverable recovery"},
+    {"id": "A4", "area": "rig-reliability", "severity": "medium", "confidence": "inferred", "loc": "adb.py:246-279", "summary": "wait_serial_online recovery cycles the port from config (loc,port) fixed at op start; after a physical move it bounces a different watch now on the old seat", "fix": "cycle the port the serial currently enumerates on"},
+    {"id": "B1", "area": "drain-integrity", "severity": "critical", "confidence": "confirmed", "loc": "ops.py:306-310, 574-578, 261-282", "summary": "charge and drain are mutually blind; conflict matrix asymmetric and Operation.start never consults active_op_on_slot, so charge.start on a draining slot powers the port ON mid-measurement; RPC path unguarded (CLI path is guarded)", "fix": "symmetric conflict matrix or route start through active_op_on_slot"},
+    {"id": "B2", "area": "drain-integrity", "severity": "high", "confidence": "confirmed-mechanism-inferred-magnitude", "loc": "ops.py:648-651, 437-462", "summary": "30-min re-power poll applies charger + re-enumerates USB, waking the SoC 48x/day; measures a woken-every-30-min rate, not true standby; compounds the upstream sleep bug", "fix": "quantify vs 6h poll and vs standby_off_to_on_rate baseline; reduce poll perturbation"},
+    {"id": "B3", "area": "drain-integrity", "severity": "high", "confidence": "confirmed", "loc": "ops.py:102-124", "summary": "_end_port ignores wait_serial_online result, then unconditionally stamps safe_off_ts and cuts VBUS; a watch that never woke is marked 'down' while running on battery invisibly", "fix": "gate safe-off on confirmed offline/uptime"},
+    {"id": "B4", "area": "drain-integrity", "severity": "high", "confidence": "confirmed", "loc": "ops.py:689-691, events.py:186-244", "summary": "no minimum duration/sample floor before a rate is saved and seeded fleet-wide; a 1-poll stop saves a noisy 0.5h rate as canonical est_h", "fix": "refuse/flag rates below min elapsed + sample count"},
+    {"id": "B5", "area": "drain-integrity+side-effect", "severity": "high", "confidence": "confirmed", "loc": "watchctl.py:595-598, ops.py:580-685", "summary": "a forced screen (mcetool -D on) is never detected/released by the drain; drain samples get_battery_level only, blind to screen_forced; inspect-then-drain measures a lit panel for days", "fix": "read battery_and_screen at drain start; refuse or screen(False) first, log it"},
+    {"id": "B6", "area": "drain-integrity", "severity": "medium", "confidence": "confirmed", "loc": "ops.py:650 vs 693, 597", "summary": "poll reads the current serial but logs/saves the start serial; a mid-drain remap records watch B under watch A", "fix": "attribute readings to the serial actually read"},
+    {"id": "B7", "area": "drain-integrity", "severity": "medium", "confidence": "inferred", "loc": "ops.py:447-453", "summary": "initial read holds VBUS on for battery + connman + dconf (longer than a poll), biasing the fixed start_pct anchor up and inflating the whole rate", "fix": "re-read start_pct after the initial VBUS-off, or subtract the bump"},
+    {"id": "B8", "area": "drain-integrity+side-effect", "severity": "medium", "confidence": "confirmed", "loc": "watchctl.py:531-546", "summary": "record_audio can orphan gst-launch (host-only timeout, unchecked, no -k fallback, busybox timeout -s INT unverified); orphaned pulsesrc holds CPU and blocks suspend invisibly", "fix": "timeout -k, verify termination, pkill on cleanup"},
+    {"id": "B9", "area": "timing-parallelisation", "severity": "low-medium", "confidence": "confirmed", "loc": "ops.py:210-226 vs 437-462", "summary": "background warmer does USB/adb reads with no lock against the drain poll (which holds no _adb_lock); overlap can spuriously increment the blind counter toward blind_abort", "fix": "serialise warmer vs poll bus access"},
+    {"id": "C1", "area": "feature-correctness", "severity": "medium", "confidence": "confirmed", "loc": "watchctl.py:321", "summary": "set_datetime is shipped broken: date -s {shlex.quote(when)} — the quote is consumed host-side, adb/ssh re-split, watch runs date -s DATE TIME; wrong time every call on adb and ssh", "fix": "wrap the whole remote command in one token like set_hands"},
+    {"id": "C2", "area": "feature-correctness", "severity": "low", "confidence": "confirmed", "loc": "watchctl.py:521-524", "summary": "standby_features reports aod=True on a failed read (ignores rc), mislabelling attribution", "fix": "guard on rc"},
+    {"id": "C3", "area": "feature-correctness", "severity": "low", "confidence": "confirmed", "loc": "watchctl.py:412", "summary": "weather_sync strips apostrophes from city names (St. John's -> St. Johns)", "fix": "escape rather than strip"}
+  ],
+  "missing_tests": [
+    "cross-op conflict contract table {charge,drain,workbench,flash}^2 pairwise refusal (B1)",
+    "end-to-end measured-rate on a synthetic known-rate battery model (B2/B7) - highest value",
+    "poll-contamination: rate invariant across poll intervals (B2)",
+    "safe-off honesty: no 'down' when the watch never woke (B3), planted-bug validated",
+    "minimum-duration rate guard (B4)",
+    "serial-remap-mid-drain attribution (B6)",
+    "warmer-vs-poll concurrency (B9)",
+    "power-ledger invariant across every drain exit path"
+  ],
+  "recommended_order": {
+    "before_multiday_test": ["A1", "B1", "B3", "B5", "test:D2-synthetic-battery"],
+    "then_integrity": ["B4", "B6", "B7", "B8", "C1", "A2"],
+    "upstream_not_adb": ["asteroid-launcher/pulseaudio sink-stays-RUNNING sleep bug (ROOT)"]
+  }
+}
