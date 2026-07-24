@@ -35,6 +35,18 @@ def test_no_op_is_both_data_and_stream():
     assert not both, f"op(s) registered as both kinds: {sorted(both)}"
 
 
+def test_hub_rename_round_trips_and_clears(monkeypatch):
+    store: dict = {"hub_names": {}}
+    monkeypatch.setattr(rpcops, "load_config", lambda: store)
+    monkeypatch.setattr(rpcops, "save_config", lambda cfg: store.update(cfg))
+    d = rpcops.DISPATCH._data["hub.rename"]({"prefix": "1-9.1", "name": "A16 #2"})
+    assert d == {"ok": True, "name": "A16 #2"}
+    assert store["hub_names"]["1-9.1"] == "A16 #2"
+    d = rpcops.DISPATCH._data["hub.rename"]({"prefix": "1-9.1", "name": ""})
+    assert d == {"ok": True, "name": None}
+    assert "1-9.1" not in store["hub_names"]
+
+
 def test_registered_ops_are_the_documented_contract():
     """The allow-list IS the security boundary: adding an op must be a
     conscious, reviewed act. If this fails because you added one, update it
@@ -56,7 +68,7 @@ def test_registered_ops_are_the_documented_contract():
         "watch.image", "ssh.switch_adb", "watch.switch_ssh",
         "port.set", "port.cycle", "port.poweroff", "port.reboot",
         "port.bootloader", "port.recovery", "port.continue",
-        "port.hide", "hub.hide",
+        "port.hide", "hub.hide", "hub.rename",
         "charge.start", "charge.stop", "prefs.set_usb_mode",
         "workbench.start", "workbench.stop", "wear.set",
         "drain.start", "drain.stop", "drain.history",

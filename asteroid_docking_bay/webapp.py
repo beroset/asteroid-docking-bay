@@ -21,7 +21,8 @@ from socketserver import ThreadingMixIn
 from wsgiref.simple_server import WSGIServer, WSGIRequestHandler, make_server
 
 from .util import log
-from .usb import _sysfs_switch_mode
+from .config import _config_lock, load_config, save_config, seed_hub_names
+from .usb import _sysfs_switch_mode, hub_vendors
 from .ops import _background_warmer, _resume_persisted_tasks
 from .webtemplate import _WEB_TEMPLATE
 
@@ -160,6 +161,15 @@ def serve(args, cfg: dict):
                 status_cache["body"] = json.dumps(_call("status.get"))
                 status_cache["ts"] = now
             return status_cache["body"]
+
+    # Hub rename: the name is free text (spaces, empty to clear), so it rides the
+    # query string rather than the path; the prefix is the physical box address.
+    @app.post("/api/rename-hub/<prefix>")
+    def api_rename_hub(prefix):
+        resp.content_type = "application/json"
+        d = _call("hub.rename", {"prefix": prefix, "name": request.query.get("name", "")})
+        _bust_status_cache()
+        return json.dumps(d)
 
     @app.post("/api/watch/<serial>/toggle/<tech>/<state>")
     def api_watch_toggle(serial, tech, state):
@@ -378,6 +388,13 @@ def serve(args, cfg: dict):
         _resume_persisted_tasks()
         threading.Thread(target=_background_warmer, daemon=True).start()
         log.info("Port switching: %s", _sysfs_switch_mode(cfg))
+        # First run on this host: auto-name the physical hubs so the UI rows say
+        # which box (A16 #1, the dock, …) a port sits on. Editable in the UI.
+        with _config_lock:
+            fresh = load_config()
+            if seed_hub_names(fresh, hub_vendors()):
+                save_config(fresh)
+                log.info("auto-named hubs: %s", fresh["hub_names"])
 
     # PID-1 duty in the frontend container: exit on SIGTERM (see backend).
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))

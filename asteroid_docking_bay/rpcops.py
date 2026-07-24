@@ -34,7 +34,7 @@ from .config import (_config_lock, _store_smart_verdict, allocate_ssh_ip,
                      find_codename_for_loc_port, find_serial_for_loc_port,
                      flash_config, load_config, save_config,
                      orbit_add, orbit_forget, orbit_members,
-                     hands_cal_for, set_hands_cal)
+                     hands_cal_for, set_hands_cal, set_hub_name)
 from .usb import (_sysfs_path_to_serial_map, test_port_power_switching,
                   uhubctl_cycle, uhubctl_set_power)
 from .watchctl import DIAG_ROOT, Watch
@@ -1002,6 +1002,19 @@ def _hub_hide(args):
         state = hub["hidden"]
         save_config(cfg)
     return {"ok": True, "hidden": state}
+
+
+@DISPATCH.op("hub.rename")
+def _hub_rename(args):
+    """Set (or clear, with an empty name) the friendly name for a physical hub,
+    keyed by its address prefix so it covers every chip and port beneath it."""
+    prefix = args["prefix"]
+    name = args.get("name", "")
+    with _config_lock:
+        cfg = load_config()
+        set_hub_name(cfg, prefix, name)
+        save_config(cfg)
+    return {"ok": True, "name": name.strip() or None}
 
 
 # ── operations (charge / drain / workbench) ─────────────────────────────────

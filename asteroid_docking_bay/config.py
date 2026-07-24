@@ -168,14 +168,20 @@ def _loc_covers(prefix: str, location: str) -> bool:
     return location == prefix or location.startswith(prefix + ".")
 
 
-def hub_name_for(cfg: dict, location: str) -> "str | None":
-    """Friendly name covering this hub location — the longest matching prefix in
-    cfg['hub_names'] — or None if unnamed."""
+def hub_name_entry_for(cfg: dict, location: str) -> "tuple[str | None, str | None]":
+    """The (prefix, name) covering this hub location — the longest matching
+    prefix in cfg['hub_names'] — or (None, None) if unnamed. The prefix is the
+    physical box's address, the handle a rename targets."""
     best = None
     for prefix in cfg.get("hub_names", {}):
         if _loc_covers(prefix, location) and (best is None or len(prefix) > len(best)):
             best = prefix
-    return cfg["hub_names"][best] if best is not None else None
+    return (best, cfg["hub_names"][best]) if best is not None else (None, None)
+
+
+def hub_name_for(cfg: dict, location: str) -> "str | None":
+    """Friendly name covering this hub location, or None if unnamed."""
+    return hub_name_entry_for(cfg, location)[1]
 
 
 def set_hub_name(cfg: dict, prefix: str, name: str) -> None:
@@ -216,6 +222,20 @@ def derive_hub_names(hubs: "list[dict]") -> "dict[str, str]":
         else:
             names[loc] = f"Hub @ {loc}"
     return names
+
+
+def seed_hub_names(cfg: dict, vendor_hubs: "list[dict]") -> bool:
+    """If hub_names is unset, auto-name the physical boxes that actually contain
+    a configured hub (so stray host hubs on other buses aren't named). Returns
+    True if anything was added, so the caller knows to save."""
+    if cfg.get("hub_names"):
+        return False
+    cfg_locs = [h["location"] for h in cfg.get("hubs", [])]
+    kept = {prefix: name for prefix, name in derive_hub_names(vendor_hubs).items()
+            if any(_loc_covers(prefix, loc) for loc in cfg_locs)}
+    if kept:
+        cfg["hub_names"] = kept
+    return bool(kept)
 
 
 # ── exact codenames ──────────────────────────────────────────────────────────

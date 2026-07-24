@@ -12,8 +12,9 @@ from .util import log
 from .adb import (_adb_state, _resolve_conn_state, adb_devices,
                   battery_and_screen, get_watch_codename)
 from .config import (_config_lock, charge_config, find_codename_for_serial,
-                     load_config, orbit_members, record_exact_codename,
-                     save_config, ssh_ip_for_serial, usb_mode_preference)
+                     hub_name_entry_for, load_config, orbit_members,
+                     record_exact_codename, save_config, ssh_ip_for_serial,
+                     usb_mode_preference)
 from . import orbit
 from .usb import (_parse_hub_port_path, _port_device_present, _sysfs_hub_scan,
                   _sysfs_path_to_serial_map, _sysfs_usb_mode, uhubctl_cycle,
@@ -680,19 +681,25 @@ def _web_status_data(cfg: dict) -> list[dict]:
         hub_ports.sort(key=lambda p: (p.get("socket") is None,
                                       p.get("socket") or 0, p["port"]))
 
+        name_prefix, name = hub_name_entry_for(cfg, loc)
         result.append({
             "location": loc,
             "description": description,
+            "name": name,                          # physical box, e.g. "A16 #2"
+            "name_prefix": name_prefix or loc,      # what a rename targets
             "ports": hub_ports,
             "hidden": cfg_hub.get("hidden", False),
         })
 
-    # Group the cascaded chips of one physical hub together (by root location,
-    # e.g. all 1-2.* stay together) and order each group by its lowest socket,
-    # so a multi-chip hub reads in socket order rather than internal chip order.
+    # Group the cascaded chips of one physical box together and order each group
+    # by its lowest socket, so a multi-chip hub reads in socket order rather than
+    # internal chip order. Group by the box name when known (so an A16 hanging
+    # off a dock clusters under its own name, not lumped with the dock by root
+    # location); fall back to root location for unnamed hubs.
     def _hub_key(h):
         socks = [p["socket"] for p in h["ports"] if p.get("socket") is not None]
-        return (h["location"].split(".")[0], min(socks) if socks else 9999)
+        return (h.get("name") or h["location"].split(".")[0],
+                min(socks) if socks else 9999)
     result.sort(key=_hub_key)
     orbit_view = _orbit_hub_view(cfg, connected_serials)
     if orbit_view:

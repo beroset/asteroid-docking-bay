@@ -109,6 +109,7 @@ Deliberately mirrors the existing `/api/*` routes and module seams — the
 | `watch.quickpanel_set` | enable/disable one quick-panel toggle (rewrites the dconf enabled dict) |
 | `watch.fbreport` | fastboot getvar all -> downloadable text report |
 | `config.hide / hide_hub` | config mutations |
+| `hub.rename` | set a physical hub's friendly name (by address prefix) |
 | `flash.start`, `onboard.start` | streaming ops |
 
 The dispatch table is an allow-list; unknown ops get `ok:false`. Nothing

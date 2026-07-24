@@ -4,7 +4,8 @@
 from asteroid_docking_bay.config import (ChargeConfig, ConfigManager,
                                          FlashConfig, charge_config,
                                          derive_hub_names, flash_config,
-                                         hub_name_for, set_hub_name)
+                                         hub_name_for, seed_hub_names,
+                                         set_hub_name)
 
 
 # The rig's real topology: two A16 boxes (0bda) — one direct (1-2), one hanging
@@ -41,6 +42,19 @@ def test_loc_covers_respects_component_boundaries():
     assert hub_name_for(cfg, "1-9.1.3") == "A16 #2"
     assert hub_name_for(cfg, "1-9.10") is None          # not a child of 1-9.1
     assert hub_name_for(cfg, "1-2") is None
+
+
+def test_seed_hub_names_scopes_to_boxes_with_configured_hubs():
+    cfg = {"hubs": [{"location": "1-2.3.3"}, {"location": "1-9.1.3.3"}],
+           "hub_names": {}}
+    stray = _RIG_HUBS + [{"location": "2-1", "vendor": "1234"}]  # unrelated bus
+    assert seed_hub_names(cfg, stray) is True
+    # The stray box (no configured hub beneath it) is not named; the boxes in the
+    # fleet's path are — including the dock the second A16 hangs off.
+    assert cfg["hub_names"] == {"1-2": "A16 #1", "1-9": "Lenovo dock",
+                                "1-9.1": "A16 #2"}
+    # Idempotent: an already-seeded config is left untouched.
+    assert seed_hub_names(cfg, _RIG_HUBS) is False
 
 
 def test_set_hub_name_assigns_and_clears():

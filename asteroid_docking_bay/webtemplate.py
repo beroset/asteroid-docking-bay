@@ -826,7 +826,12 @@ function render(data){
     if(hub.hidden&&!showHidden)return;
     if(hub.location==='orbit'){renderOrbit(hub,rows,lo,hi);return;}
     const hubHideBtn=`<a href="#" class="hidebtn" onclick="doHideHub('${esc(hub.location)}');return false" title="${hub.hidden?'un-hide this hub':'hide/show this hub'}">${hub.hidden?'&#x2295;':'&#x2296;'}</a>`;
-    rows.push(`<tr class="hub-hdr${hub.hidden?' hiddenrow':''}"><td colspan="8"><span class="hl">${esc(hub.location)}</span><span class="dim">${esc(hub.description)}</span> ${hubHideBtn}</td></tr>`);
+    // Lead with the physical-box name (A16 #1, the dock, …) so a row's box is
+    // obvious; the raw chip address follows, dimmed. The pencil renames the box.
+    const hubHl=hub.name?esc(hub.name):esc(hub.location);
+    const hubAddr=hub.name?`<span class="dim">${esc(hub.location)}</span>`:'';
+    const hubRenameBtn=`<a href="#" class="hidebtn" onclick="doRenameHub('${esc(hub.name_prefix||hub.location)}','${esc(hub.name||'')}');return false" title="rename this hub">&#x270e;</a>`;
+    rows.push(`<tr class="hub-hdr${hub.hidden?' hiddenrow':''}"><td colspan="8"><span class="hl">${hubHl}</span>${hubAddr}<span class="dim">${esc(hub.description)}</span> ${hubRenameBtn} ${hubHideBtn}</td></tr>`);
     const visPorts=hub.ports.filter(p=>showHidden||!p.excluded);
     visPorts.forEach((p,i)=>{
       if(p.empty){
@@ -2234,6 +2239,11 @@ function doHidePort(c){
 }
 function doHideHub(loc){
   fetch('/api/hide-hub/'+loc,{method:'POST'}).then(()=>refresh());
+}
+function doRenameHub(prefix,cur){
+  const name=prompt('Name for hub at '+prefix+' (blank to clear):',cur||'');
+  if(name===null)return;
+  fetch('/api/rename-hub/'+encodeURIComponent(prefix)+'?name='+encodeURIComponent(name),{method:'POST'}).then(()=>refresh());
 }
 function doWb(c){
   fetch('/api/workbench/'+_api(c),{method:'POST'}).then(()=>setTimeout(refresh,2200));
