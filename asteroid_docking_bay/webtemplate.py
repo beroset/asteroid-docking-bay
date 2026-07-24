@@ -149,7 +149,7 @@ _WEB_TEMPLATE = """\
       line-height:1;vertical-align:middle;flex:none}
     .sdot .svgi{width:14px;height:14px;vertical-align:0}
     .sdot .pwri{width:15px;height:15px}
-    .sdot.on{border-color:#3fb950;color:#3fb950}
+    .sdot.on{border-color:#3fb950;background:#3fb950;color:#0d1117}   /* powered: solid lit green (a thin outline washed out in sun glare) */
     .sdot.err{border-color:#f85149;color:#f85149}
     .sdot.warn{border-color:#d29922;color:#d29922}
     .sdot.dim{border-color:#3d4756;color:#8b949e}
