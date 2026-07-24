@@ -502,6 +502,15 @@ def _sysfs_path_to_serial_map(serials: set[str]) -> dict[str, str]:
     return result
 
 
+def _sysfs_serial_at(loc: str, port: int) -> "str | None":
+    """The USB serial of the device enumerated at this hub port, or None."""
+    try:
+        with open(f"/sys/bus/usb/devices/{loc}.{port}/serial") as f:
+            return f.read().strip()
+    except OSError:
+        return None
+
+
 def _sysfs_adb_serials() -> set[str]:
     """Serials of watches currently exposing an ADB interface per sysfs — the
     ground truth of what is on the bus in adb mode, independent of the adb

@@ -223,3 +223,23 @@ def test_maybe_heal_wedged_adb_restarts_only_on_a_persistent_wedge(monkeypatch):
     # server now sees S1 → not a wedge
     monkeypatch.setattr(adbmod, "adb_devices_checked", lambda: {"S1": "device"})
     assert adbmod.maybe_heal_wedged_adb() is False
+
+
+def test_wait_serial_online_skips_recovery_cycle_when_another_watch_is_seated(monkeypatch):
+    """The recovery power-cycle targets recover_loc_port, fixed at op start. If
+    the watch moved and a DIFFERENT watch now sits at that seat, cycling it
+    would bounce the innocent one (audit A4). Skip the cycle unless the seat is
+    empty or holds our own serial."""
+    import asteroid_docking_bay.adb as adbmod
+    from asteroid_docking_bay import usb as usbmod
+    monkeypatch.setattr(adbmod, "adb_devices_checked", lambda: {})   # target never online
+    cycled = []
+    monkeypatch.setattr(usbmod, "uhubctl_cycle", lambda l, p: cycled.append((l, p)))
+    # a different watch is seated at the recovery seat → no cycle
+    monkeypatch.setattr(usbmod, "_sysfs_serial_at", lambda l, p: "OTHER")
+    assert adbmod.wait_serial_online("TARGET", 0, 1, recover_loc_port=("1-2", 1)) is False
+    assert cycled == [], "cycled a port holding a different watch"
+    # empty seat → cycle is allowed
+    monkeypatch.setattr(usbmod, "_sysfs_serial_at", lambda l, p: None)
+    adbmod.wait_serial_online("TARGET", 0, 1, recover_loc_port=("1-2", 1))
+    assert cycled == [("1-2", 1)], "did not cycle an empty seat"

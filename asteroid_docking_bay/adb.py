@@ -306,13 +306,23 @@ def wait_serial_online(serial: str, wait_secs: int, retries: int,
                 time.sleep(wait_secs)
         if recover_loc_port is not None and attempt == 0:
             loc, port = recover_loc_port
-            log.info("%s: not enumerating on %s:%s — power-cycling once",
-                     serial, loc, port)
             # Imported lazily: usb imports this module, so a top-level import
             # here would be circular. This is one of the two seams documented
             # in docs/ARCHITECTURE.md.
-            from .usb import uhubctl_cycle
-            uhubctl_cycle(loc, port)
+            from .usb import uhubctl_cycle, _sysfs_serial_at
+            here = _sysfs_serial_at(loc, port)
+            if here and here != serial:
+                # recover_loc_port is the target's seat as of op start. If the
+                # watch moved and a DIFFERENT watch sits there now, cycling
+                # would bounce that innocent one — so don't (audit A4). The wait
+                # just times out and the caller handles the miss.
+                log.warning("%s: not power-cycling %s:%s for recovery — a "
+                            "different watch (%s) is seated there now",
+                            serial, loc, port, here)
+            else:
+                log.info("%s: not enumerating on %s:%s — power-cycling once",
+                         serial, loc, port)
+                uhubctl_cycle(loc, port)
     return False
 
 
