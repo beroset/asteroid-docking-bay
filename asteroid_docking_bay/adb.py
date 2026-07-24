@@ -55,6 +55,43 @@ def adb_devices() -> dict[str, str | list[str]]:
     return adb_devices_checked() or {}
 
 
+_last_adb_heal = 0.0
+_prev_adb_missing: set[str] = set()
+_ADB_HEAL_COOLDOWN = 60.0
+
+
+def maybe_heal_wedged_adb() -> bool:
+    """Restart the adb server if it has wedged — listing nothing while watches
+    are enumerated in adb gadget mode.
+
+    Seen live 2026-07-24: powered ports, LEDs lit, watches enumerated in sysfs,
+    yet `adb devices` empty; kill/start-server recovered it, and there was no
+    self-heal (audit A2). Detect the wedge as adb-mode serials present in sysfs
+    that the server is blind to, require it to PERSIST across two checks (so a
+    just-plugged watch mid-enumeration is not mistaken for a wedge), and restart
+    at most once per cooldown (a restart briefly drops every watch). Returns True
+    on a restart."""
+    global _last_adb_heal, _prev_adb_missing
+    from .usb import _sysfs_adb_serials
+    on_bus  = _sysfs_adb_serials()
+    seen    = set(adb_devices_checked() or {})
+    missing = on_bus - seen
+    persistent = missing & _prev_adb_missing
+    _prev_adb_missing = missing
+    if not persistent:
+        return False
+    now = time.time()
+    if now - _last_adb_heal < _ADB_HEAL_COOLDOWN:
+        return False
+    _last_adb_heal = now
+    log.warning("adb server wedged: %d adb-mode watch(es) on the bus but not "
+                "listed by adb (%s) — restarting adb server",
+                len(persistent), ", ".join(sorted(persistent)))
+    _run("adb kill-server", check=False, timeout=8)
+    _run("adb start-server", check=False, timeout=8)
+    return True
+
+
 def _adb_state(devices: dict, serial: "str | None") -> "str | None":
     """State string ('device'/'offline'/…) for a serial in an adb_devices() map,
     or None if the serial isn't present. None-safe: adb_devices() values are now

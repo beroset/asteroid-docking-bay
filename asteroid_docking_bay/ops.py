@@ -11,7 +11,7 @@ from pathlib import Path
 
 from .util import _run, log
 from .adb import (adb_devices_checked, battery_and_screen, get_battery_level,
-                  wait_serial_online)
+                  maybe_heal_wedged_adb, wait_serial_online)
 from .config import (ChargeConfig, FlashConfig, charge_config, find_codename_for_loc_port,
                      find_port_for_codename, find_serial_for_loc_port,
                      is_port_smart, is_slot_smart, load_config, orbit_members)
@@ -197,6 +197,9 @@ def _background_warmer() -> None:
         try:
             if time.time() - fastboot._fb_list_cache["ts"] > 60:
                 fastboot._fastboot_poll()
+            # Recover a wedged adb server (lists nothing though watches are on
+            # the bus) — the whole rig looks dead otherwise (audit A2).
+            maybe_heal_wedged_adb()
             cfg = load_config()
             for hub in cfg.get("hubs", []):
                 loc = hub["location"]

@@ -502,6 +502,37 @@ def _sysfs_path_to_serial_map(serials: set[str]) -> dict[str, str]:
     return result
 
 
+def _sysfs_adb_serials() -> set[str]:
+    """Serials of watches currently exposing an ADB interface per sysfs — the
+    ground truth of what is on the bus in adb mode, independent of the adb
+    SERVER (which can wedge and list nothing) and of per-watch product IDs.
+
+    Keyed on the USB interface signature (class ff / subclass 42 / protocol 01)
+    rather than idProduct: the fleet's watches enumerate adb as 18d1:d001, not
+    the 0a03 the mode-detector assumes, but they all advertise the standard
+    Android ADB interface descriptor."""
+    out: set[str] = set()
+    for path in glob.glob("/sys/bus/usb/devices/*/serial"):
+        dev = os.path.dirname(path)
+        has_adb = False
+        for iface in glob.glob(f"{dev}/*:*"):
+            try:
+                if (open(f"{iface}/bInterfaceClass").read().strip() == "ff"
+                        and open(f"{iface}/bInterfaceSubClass").read().strip() == "42"
+                        and open(f"{iface}/bInterfaceProtocol").read().strip() == "01"):
+                    has_adb = True
+                    break
+            except OSError:
+                pass
+        if has_adb:
+            try:
+                with open(path) as f:
+                    out.add(f.read().strip())
+            except OSError:
+                pass
+    return out
+
+
 def _parse_hub_port_path(path: str) -> "tuple[str, int] | None":
     """'1-6.4.1' → ('1-6.4', 1); '1-6.2' → ('1-6', 2).
     Direct host ports ('1-3') have no hub in the path → None."""

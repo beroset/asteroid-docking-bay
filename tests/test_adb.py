@@ -196,3 +196,30 @@ def test_battery_paths_prefer_fuel_gauge():
     fg  = next(i for i, p in enumerate(paths) if "nanohub_fuelgauge" in p)
     bat = next(i for i, p in enumerate(paths) if p.endswith("/battery/capacity"))
     assert fg < bat
+
+
+def test_maybe_heal_wedged_adb_restarts_only_on_a_persistent_wedge(monkeypatch):
+    """The adb server can list nothing while watches are enumerated in adb mode
+    (seen live 2026-07-24). maybe_heal_wedged_adb must restart it — but only once
+    the wedge PERSISTS across two checks (so a just-plugged watch's enumeration
+    race is not a false restart) and at most once per cooldown, since a restart
+    briefly drops every watch (audit A2)."""
+    import asteroid_docking_bay.adb as adbmod
+    from asteroid_docking_bay import usb as usbmod
+    ran = []
+    monkeypatch.setattr(adbmod, "_run", lambda cmd, **k: (ran.append(cmd), (0, "", ""))[1])
+    monkeypatch.setattr(adbmod, "adb_devices_checked", lambda: {})       # server blind
+    monkeypatch.setattr(usbmod, "_sysfs_adb_serials", lambda: {"S1"})    # S1 on the bus
+    monkeypatch.setattr(adbmod, "_prev_adb_missing", set())
+    monkeypatch.setattr(adbmod, "_last_adb_heal", 0.0)
+    # first check: wedge seen but not yet persistent → no restart
+    assert adbmod.maybe_heal_wedged_adb() is False and ran == []
+    # second check: still wedged → persistent → restart
+    assert adbmod.maybe_heal_wedged_adb() is True
+    assert any("kill-server" in c for c in ran) and any("start-server" in c for c in ran)
+    # third check within cooldown → no repeat restart
+    ran.clear()
+    assert adbmod.maybe_heal_wedged_adb() is False and ran == []
+    # server now sees S1 → not a wedge
+    monkeypatch.setattr(adbmod, "adb_devices_checked", lambda: {"S1": "device"})
+    assert adbmod.maybe_heal_wedged_adb() is False
