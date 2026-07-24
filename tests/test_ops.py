@@ -159,6 +159,36 @@ def test_drain_read_uses_fast_poll_same_budget(monkeypatch):
     assert 0.8 * budget <= captured["wait"] * captured["retries"] <= budget
 
 
+def test_drain_captures_features_while_the_port_is_still_powered(monkeypatch):
+    """The standby consumers (WiFi/BT/AoD) must be read WHILE the watch is on
+    the bus. The old code read them after _adb_read_battery had cut VBUS, so
+    the watch was already dropping off adb and every run logged
+    None/defaulted features — useless for per-feature attribution."""
+    import threading
+    import asteroid_docking_bay.ops as opsmod
+    from asteroid_docking_bay.config import charge_config
+    power = {"on": None}
+    seen = {}
+    monkeypatch.setattr(opsmod, "uhubctl_set_power",
+                        lambda loc, port, on: power.__setitem__("on", on))
+    monkeypatch.setattr(opsmod, "wait_serial_online", lambda *a, **k: True)
+    monkeypatch.setattr(opsmod, "get_battery_level", lambda s: 100)
+
+    class _W:
+        def __init__(self, s): pass
+        def standby_features(self):
+            seen["powered_when_read"] = power["on"]     # must be True here
+            return {"wifi": True, "bt": False, "aod": False}
+    monkeypatch.setattr(opsmod, "Watch", _W)
+
+    pct, feats = opsmod._adb_read_battery(
+        "1-2", 1, "S", charge_config({}), threading.Event(), with_features=True)
+    assert pct == 100
+    assert feats == {"wifi": True, "bt": False, "aod": False}
+    assert seen["powered_when_read"] is True, "features read after VBUS was cut"
+    assert power["on"] is False, "port must still be cut on the way out"
+
+
 # ── drain blind-read guard (rubyfish incident, 2026-07-14) ──────────────────
 #
 # The drain loop deliberately discharges a watch. When rubyfish stopped
@@ -194,7 +224,9 @@ def _drain_env(monkeypatch, reads):
             raise AssertionError(
                 "drain loop polled 25+ times without stopping — it is "
                 "discharging blind (the rubyfish failure)")
-        return seq.pop(0) if seq else None
+        pct = seq.pop(0) if seq else None
+        # The initial read asks for features (returns a tuple); polls don't.
+        return (pct, k.get("_features")) if k.get("with_features") else pct
 
     monkeypatch.setattr(opsmod, "_adb_read_battery", _read)
     monkeypatch.setattr(opsmod, "find_serial_for_loc_port", lambda *a, **k: "S1")

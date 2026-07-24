@@ -416,16 +416,24 @@ class ChargeOp(Operation):
 
 def _adb_read_battery(loc: str, port: int, serial: str | None,
                       charge_cfg: ChargeConfig,
-                      stop_event: threading.Event) -> int | None:
+                      stop_event: threading.Event,
+                      with_features: bool = False):
     """Power on port, wait for ADB, read battery %, power off. Returns None on failure.
 
     Intentionally does NOT hold _adb_lock: each drain test is pinned to one
     port via _drain_tasks, so port-level exclusion is already guaranteed by the
     UI.  Holding the lock for the full ADB wait (up to ~2 min) blocks charge,
     flash and remap on every other port.
+
+    with_features=True also reads the standby consumers (WiFi/BT/AoD) and
+    returns (pct, features). This MUST happen here, inside the online window,
+    because the finally cuts VBUS on the way out: a feature read done after the
+    call sees a watch already dropping off adb, which is how every early drain
+    logged wifi:None/bt:None/aod:defaulted and made per-feature attribution
+    useless.
     """
     if not serial:
-        return None
+        return (None, None) if with_features else None
     try:
         uhubctl_set_power(loc, port, True)
         # Fast poll to minimise the charge window (the port charges the whole
@@ -435,10 +443,18 @@ def _adb_read_battery(loc: str, port: int, serial: str | None,
         retries = max(1, charge_cfg.adb_wait_seconds * charge_cfg.adb_wait_retries // poll)
         if wait_serial_online(serial, poll, retries,
                               stop_event, recover_loc_port=(loc, port)):
-            return get_battery_level(serial)
+            pct = get_battery_level(serial)
+            if with_features:
+                feats = None
+                try:
+                    feats = Watch(serial).standby_features()
+                except Exception as exc:
+                    log.debug("drain feature capture failed for %s: %s", serial, exc)
+                return pct, feats
+            return pct
         if not stop_event.is_set():
             log.warning("drain: ADB timeout for %s on %s:%s", serial, loc, port)
-        return None
+        return (None, None) if with_features else None
     finally:
         try:
             uhubctl_set_power(loc, port, False)
@@ -579,7 +595,8 @@ class DrainOp(Operation):
                 log.info("%s: drain test — reading initial battery", codename)
                 serial = find_serial_for_loc_port(cfg, loc, port)
                 task["serial"] = serial
-                start_pct = _adb_read_battery(loc, port, serial, charge_cfg, stop_event)
+                start_pct, features = _adb_read_battery(
+                    loc, port, serial, charge_cfg, stop_event, with_features=True)
                 if start_pct is None:
                     # Could not read the battery to start: the watch is
                     # unreadable (brownout / not enumerating), NOT something we
@@ -599,14 +616,9 @@ class DrainOp(Operation):
                     return
 
                 now = time.time()
-                # Capture the standby consumers now (watch still reachable) so the
-                # run self-documents its config for per-feature drain attribution
-                # (WiFi/BT/AoD on vs off). Best-effort; None if unreadable.
-                try:
-                    features = Watch(serial).standby_features() if serial else None
-                except Exception as exc:
-                    log.debug("%s: drain feature capture failed: %s", codename, exc)
-                    features = None
+                # features were captured alongside start_pct, in the same online
+                # window (before _adb_read_battery cuts VBUS) — reading them here
+                # would hit a watch already off the bus.
                 task.update({
                     "start_ts":   now,
                     "start_pct":  start_pct,
