@@ -522,10 +522,15 @@ class Watch:
                     feats["wifi"] = on
                 elif ctype == "bluetooth":
                     feats["bt"] = on
-        _, aod, _ = self.user_cmd(
+        rc, aod, _ = self.user_cmd(
             "HOME=/home/ceres dconf read /org/asteroidos/settings/always-on-display",
             timeout=10)
-        feats["aod"] = aod.strip().lower() != "false"   # empty == default (on)
+        # Only trust a successful read: dconf returns rc 0 with empty output for
+        # an unset key (== default ON), but a failed read (unreachable watch, su
+        # error) also yields empty — and reporting that as "on" mislabels the
+        # per-feature drain attribution (audit C2). Leave it None on failure.
+        if rc == 0:
+            feats["aod"] = aod.strip().lower() != "false"
         return feats
 
     def last_recording_path(self) -> Path:

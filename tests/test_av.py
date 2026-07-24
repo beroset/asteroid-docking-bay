@@ -125,3 +125,13 @@ def test_standby_features_aod_defaults_on_when_empty(monkeypatch):
     monkeypatch.setattr(w, "user_cmd", lambda c, timeout=None: (0, "", ""))
     f = w.standby_features()
     assert f["aod"] is True and f["wifi"] is None and f["bt"] is None  # empty aod = default on
+
+
+
+def test_standby_features_aod_is_none_on_a_failed_read(monkeypatch):
+    """A failed dconf read (rc != 0 — unreachable watch / su error) also yields
+    empty output; it must NOT be reported as aod=on, which would mislabel the
+    per-feature drain attribution (audit C2)."""
+    w = Watch("S", transport=_T(""))
+    monkeypatch.setattr(w, "user_cmd", lambda c, timeout=None: (1, "", "dconf error"))
+    assert w.standby_features()["aod"] is None
