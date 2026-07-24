@@ -317,8 +317,12 @@ class Watch:
         """Set the watch clock to an explicit 'YYYY-MM-DD HH:MM:SS' — for the
         arbitrary-time screenshots devs want. Like set_time_from_host but with a
         dialled-in moment instead of the host's; reversible via Sync-from-host.
-        The caller validates the format; shlex.quote guards the shell."""
-        rc, _, err = self.t.shell(f"date -s {shlex.quote(when)}", timeout=10)
+        The caller validates the format (no quotes/metacharacters). The WHOLE
+        command is passed as one token so the space in the datetime survives
+        adb/ssh's argument re-split — quoting only the argument (shlex.quote)
+        was consumed host-side, adb re-joined and the watch re-split, leaving
+        the time as a stray operand and setting the wrong time (audit C1)."""
+        rc, _, err = self.t.shell(f"\"date -s '{when}'\"", timeout=10)
         if rc != 0:
             log.warning("set_datetime %s on %s failed: %s",
                         when, self.serial, err.strip() or f"rc={rc}")

@@ -236,3 +236,26 @@ def test_quickpanel_set_op_coerces_and_dispatches(monkeypatch):
     monkeypatch.setattr(rpcops, "_reachable_transport", lambda s: None)
     d = rpcops.DISPATCH._data["watch.quickpanel_set"]({"serial": "S1", "id": "wifiToggle", "on": 1})
     assert d == {"ok": True} and seen == {"id": "wifiToggle", "on": True}
+
+
+def test_set_datetime_survives_the_adb_argument_resplit():
+    """adb/ssh re-join their post-target args with spaces and hand them to a
+    fresh watch shell, so only quoting INSIDE the single host-token survives.
+    set_datetime must wrap the whole command as one token; quoting only the
+    argument let the space in 'YYYY-MM-DD HH:MM:SS' split the time off as a
+    stray operand, setting the wrong time on every call (audit C1)."""
+    import shlex
+    from asteroid_docking_bay.watchctl import Watch
+    seen = {}
+
+    class _T:
+        def shell(self, cmd, timeout=None):
+            seen["cmd"] = cmd
+            return (0, "", "")
+    w = Watch("S", transport=_T())
+    w.set_datetime("2026-01-01 12:00:00")
+    # the whole remote command must reach the transport as ONE host-shell token
+    host_tokens = shlex.split(seen["cmd"])
+    assert len(host_tokens) == 1, f"not wrapped — adb will re-split it: {seen['cmd']}"
+    # and when the watch shell re-parses that token, the datetime stays one arg
+    assert shlex.split(host_tokens[0]) == ["date", "-s", "2026-01-01 12:00:00"]
