@@ -544,10 +544,23 @@ class Watch:
         proven on-device. `timeout -s INT` + gst `-e` finalises the WAV cleanly."""
         seconds = max(1, min(30, int(seconds)))
         remote = "/tmp/dockingbay_rec.wav"
-        self.user_cmd(
-            f"rm -f {remote}; timeout -s INT {seconds} gst-launch-1.0 -e pulsesrc ! "
-            f"audioconvert ! audioresample ! wavenc ! filesink location={remote}",
-            timeout=seconds + 15)
+        # Kill any orphaned recorder from a prior interrupted run first, and
+        # again in the finally — an orphaned gst-launch holds pulsesrc and the
+        # CPU, blocking SoC suspend and draining the watch invisibly (audit B8).
+        # `timeout -s INT` + gst `-e` is the clean path; the pkills are the net
+        # for a stuck Pulse preroll, a busybox `timeout` that ignores -s, or a
+        # host-side interruption that never lets gst's own timeout fire.
+        try:
+            self.user_cmd(
+                f"pkill -f gst-launch-1.0 2>/dev/null; rm -f {remote}; "
+                f"timeout -s INT {seconds} gst-launch-1.0 -e pulsesrc ! "
+                f"audioconvert ! audioresample ! wavenc ! filesink location={remote}",
+                timeout=seconds + 15)
+        finally:
+            try:
+                self.user_cmd("pkill -f gst-launch-1.0 2>/dev/null; true", timeout=8)
+            except Exception:
+                pass
         local = self.last_recording_path()
         rc, _, _ = self.t.pull(remote, shlex.quote(str(local)), timeout=20)
         self.t.shell(f"rm -f {remote}", timeout=8)

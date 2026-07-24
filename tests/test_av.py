@@ -135,3 +135,29 @@ def test_standby_features_aod_is_none_on_a_failed_read(monkeypatch):
     w = Watch("S", transport=_T(""))
     monkeypatch.setattr(w, "user_cmd", lambda c, timeout=None: (1, "", "dconf error"))
     assert w.standby_features()["aod"] is None
+
+
+def test_record_audio_always_kills_the_recorder(monkeypatch, tmp_path):
+    """An orphaned gst-launch holds pulsesrc + the CPU and blocks SoC suspend,
+    draining the watch invisibly (audit B8). record_audio must kill the
+    recorder even if the record call itself raises (interrupted / stuck)."""
+    calls = []
+
+    class _RT:
+        def shell(self, cmd, timeout=None): return (0, "", "")
+        def pull(self, r, l, timeout=None): return (0, "", "")
+    w = Watch("S", transport=_RT())
+
+    def fake_user_cmd(cmd, timeout=None):
+        calls.append(cmd)
+        if "timeout -s INT" in cmd:            # the record itself is interrupted
+            raise RuntimeError("interrupted mid-record")
+        return (0, "", "")
+    monkeypatch.setattr(w, "user_cmd", fake_user_cmd)
+    monkeypatch.setattr(w, "last_recording_path", lambda: tmp_path / "r.wav")
+    try:
+        w.record_audio(5)
+    except RuntimeError:
+        pass
+    # a standalone recorder-kill (not the combined record command) must have run
+    assert any("pkill" in c and "timeout" not in c for c in calls), calls
