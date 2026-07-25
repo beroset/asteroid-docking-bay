@@ -387,6 +387,20 @@ def serve(args, cfg: dict):
         _event_stream_headers()
         return _sse("onboard.start", {"loc": loc, "port": port})
 
+    # Onboard sweep: POST prepare (power every socket down), then GET run (SSE
+    # streams onboarding each equipped socket one at a time).
+    @app.post("/api/onboard-sweep/prepare")
+    def api_sweep_prepare():
+        resp.content_type = "application/json"
+        d = _call("onboard.sweep_prepare")
+        _bust_status_cache()
+        return json.dumps(d)
+
+    @app.get("/api/onboard-sweep/run")
+    def api_sweep_run():
+        _event_stream_headers()
+        return _sse("onboard.sweep_run", {})
+
     class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
         daemon_threads = True
 

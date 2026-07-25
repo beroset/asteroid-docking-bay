@@ -428,7 +428,8 @@ _WEB_TEMPLATE = """\
   <div id="alert" class="alert"></div>
   <div class="hdr">
   <h1><span class="hdim">&#x2728;  &#x22C6;  &#x02DA; </span>&#x2726;<span class="htxt">  asteroid-docking-bay  </span>&#x2726;<span class="hdim"> &#x02DA;  &#x22C6;  &#x2728;</span></h1>
-  <p class="meta"><a href="#" id="histlink" onclick="toggleHistory();return false" style="color:#388bfd;text-decoration:none">show drain history</a> &nbsp;&middot;&nbsp; <a href="#" id="hidlink" onclick="toggleShowHidden();return false" style="color:#6e7681;text-decoration:none">show all ports</a> &nbsp;&middot;&nbsp; <a href="#" id="usbpreflink" onclick="toggleUsbPref();return false" style="color:#6e7681;text-decoration:none" title="Fleet USB-mode preference — how a watch that comes up on its own in the wrong mode is auto-corrected:&#10;&#10;• prefer ADB (standard): a stray SSH watch is switched back to adb — faster, and how a stock flash enumerates&#10;• prefer SSH: a stray watch is given its own SSH IP so several can run SSH at once — needed for WiFi/workbench work, but updates are slower&#10;&#10;A watch you switched by hand is left alone. Click to switch.">prefer ADB</a> &nbsp;&middot;&nbsp; <a href="#" id="reglink" onclick="openRegistry();return false" style="color:#6e7681;text-decoration:none" title="the Fleet Registry — every watch the rig has ever seen (docked or in orbit), its identity, first/last sighting, and a Log of what changed (kernel, Qt, MACs, resolution) over time">fleet registry</a> &nbsp;&middot;&nbsp; <a href="#" id="btlink" onclick="openBtScan();return false" style="color:#6e7681;text-decoration:none" title="scan for AsteroidOS watches over Bluetooth (they advertise their codename) and pair them — the first rung of Bluetooth in the Orbit port">scan bt</a></p>
+  <p class="meta"><a href="#" id="histlink" onclick="toggleHistory();return false" style="color:#388bfd;text-decoration:none">show drain history</a> &nbsp;&middot;&nbsp; <a href="#" id="hidlink" onclick="toggleShowHidden();return false" style="color:#6e7681;text-decoration:none">show all ports</a> &nbsp;&middot;&nbsp; <a href="#" id="usbpreflink" onclick="toggleUsbPref();return false" style="color:#6e7681;text-decoration:none" title="Fleet USB-mode preference — how a watch that comes up on its own in the wrong mode is auto-corrected:&#10;&#10;• prefer ADB (standard): a stray SSH watch is switched back to adb — faster, and how a stock flash enumerates&#10;• prefer SSH: a stray watch is given its own SSH IP so several can run SSH at once — needed for WiFi/workbench work, but updates are slower&#10;&#10;A watch you switched by hand is left alone. Click to switch.">prefer ADB</a> &nbsp;&middot;&nbsp; <a href="#" id="reglink" onclick="openRegistry();return false" style="color:#6e7681;text-decoration:none" title="the Fleet Registry — every watch the rig has ever seen (docked or in orbit), its identity, first/last sighting, and a Log of what changed (kernel, Qt, MACs, resolution) over time">fleet registry</a> &nbsp;&middot;&nbsp; <a href="#" id="btlink" onclick="openBtScan();return false" style="color:#6e7681;text-decoration:none" title="scan for AsteroidOS watches over Bluetooth (they advertise their codename) and pair them — the first rung of Bluetooth in the Orbit port">scan bt</a> &nbsp;&middot;&nbsp; <a href="#" id="sweeplink" onclick="doOnboardSweep();return false" style="color:#3fb950;text-decoration:none" title="Onboard sweep: power every socket off, then (once you've equipped them all with watches) onboard them one at a time — detect, register to the fleet, PPPS-test, clean power-off — no ADB flood, no brownout.">onboard sweep</a></p>
+  <div id="sweeplog" style="display:none;position:fixed;right:14px;bottom:14px;width:min(560px,92vw);max-height:60vh;overflow:auto;background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:10px 12px;font:12px monospace;color:#c9d1d9;white-space:pre-wrap;z-index:300;box-shadow:0 6px 30px rgba(0,0,0,.6)"><a href="#" onclick="document.getElementById('sweeplog').style.display='none';return false" style="float:right;color:#6e7681">close</a><b style="color:#3fb950">onboard sweep</b>\\n<span id="sweeplogbody"></span></div>
   </div>
   <div class="tblwrap">
   <table>
@@ -2333,6 +2334,20 @@ function doFl(c,channel){
   es.onmessage=ev=>{box.textContent+=ev.data+'\\n';box.scrollTop=box.scrollHeight};
   es.addEventListener('done',()=>{box.textContent+='\\n\\u2500\\u2500 done \\u2500\\u2500\\n';box.scrollTop=box.scrollHeight;es.close();delete srcs[c];refresh()});
   es.onerror=()=>{box.textContent+='\\n\\u2500\\u2500 connection lost \\u2500\\u2500\\n';es.close();delete srcs[c];refresh()};
+}
+function doOnboardSweep(){
+  if(!confirm('Onboard sweep: I will power ALL sockets OFF now. Then equip every socket with a watch and confirm, and I onboard them one at a time.'))return;
+  toast('powering all sockets off…');
+  fetch('/api/onboard-sweep/prepare',{method:'POST'}).then(r=>r.json()).then(d=>{
+    if(!d.ok){toast('sweep prepare failed');return;}
+    if(!confirm('All '+d.ports+' sockets are powered OFF. Equip every socket with a watch NOW, then click OK to run the sweep (one port at a time — this takes a while).')){refresh();return;}
+    const box=document.getElementById('sweeplog'),body=document.getElementById('sweeplogbody');
+    body.textContent='';box.style.display='block';
+    const es=new EventSource('/api/onboard-sweep/run');
+    es.onmessage=ev=>{body.textContent+=ev.data+'\\n';box.scrollTop=box.scrollHeight};
+    es.addEventListener('done',()=>{body.textContent+='\\n\\u2014 finished \\u2014\\n';es.close();refresh()});
+    es.onerror=()=>{body.textContent+='\\n(stream closed)\\n';es.close();refresh()};
+  }).catch(()=>toast('sweep prepare failed'));
 }
 function doRemap(c){
   if(srcs[c])return;

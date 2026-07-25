@@ -67,6 +67,30 @@ def test_socket_set_stores_int_rejects_nonnumber_and_clears(monkeypatch):
         {"loc": "9-9", "port": 1, "n": "1"})["ok"] is False
 
 
+def test_sweep_map_and_register_maps_clears_stale_and_writes_fleet_log(monkeypatch):
+    """The sweep's onboard step must both map the watch to its port AND write it
+    to the fleet registry with first data (the gap that left the registry empty),
+    while clearing any stale seat the same serial held elsewhere."""
+    store = {"hubs": [{"location": "1-2", "ports": {"1": "skipjack"},
+                       "port_serials": {"1": "S1"}},
+                      {"location": "1-3", "ports": {}, "port_serials": {}}],
+             "serials": {"S1": "skipjack"}, "ssh_ips": {}}
+    monkeypatch.setattr(rpcops, "load_config", lambda: store)
+    monkeypatch.setattr(rpcops, "save_config", lambda c: store.update(c))
+    noted = []
+    monkeypatch.setattr(rpcops.registry, "note",
+                        lambda s, **k: noted.append((s, k)))
+    # S1 (skipjack) re-appears on a different port/hub → map there, clear old seat.
+    rpcops._sweep_map_and_register("1-3", 2, "S1", "skipjack", 77, "320x320",
+                                   None, "onboard-sweep", lambda m: None)
+    assert store["hubs"][1]["ports"]["2"] == "skipjack"       # new seat
+    assert store["hubs"][1]["port_serials"]["2"] == "S1"
+    assert "1" not in store["hubs"][0]["ports"]               # old seat cleared
+    assert noted and noted[0][0] == "S1"
+    assert noted[0][1]["codename"] == "skipjack" and noted[0][1]["battery"] == 77
+    assert noted[0][1]["resolution"] == "320x320"
+
+
 def test_registered_ops_are_the_documented_contract():
     """The allow-list IS the security boundary: adding an op must be a
     conscious, reviewed act. If this fails because you added one, update it
@@ -92,7 +116,7 @@ def test_registered_ops_are_the_documented_contract():
         "charge.start", "charge.stop", "prefs.set_usb_mode",
         "workbench.start", "workbench.stop", "wear.set",
         "drain.start", "drain.stop", "drain.history",
-        "flash.start", "onboard.start",
+        "flash.start", "onboard.start", "onboard.sweep_prepare", "onboard.sweep_run",
     }
 
 

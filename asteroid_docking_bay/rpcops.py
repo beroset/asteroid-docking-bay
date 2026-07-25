@@ -28,20 +28,20 @@ import threading
 import time
 
 from .util import _run, log
-from .adb import _adb_state, adb_devices, get_watch_codename
+from .adb import _adb_state, adb_devices, get_battery_level, get_watch_codename
 from .config import (_config_lock, _store_smart_verdict, allocate_ssh_ip,
                      charge_config, ssh_ip_for_serial, usb_mode_preference,
                      find_codename_for_loc_port, find_serial_for_loc_port,
                      flash_config, load_config, save_config,
                      orbit_add, orbit_forget, orbit_members,
                      hands_cal_for, set_hands_cal, set_hub_name)
-from .usb import (_sysfs_path_to_serial_map, test_port_power_switching,
-                  uhubctl_cycle, uhubctl_set_power)
+from .usb import (_sysfs_path_to_serial_map, _sysfs_set_power,
+                  test_port_power_switching, uhubctl_cycle, uhubctl_set_power)
 from .watchctl import DIAG_ROOT, Watch
 from .ops import ChargeOp, DrainOp, WorkbenchOp, _flash_one_watch
 from .fastboot import (_switch_ssh_to_adb, _usb_moded_switch_failed,
                        _detect_rndis, _fastboot_list, fastboot_getvar_all)
-from .transport import SshTransport
+from .transport import SshTransport, USB_SSH_IP
 from .watchimg import watch_image_bytes
 from .variants import image_of
 from .weather import dconf_writeset, fetch_forecast, geocode, parse_watch_weather
@@ -1381,3 +1381,245 @@ def _onboard_start(args):
         yield "onboard already in progress"
         return
     yield from _onboard_stream(loc, port)
+
+
+# ── Onboard sweep ────────────────────────────────────────────────────────────
+# The deliberate fill-the-rig flow: map the topology, power every port DOWN, let
+# the user equip every socket with a watch (on an unpowered port nothing
+# enumerates, so no 24-watch ADB flood), then run this — one port at a time.
+# Each port: power on → detect the watch on ADB (or SSH/RNDIS) → map + read first
+# data + write it to the fleet registry → PPPS-test → clean poweroff → cut VBUS →
+# next. A port whose watch never boots (drained/empty) is cut and logged, so the
+# sweep never leaves more than one port powered (no brownout, no flood).
+
+def _sweep_leaf_ports(cfg: dict) -> "list[tuple[str, int]]":
+    """Every watch-bearing leaf port across the mapped hubs — cascade ports that
+    feed a sub-hub are skipped (powering one cuts the whole sub-tree)."""
+    import glob
+    hub_locs = {h["location"] for h in cfg.get("hubs", [])}
+    out: list[tuple[str, int]] = []
+    for hub in cfg.get("hubs", []):
+        loc = hub["location"]
+        for iface in sorted(glob.glob(f"/sys/bus/usb/devices/{loc}:*")):
+            for pd in sorted(glob.glob(f"{iface}/{loc}-port*")):
+                try:
+                    port = int(pd.rsplit("port", 1)[1])
+                except ValueError:
+                    continue
+                if f"{loc}.{port}" in hub_locs:
+                    continue                       # cascade → not a watch socket
+                out.append((loc, port))
+    return out
+
+
+def _sweep_wait_adb(sysfs_path: str, secs: int, emit) -> "str | None":
+    """Wait up to `secs` for a watch to boot and expose ADB at this sysfs port."""
+    st = time.monotonic()
+    nxt = 20
+    while time.monotonic() - st < secs:
+        devices = adb_devices()
+        s = _sysfs_path_to_serial_map(set(devices.keys())).get(sysfs_path)
+        if s and _adb_state(devices, s) == "device":
+            return s
+        el = time.monotonic() - st
+        if el >= nxt:
+            emit(f"  …waiting for boot ({int(el)}/{secs}s)")
+            nxt += 20
+        time.sleep(1.5)
+    return None
+
+
+def _sweep_map_and_register(loc, port, serial, codename, battery,
+                            resolution, ssh_ip, source, emit):
+    """Map the watch to its port (clearing any stale seat) AND write it to the
+    fleet registry with its first data — closing the mapped-but-not-registered
+    gap that left the fleet log empty."""
+    with _config_lock:
+        cfg = load_config()
+        cfg.setdefault("serials", {})[serial] = codename
+        for hub in cfg.get("hubs", []):
+            ports_m = hub.get("ports", {})
+            serials_m = hub.get("port_serials", {})
+            stale = [k for k, s in serials_m.items()
+                     if s == serial and not (hub["location"] == loc and k == str(port))]
+            stale += [k for k, v in ports_m.items()
+                      if v == codename and k not in serials_m
+                      and not (hub["location"] == loc and k == str(port))]
+            for k in stale:
+                ports_m.pop(k, None)
+                serials_m.pop(k, None)
+                emit(f"  cleared stale seat {hub['location']}:p{k}")
+        hub_entry = next((h for h in cfg.get("hubs", []) if h["location"] == loc), None)
+        if hub_entry is not None:
+            hub_entry.setdefault("ports", {})[str(port)] = codename
+            hub_entry.setdefault("port_serials", {})[str(port)] = serial
+        if ssh_ip:
+            cfg.setdefault("ssh_ips", {})[serial] = ssh_ip
+        save_config(cfg)
+    # The fleet log: first data captured at onboard, change-logged thereafter.
+    registry.note(serial, source=source, codename=codename,
+                  battery=battery, resolution=resolution, ip=ssh_ip)
+    emit(f"  registered {codename} in the fleet log")
+
+
+def _sweep_one_port(loc: str, port: int, prefer_adb: bool, emit) -> "str | None":
+    """Onboard whatever is on one port, end-to-end, then leave it cleanly OFF.
+    Returns the codename onboarded, or None (no watch / too drained to boot)."""
+    slot = f"{loc}:{port}"
+    sysfs_path = f"{loc}.{port}"
+    wait_secs = charge_config(load_config()).onboard_wait_seconds or 90
+    emit(f"[{slot}] powering on…")
+    try:
+        uhubctl_set_power(loc, port, True)
+    except RuntimeError as e:
+        emit(f"[{slot}] power warning: {e}")
+
+    serial = _sweep_wait_adb(sysfs_path, wait_secs, emit)
+    transport, ssh_ip = "adb", None
+
+    # No ADB → maybe it came up in developer/SSH mode as RNDIS on the shared .15.
+    if not serial and _detect_rndis():
+        emit(f"[{slot}] no ADB — found an SSH/RNDIS watch on {USB_SSH_IP}")
+        info = orbit.probe(USB_SSH_IP) or {}
+        s = info.get("serial")
+        if s:
+            with _config_lock:
+                cfg = load_config()
+                ssh_ip = allocate_ssh_ip(cfg, s)   # sticky unique IP for this serial
+                save_config(cfg)
+            if prefer_adb:
+                emit(f"[{slot}] prefer-ADB: switching {s} SSH→ADB…")
+                try:
+                    _switch_ssh_to_adb(USB_SSH_IP)
+                except Exception as e:
+                    emit(f"[{slot}] switch warning: {e}")
+                s2 = _sweep_wait_adb(sysfs_path, wait_secs, emit)
+                if s2:
+                    serial, transport, ssh_ip = s2, "adb", None
+                else:
+                    serial, transport = s, "ssh"     # switch didn't take; keep ssh
+            else:
+                serial, transport = s, "ssh"
+                emit(f"[{slot}] keeping SSH, assigned IP {ssh_ip}")
+
+    if not serial:
+        emit(f"[{slot}] no watch enumerated in {wait_secs}s — drained or empty. "
+             f"Cutting power, logging as needs-charge.")
+        _sysfs_set_power(loc, port, False)
+        return None
+
+    # Identify + first data.
+    if transport == "adb":
+        with _config_lock:
+            codename = load_config().get("serials", {}).get(serial)
+        codename = codename or get_watch_codename(serial) or serial
+        battery = get_battery_level(serial)
+        resolution = None
+    else:
+        info = orbit.probe(ssh_ip or USB_SSH_IP) or {}
+        codename = info.get("codename") or serial
+        resolution = info.get("resolution")
+        try:
+            from .adb import battery_and_screen
+            battery, _, _ = battery_and_screen(
+                serial, shell=SshTransport(ssh_ip or USB_SSH_IP).shell)
+        except Exception:
+            battery = None
+    emit(f"[{slot}] {transport.upper()}: {codename} ({serial})"
+         + (f" @ {ssh_ip}" if ssh_ip else ""))
+
+    _sweep_map_and_register(loc, port, serial, codename, battery,
+                            resolution, ssh_ip, "onboard-sweep", emit)
+
+    # PPPS test — the watch is up, so this verifies a real VBUS cut for free.
+    if transport == "adb":
+        try:
+            smart, msg = test_port_power_switching(loc, port, serial)
+            with _config_lock:
+                cfg = load_config()
+                for h in cfg.get("hubs", []):
+                    if h["location"] == loc:
+                        _store_smart_verdict(h, port, smart)
+                        break
+                save_config(cfg)
+            emit(f"[{slot}] PPPS: "
+                 + ("smart ✓" if smart else "NOT smart" if smart is False else "unverified"))
+        except RuntimeError as e:
+            emit(f"[{slot}] PPPS error: {e}")
+
+    # Clean shutdown so it doesn't sit draining on battery after we cut VBUS.
+    emit(f"[{slot}] clean poweroff…")
+    if transport == "adb":
+        _run(f"adb -s {serial} shell poweroff", check=False, timeout=15)
+        for _ in range(12):
+            time.sleep(3)
+            if _adb_state(adb_devices(), serial) != "device":
+                break
+    else:
+        try:
+            SshTransport(ssh_ip or USB_SSH_IP).shell("poweroff", timeout=10)
+            time.sleep(6)
+        except Exception:
+            pass
+    _sysfs_set_power(loc, port, False)
+    emit(f"[{slot}] shelved (off) — {codename} done.")
+    return codename
+
+
+@DISPATCH.op("onboard.sweep_prepare")
+def _onboard_sweep_prepare(args):
+    """Power every watch socket DOWN so the user can equip them all with watches
+    before the sweep (on an unpowered port a docked watch stays dark — no flood)."""
+    with _config_lock:
+        cfg = load_config()
+    n = 0
+    for loc, port in _sweep_leaf_ports(cfg):
+        try:
+            _sysfs_set_power(loc, port, False)
+            n += 1
+        except Exception as e:
+            log.debug("sweep_prepare %s.%s: %s", loc, port, e)
+    return {"ok": True, "ports": n}
+
+
+@DISPATCH.stream_op("onboard.sweep_run")
+def _onboard_sweep_run(args):
+    """Run the onboard sweep: one port at a time, watches already equipped."""
+    if _remap_tasks.get("__sweep__", {}).get("done") is False:
+        yield "a sweep is already running"
+        return
+    cfg = load_config()
+    prefer_adb = usb_mode_preference(cfg) != "ssh"
+    ports = _sweep_leaf_ports(cfg)
+    yield (f"Onboard sweep starting: {len(ports)} sockets, one at a time "
+           f"(prefer {'ADB' if prefer_adb else 'SSH'}).")
+    q: "queue.Queue[str | None]" = queue.Queue()
+    result = {"on": [], "skip": []}
+
+    def _run():
+        for loc, port in ports:
+            try:
+                cn = _sweep_one_port(loc, port, prefer_adb, q.put)
+                (result["on"] if cn else result["skip"]).append(
+                    f"{loc}:{port}" + (f" {cn}" if cn else ""))
+            except Exception as e:
+                q.put(f"[{loc}:{port}] ERROR: {e}")
+                result["skip"].append(f"{loc}:{port}")
+        q.put(f"═══ sweep done: {len(result['on'])} onboarded, "
+              f"{len(result['skip'])} need charge/empty ═══")
+        if result["skip"]:
+            q.put("needs charge / empty: " + ", ".join(result["skip"]))
+        _remap_tasks["__sweep__"] = {"done": True}
+        q.put(None)
+
+    _remap_tasks["__sweep__"] = {"done": False}
+    threading.Thread(target=_run, daemon=True).start()
+    while True:
+        try:
+            msg = q.get(timeout=15)
+        except queue.Empty:
+            yield ""
+            continue
+        if msg is None:
+            return
+        yield msg
