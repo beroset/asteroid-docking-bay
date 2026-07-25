@@ -1,0 +1,30 @@
+{
+  "audit": "usb2-migration-and-socket-matrix",
+  "date": "2026-07-25",
+  "branch": "onboard-discovery-rework",
+  "continues": "2026-07-25-usb-brittleness-xhci-slots",
+  "findings": [
+    {"id": "E1", "title": "USB2 chassis-port migration works: SS companions gone, ~17 watch slots free; config prefix-migrated 1-1->1-3 / 1-2->1-6 with all mappings preserved", "confidence": "confirmed"},
+    {"id": "E2", "title": "physical replug powers all hub ports -> boot flood to 31/32 slots; spec: map/replug procedure must end all-sockets-dark", "confidence": "confirmed", "status": "spec_requirement"},
+    {"id": "E3", "title": "onboard sweep #2: 17 onboarded, PPPS smart on all, shelves HELD (poweroff-race fix working); 2 no-adb belugas joined via SSH path; device-side auto-join re-seats watches without operator action", "confidence": "confirmed"},
+    {"id": "E4", "title": "the 17-wall decomposed into 4 independent causes: blocked-row bug, .15 collision, adb-server-only detection blindness, faulty sockets — NOT slot exhaustion during serialized onboarding", "confidence": "confirmed"},
+    {"id": "E5", "title": ".15 SSH collision: reboot returns watches to shared default (allocation not persistent), multiple RNDIS links shadow each other behind one route; 2s ping timeouts per dead allocated IP = the constant 4.25s render", "confidence": "confirmed", "fixed_by": ["b6e8977", "a14dd3c"]},
+    {"id": "E6", "title": "in-service warmer did not fire the stray peel during the one live window though the identical sequence works manually — needs one more observation", "confidence": "open"},
+    {"id": "E7", "title": "A16 #1 has four faulty sockets: s1 electrical link failure (error -71, two watches), s4-s6 enumeration-corrupting (0afe/storage-class presentation); failure followed the SOCKET in two two-way watch-unit swaps; same units clean on chassis ports, dock, and other A16 sockets", "confidence": "confirmed", "status": "RMA_grade"},
+    {"id": "E8", "title": "eliminated: w541 software stack (fastboot works on chassis port), host wiring (0afe on both USB2 and USB3 host ports), wedged hub state (full cold-boot no change), A16 design (other sockets pass), the watches, the map sequence", "confidence": "confirmed"},
+    {"id": "E9", "title": "hub #2 1-6.4:3 shows error-71 storms with low-speed detection — same class as s1, cradle/socket to examine", "confidence": "confirmed_host_side"},
+    {"id": "E10", "title": "uaccess ACL grants headless USB access only while a local session exists; mo not in adbusers on w541 — works today, fragile", "confidence": "confirmed", "recommendation": "add mo to adbusers"}
+  ],
+  "shipped": ["a5ddbc1 sweep hidden/exclude scope", "8ada05f sweep skip button", "5518c9f unauthorized outcome", "b6e8977 ssh reachability from sysfs", "a14dd3c stray .15 peel"],
+  "open_queue": [
+    "blocked-row cleanup after failed onboard",
+    "truthful port rows from sysfs-first identification",
+    "exclude s1/s4/s5/s6 pending mo confirmation",
+    "warmer-silence datum for the peel",
+    "post-shelve uptime verification + per-model halt behaviour in registry",
+    "direct chassis ports as first-class seats",
+    "xHCI slot gauge + concurrent-powered-ports governor",
+    "udev netlink event-driven discovery"
+  ],
+  "fleet_at_close": "19+ registered; sparrow/wren auto-joined on borrowed seats; swift/anthias unseated; flashed catfish on faulty s1 needs reseating; fleet shelved and dark"
+}
