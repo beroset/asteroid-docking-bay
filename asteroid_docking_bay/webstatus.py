@@ -19,7 +19,7 @@ from . import orbit
 from .usb import (_parse_hub_port_path, _port_device_present, _sysfs_hub_scan,
                   _sysfs_path_to_serial_map, _sysfs_usb_mode, uhubctl_cycle,
                   uhubctl_list)
-from .fastboot import _detect_rndis, _fastboot_getvar_product, _fastboot_list
+from .fastboot import _fastboot_getvar_product, _fastboot_list, ssh_reach_ip
 from .transport import SshTransport
 from .events import _latest_drain_summaries
 from .lastseen import last_seen
@@ -385,8 +385,8 @@ def _ssh_battery(cfg, serial) -> "tuple[int | None, bool, str | None]":
     its row shows a live reading instead of the last ADB one. None when it has
     no assigned SSH IP or isn't reachable there — the caller then falls back to
     the cached value. Mirrors rpcops._reachable_transport's selection."""
-    ip = ssh_ip_for_serial(cfg, serial) if serial else None
-    if not ip or not _detect_rndis(ip):
+    ip = ssh_reach_ip(cfg, serial)
+    if not ip:
         return None, False, None
     return battery_and_screen(serial, shell=SshTransport(ip).shell)
 

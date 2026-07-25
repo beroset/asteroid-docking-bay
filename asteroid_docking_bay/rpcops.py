@@ -40,7 +40,8 @@ from .usb import (_sysfs_path_to_serial_map, _sysfs_serial_at,
 from .watchctl import DIAG_ROOT, Watch
 from .ops import ChargeOp, DrainOp, WorkbenchOp, _flash_one_watch
 from .fastboot import (_switch_ssh_to_adb, _usb_moded_switch_failed,
-                       _detect_rndis, _fastboot_list, fastboot_getvar_all)
+                       _detect_rndis, _fastboot_list, fastboot_getvar_all,
+                       ssh_reach_ip)
 from .transport import SshTransport, USB_SSH_IP
 from .watchimg import watch_image_bytes
 from .variants import image_of
@@ -71,8 +72,8 @@ def _reachable_transport(serial: str):
     if _adb_state(adb_devices(), serial) == "device":
         return None
     cfg = load_config()
-    ip = ssh_ip_for_serial(cfg, serial)
-    if ip and _detect_rndis(ip):
+    ip = ssh_reach_ip(cfg, serial)
+    if ip:
         return SshTransport(ip)
     # Off the dock but in orbit: reach it over WiFi at its stored address. This
     # is the whole point of the Orbit port — every per-watch op (CC, weather,
@@ -622,8 +623,13 @@ def _ssh_switch_adb(args):
     the default 192.168.2.15 for a watch that predates IP assignment. ok=False
     means nothing was reachable there, or a broken usb-moded refused it."""
     serial = args.get("serial")
-    ip = (ssh_ip_for_serial(load_config(), serial) if serial else None) \
-        or "192.168.2.15"
+    cfg = load_config()
+    # Prefer the address the watch demonstrably answers on (allocated, or the
+    # shared default when its link wins the route); fall back to the assigned
+    # address so an unreachable watch still yields the helper's clean error.
+    ip = (ssh_reach_ip(cfg, serial)
+          or (ssh_ip_for_serial(cfg, serial) if serial else None)
+          or USB_SSH_IP)
     return _switch_ssh_to_adb(ip)
 
 
@@ -851,7 +857,7 @@ def _port_poweroff(args):
                              "power left on so the watch is not stranded "
                              "running on battery"}
     elif serial:
-        ip = ssh_ip_for_serial(load_config(), serial)
+        ip = ssh_reach_ip(load_config(), serial)
         if _adb_state(adb_devices(), serial) == "device":
             rc, _, err = _run(f"adb -s {serial} shell poweroff",
                               check=False, timeout=10)
@@ -859,11 +865,12 @@ def _port_poweroff(args):
             if not graceful:
                 log.warning("poweroff %s:%s (%s): adb shutdown failed: %s",
                             loc, port, serial, err.strip() or f"rc={rc}")
-        elif ip and _detect_rndis(ip):
-            # SSH/developer mode: reach it over SSH like every other watch op.
-            # The halt drops the ssh session, so a non-zero return is expected —
-            # delivery to a reachable watch is the success signal, as for the
-            # mode switch.
+        elif ip:
+            # SSH/developer mode: ssh_reach_ip already proved this address
+            # answers (allocated, or the shared default when this watch's link
+            # wins the route). The halt drops the ssh session, so a non-zero
+            # return is expected — delivery to a reachable watch is the
+            # success signal, as for the mode switch.
             SshTransport(ip).shell("poweroff", timeout=12)
             graceful = True
         else:

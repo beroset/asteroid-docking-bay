@@ -412,8 +412,7 @@ def test_battery_view_records_an_ssh_reading_as_live(monkeypatch, tmp_path):
 
 def test_ssh_battery_reads_over_the_ssh_link(monkeypatch):
     from asteroid_docking_bay import webstatus as ws
-    monkeypatch.setattr(ws, "ssh_ip_for_serial", lambda cfg, s: "192.168.13.40")
-    monkeypatch.setattr(ws, "_detect_rndis", lambda ip: True)
+    monkeypatch.setattr(ws, "ssh_reach_ip", lambda cfg, s: "192.168.13.40")
     seen = {}
 
     class FakeTr:

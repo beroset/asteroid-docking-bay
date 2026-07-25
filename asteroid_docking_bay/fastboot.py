@@ -5,9 +5,13 @@
 
 from __future__ import annotations
 
+import glob
+import os
+import socket
 import time
 from pathlib import Path
 
+from .transport import USB_SSH_IP
 from .util import _run, log
 from .usb import _sysfs_path_to_serial_map
 
@@ -102,12 +106,79 @@ def _wait_for_fastboot(known_serials: set[str], timeout: int = 30) -> str | None
     return None
 
 
-def _detect_rndis(ip: str = "192.168.2.15") -> bool:
-    """Return True if a watch is reachable at `ip` (its SSH/RNDIS address)."""
-    rc, _, _ = _run(f"ping -c1 -W2 {ip}", check=False)
-    return rc == 0
+def _detect_rndis(ip: str = USB_SSH_IP, timeout: float = 1.0) -> bool:
+    """Return True if a watch answers SSH at `ip` (its RNDIS address). A
+    bounded TCP connect to :22, not a ping: every caller goes on to use SSH,
+    and the old 2s ping timeout, paid per SSH watch per status refresh, was
+    the rig's constant 4.25s render (measured 2026-07-25 with two dead
+    allocated addresses)."""
+    try:
+        with socket.create_connection((ip, 22), timeout=timeout):
+            return True
+    except OSError:
+        return False
 
 
+def rndis_links(base: str = "/sys/bus/usb/devices") -> "list[dict]":
+    """Host-side RNDIS links, purely from sysfs — no network round-trips:
+    [{'iface': host interface name, 'usb_path': device path, 'serial': …}].
+    Each entry is a watch enumerated in SSH/developer mode; the USB serial
+    identifies it even when its address is unknown or colliding. This is the
+    ground truth of who is in SSH mode, independent of any IP guess."""
+    links: list[dict] = []
+    for netdir in glob.glob(f"{base}/*:*/net/*"):
+        ifacedir = os.path.dirname(os.path.dirname(netdir))
+        dev = os.path.basename(ifacedir).split(":")[0]
+        try:
+            with open(f"{base}/{dev}/serial") as f:
+                serial = f.read().strip()
+        except OSError:
+            serial = None
+        links.append({"iface": os.path.basename(netdir),
+                      "usb_path": dev, "serial": serial})
+    return links
+
+
+def _route_winner_iface(ip: str = USB_SSH_IP) -> "str | None":
+    """Which host interface the kernel would route `ip` over right now. With
+    several RNDIS links whose watches all sit on the shared default address,
+    only the winner's watch is reachable — the others are shadowed (the
+    2026-07-25 collision). No privileges needed: `ip route get` only reads."""
+    rc, out, _ = _run(f"ip route get {ip}", check=False)
+    if rc != 0:
+        return None
+    parts = out.split()
+    return parts[parts.index("dev") + 1] if "dev" in parts else None
+
+
+def _pick_ssh_ip(serial, links, allocated_ip, winner_iface, probe) -> "str | None":
+    """The address this watch actually answers on, or None. Pure — see tests.
+    Order: no live RNDIS link for the serial → None without any probe (a dead
+    allocated address must cost nothing); its allocated address if it answers;
+    the shared default if this watch's link is the current route winner and
+    the default answers. probe is an injected reachability callable."""
+    link = next((l for l in links if l["serial"] == serial), None)
+    if link is None:
+        return None
+    if allocated_ip and probe(allocated_ip):
+        return allocated_ip
+    if link["iface"] == winner_iface and probe(USB_SSH_IP):
+        return USB_SSH_IP
+    return None
+
+
+def ssh_reach_ip(cfg: dict, serial: "str | None") -> "str | None":
+    """Where to reach this watch over USB-SSH right now, or None. Wraps
+    _pick_ssh_ip with live sysfs links, the kernel's route winner and a
+    bounded probe."""
+    if not serial:
+        return None
+    links = rndis_links()
+    if not any(l["serial"] == serial for l in links):
+        return None
+    allocated = cfg.get("ssh_ips", {}).get(serial)
+    return _pick_ssh_ip(serial, links, allocated, _route_winner_iface(),
+                        _detect_rndis)
 def _switch_ssh_to_adb(ip: str = "192.168.2.15") -> dict:
     """Switch a watch that enumerated in SSH/developer USB mode over to adb_mode.
     The watch is reachable at `ip` — its assigned SSH address (192.168.2.15 by

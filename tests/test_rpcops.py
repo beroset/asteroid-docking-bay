@@ -579,15 +579,18 @@ def test_reachable_transport_prefers_adb_then_ssh(monkeypatch):
     monkeypatch.setattr(ro, "_adb_state", lambda devs, s: "device")
     assert ro._reachable_transport("S1") is None
 
-    # Not on adb, but reachable over SSH at its assigned IP → SshTransport there.
+    # Not on adb, but answering over SSH somewhere → SshTransport there.
+    # ssh_reach_ip owns WHERE (allocated address, or the shared default when
+    # this watch's link wins the route) — here it reports the allocated one.
     monkeypatch.setattr(ro, "_adb_state", lambda devs, s: None)
     monkeypatch.setattr(ro, "load_config", lambda: {"ssh_ips": {"S1": "192.168.13.37"}})
-    monkeypatch.setattr(ro, "_detect_rndis", lambda ip: ip == "192.168.13.37")
+    monkeypatch.setattr(ro, "ssh_reach_ip",
+                        lambda cfg, s: "192.168.13.37" if s == "S1" else None)
     t = ro._reachable_transport("S1")
     assert isinstance(t, SshTransport) and t.ip == "192.168.13.37", t
 
     # Neither adb nor reachable SSH → default (offline handled downstream).
-    monkeypatch.setattr(ro, "_detect_rndis", lambda ip: False)
+    monkeypatch.setattr(ro, "ssh_reach_ip", lambda cfg, s: None)
     assert ro._reachable_transport("S1") is None
 
 
@@ -647,7 +650,7 @@ def test_poweroff_over_ssh_marks_down_and_does_not_strand(monkeypatch):
     calls, marked, powered = [], {}, []
     monkeypatch.setattr(ro, "find_serial_for_loc_port", lambda c, l, p: "S9")
     monkeypatch.setattr(ro, "load_config", lambda: {})
-    monkeypatch.setattr(ro, "ssh_ip_for_serial", lambda c, s: "192.168.13.37")
+    monkeypatch.setattr(ro, "ssh_reach_ip", lambda c, s: "192.168.13.37")
     monkeypatch.setattr(ro, "_refuse_if_busy", lambda l, p: None)
     monkeypatch.setattr(ro, "_fastboot_list", lambda: {})              # not fastboot
     monkeypatch.setattr(ro, "_adb_state", lambda d, s: None)          # not on adb
