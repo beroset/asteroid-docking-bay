@@ -20,8 +20,9 @@ from .registry import registry
 from .usb import uhubctl_get_power, uhubctl_set_power
 from .transport import SshTransport
 from .fastboot import (_clear_ssh_known_hosts, _detect_rndis, _download_nightly,
-                       _fastboot_devices, _flash_watch, _switch_ssh_to_adb,
-                       _wait_for_fastboot)
+                       _fastboot_devices, _flash_watch, _route_winner_iface,
+                       _stray_ssh_to_realign, _switch_ssh_to_adb,
+                       _wait_for_fastboot, rndis_links)
 from .lastseen import last_seen
 from .events import (_DRAIN_FLOOR_PCT, _DRAIN_MAX_BLIND_POLLS,
                      _DRAIN_POLL_SEC, event_log,
@@ -186,6 +187,38 @@ def charge_to_target(codename: str, serial: "str | None", charge_cfg: ChargeConf
     return level
 
 
+_last_ssh_realign = 0.0
+_SSH_REALIGN_COOLDOWN = 60.0
+
+
+def _maybe_realign_stray_ssh(cfg: dict) -> None:
+    """Peel ONE stray SSH watch off the shared default address per call.
+
+    Fresh SSH boots land on the shared default, where several watches shadow
+    each other behind one kernel route (the 2026-07-25 collision) — only the
+    route winner is reachable and everything else times out. Switching that
+    winner to adb frees the default for the next stray, so repeated warmer
+    cycles converge with no host-side routing changes. A prefer-SSH fleet gets
+    the watch sent back out with its allocated address via watch.switch_ssh —
+    the peel is step one either way, since a shadowed watch is unreachable for
+    ANY op until the default is cleared. Cooldown-limited: each peel
+    re-enumerates a gadget, which is bus churn."""
+    global _last_ssh_realign
+    if time.time() - _last_ssh_realign < _SSH_REALIGN_COOLDOWN:
+        return
+    links = rndis_links()
+    if not links:
+        return
+    serial = _stray_ssh_to_realign(links, cfg.get("ssh_ips", {}),
+                                   _route_winner_iface(), _detect_rndis)
+    if not serial:
+        return
+    _last_ssh_realign = time.time()
+    log.info("stray SSH watch %s on the shared default address — switching it "
+             "to adb to clear the address for the next one", serial)
+    _switch_ssh_to_adb()
+
+
 def _background_warmer() -> None:
     """Background daemon feeding the two slow caches so the status path never
     blocks: usb's port-power cache (a `disable` read is a slow, variable USB
@@ -206,6 +239,8 @@ def _background_warmer() -> None:
             if not bus_busy:
                 maybe_heal_wedged_adb()
             cfg = load_config()
+            if not bus_busy:
+                _maybe_realign_stray_ssh(cfg)
             # NOTE: the warmer no longer polls EMPTY ports. Reading an empty
             # port's `disable` attr is slow (hangs for seconds on a powered-down
             # port) AND renegotiates these flaky A16/USB3 hubs — which knocks the

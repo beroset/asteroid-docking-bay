@@ -3,7 +3,8 @@
 and the stray-.15 peel decision (the 2026-07-25 shared-address collision)."""
 
 from asteroid_docking_bay import fastboot
-from asteroid_docking_bay.fastboot import _pick_ssh_ip, rndis_links
+from asteroid_docking_bay.fastboot import (_pick_ssh_ip, _stray_ssh_to_realign,
+                                           rndis_links)
 from asteroid_docking_bay.transport import USB_SSH_IP
 
 
@@ -57,3 +58,24 @@ def test_pick_ssh_ip_costs_nothing_without_a_link():
         return True
     assert _pick_ssh_ip("GONE", LINKS, "10.0.0.5", "ifA", probe) is None
     assert probed == []
+
+
+def test_stray_realign_picks_route_winner_and_skips_aligned():
+    """Peel decision: only strays (not answering on their allocated address)
+    are candidates, and only the current route winner is actionable — the
+    others are shadowed behind it. Planted-bug validated: dropping the
+    aligned-skip makes the third case return the aligned watch's serial."""
+    links = LINKS + [{"iface": "ifC", "usb_path": "1-6.1", "serial": "C"}]
+    ssh_ips = {"A": "10.0.0.5", "B": "10.0.0.6"}         # C never allocated
+    up = {"10.0.0.5", USB_SSH_IP}                        # A aligned; B, C stray
+    # B wins the route → peel B (C is shadowed, A is aligned).
+    assert _stray_ssh_to_realign(links, ssh_ips, "ifB", up.__contains__) == "B"
+    # The default not answering → nothing actionable this cycle.
+    assert _stray_ssh_to_realign(links, ssh_ips, "ifB",
+                                 {"10.0.0.5"}.__contains__) is None
+    # The ALIGNED watch wins the route → nothing to peel: the strays are
+    # shadowed and A must not be touched.
+    assert _stray_ssh_to_realign(links, ssh_ips, "ifA", up.__contains__) is None
+    # No strays at all → None.
+    assert _stray_ssh_to_realign(
+        [LINKS[0]], {"A": "10.0.0.5"}, "ifA", up.__contains__) is None

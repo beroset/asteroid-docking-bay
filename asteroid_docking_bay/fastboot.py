@@ -179,6 +179,34 @@ def ssh_reach_ip(cfg: dict, serial: "str | None") -> "str | None":
     allocated = cfg.get("ssh_ips", {}).get(serial)
     return _pick_ssh_ip(serial, links, allocated, _route_winner_iface(),
                         _detect_rndis)
+
+
+def _stray_ssh_to_realign(links, ssh_ips, winner_iface, probe) -> "str | None":
+    """The serial of one stray SSH watch to peel off the shared default now,
+    or None. Pure — see tests.
+
+    A stray is a live RNDIS link whose watch does not answer on its allocated
+    address (fresh boots land on the shared default, where several watches
+    shadow each other). Only the route winner is reachable, so that is the
+    one to act on; each peel frees the default for the next stray, and
+    repeated calls converge without any host-side routing changes."""
+    strays: list[dict] = []
+    for link in links:
+        serial = link["serial"]
+        if not serial:
+            continue
+        allocated = ssh_ips.get(serial)
+        if allocated and probe(allocated):
+            continue                        # aligned: answers where assigned
+        strays.append(link)
+    if not strays:
+        return None
+    winner = next((l for l in strays if l["iface"] == winner_iface), None)
+    if winner is None or not probe(USB_SSH_IP):
+        return None
+    return winner["serial"]
+
+
 def _switch_ssh_to_adb(ip: str = "192.168.2.15") -> dict:
     """Switch a watch that enumerated in SSH/developer USB mode over to adb_mode.
     The watch is reachable at `ip` — its assigned SSH address (192.168.2.15 by
