@@ -1394,12 +1394,18 @@ def _onboard_start(args):
 
 def _sweep_leaf_ports(cfg: dict) -> "list[tuple[str, int]]":
     """Every watch-bearing leaf port across the mapped hubs — cascade ports that
-    feed a sub-hub are skipped (powering one cuts the whole sub-tree)."""
+    feed a sub-hub are skipped (powering one cuts the whole sub-tree), as are
+    hidden hubs and user-excluded ports: a box marked hidden (the Lenovo dock)
+    is not a watch dock, and sweeping it burns a full boot window per empty
+    socket."""
     import glob
     hub_locs = {h["location"] for h in cfg.get("hubs", [])}
     out: list[tuple[str, int]] = []
     for hub in cfg.get("hubs", []):
+        if hub.get("hidden"):
+            continue
         loc = hub["location"]
+        excluded = set(hub.get("exclude", {}))
         for iface in sorted(glob.glob(f"/sys/bus/usb/devices/{loc}:*")):
             for pd in sorted(glob.glob(f"{iface}/{loc}-port*")):
                 try:
@@ -1408,8 +1414,11 @@ def _sweep_leaf_ports(cfg: dict) -> "list[tuple[str, int]]":
                     continue
                 if f"{loc}.{port}" in hub_locs:
                     continue                       # cascade → not a watch socket
+                if str(port) in excluded:
+                    continue
                 out.append((loc, port))
     return out
+
 
 
 def _sweep_wait_adb(sysfs_path: str, secs: int, emit) -> "str | None":

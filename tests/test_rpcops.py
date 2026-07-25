@@ -926,3 +926,24 @@ def test_sweep_shelve_claims_nothing_on_failed_halt(monkeypatch):
     events, marks = _run_sweep_one_port(monkeypatch, halt_rc=1)
     assert "cut" in events
     assert "safe_off_ts" not in marks.get("S1", {})
+
+
+def test_sweep_leaf_ports_skips_hidden_hubs_and_excluded_ports(monkeypatch):
+    """A hidden hub (the Lenovo dock) and user-excluded ports are not swept —
+    every empty socket otherwise costs a full boot window."""
+    tree = {
+        "/sys/bus/usb/devices/1-3:*": ["/sys/bus/usb/devices/1-3:1.0"],
+        "/sys/bus/usb/devices/1-3:1.0/1-3-port*": [
+            "/sys/bus/usb/devices/1-3:1.0/1-3-port1",
+            "/sys/bus/usb/devices/1-3:1.0/1-3-port2"],
+        "/sys/bus/usb/devices/1-9:*": ["/sys/bus/usb/devices/1-9:1.0"],
+        "/sys/bus/usb/devices/1-9:1.0/1-9-port*": [
+            "/sys/bus/usb/devices/1-9:1.0/1-9-port1"],
+    }
+    import glob as glob_mod
+    monkeypatch.setattr(glob_mod, "glob", lambda pat: tree.get(pat, []))
+    cfg = {"hubs": [
+        {"location": "1-3", "exclude": {"2": "hidden by user"}},
+        {"location": "1-9", "hidden": True},
+    ]}
+    assert rpcops._sweep_leaf_ports(cfg) == [("1-3", 1)]
