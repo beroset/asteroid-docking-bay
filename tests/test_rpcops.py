@@ -864,3 +864,65 @@ def test_set_hands_op_validates_before_moving(monkeypatch):
     assert bad == {"ok": False, "error": "bad datetime"} and called == []
     ok = rpcops.DISPATCH._data["watch.set_hands"]({"serial": "S1", "when": "2026-07-23 02:42:00"})
     assert ok == {"ok": True} and called == ["2026-07-23 02:42:00"]
+
+
+def _run_sweep_one_port(monkeypatch, halt_rc):
+    """Drive _sweep_one_port with everything mocked, recording the order of
+    the halt (adb poweroff), any adb polling, and the VBUS cut. Returns
+    (events, marks) — marks holds last_seen.mark calls per serial."""
+    import types
+    events, marks = [], {}
+    monkeypatch.setattr(rpcops, "charge_config",
+                        lambda c: types.SimpleNamespace(onboard_wait_seconds=0))
+    monkeypatch.setattr(rpcops, "load_config", lambda: {"serials": {}})
+    monkeypatch.setattr(rpcops, "save_config", lambda c: None)
+    monkeypatch.setattr(
+        rpcops, "uhubctl_set_power",
+        lambda l, p, on: events.append("cut" if not on else "power-on"))
+    monkeypatch.setattr(rpcops, "_sweep_wait_adb", lambda path, secs, emit: "S1")
+    monkeypatch.setattr(rpcops, "adb_devices",
+                        lambda: (events.append("poll"), {})[1])
+    monkeypatch.setattr(rpcops, "get_watch_codename", lambda s: "skipjack")
+    monkeypatch.setattr(rpcops, "_sweep_map_to_port", lambda *a, **k: None)
+    monkeypatch.setattr(rpcops, "test_port_power_switching",
+                        lambda l, p, s: (True, "ok"))
+    monkeypatch.setattr(rpcops, "_store_smart_verdict", lambda h, p, v: None)
+    monkeypatch.setattr(rpcops, "last_seen", types.SimpleNamespace(
+        record=lambda *a, **k: None,
+        mark=lambda serial, **kw: marks.setdefault(serial, {}).update(kw)))
+    monkeypatch.setattr(rpcops, "registry",
+                        types.SimpleNamespace(note=lambda *a, **k: None))
+    monkeypatch.setattr(
+        rpcops, "_run",
+        lambda cmd, **kw: (events.append("halt"), (halt_rc, "", ""))[1]
+        if "poweroff" in cmd else (0, "", ""))
+    monkeypatch.setattr(rpcops.time, "sleep", lambda s: None)
+
+    class _FakeWatch:
+        def __init__(self, *a, **k): pass
+        def cc_data(self): return {"bat_cap": 50}
+        def geometry(self): return {"machine": "skipjack"}
+    monkeypatch.setattr(rpcops, "Watch", _FakeWatch)
+
+    assert rpcops._sweep_one_port("1-3.3.3", 2, True, lambda m: None) == "skipjack"
+    return events, marks
+
+
+def test_sweep_shelve_cuts_vbus_immediately_after_halt(monkeypatch):
+    """The sweep's shelve must cut VBUS in the very next step after the
+    synchronous poweroff delivery — no adb polling in between. The old
+    wait-for-adb-drop raced the halt (watches bounced back up) and treated
+    the drop as poweroff proof, though a REBOOT drops adb too: 14 watches
+    were stamped 'shelved' while running on battery (2026-07-25, audit F4).
+    Planted-bug: reinstate the wait loop between halt and cut → this fails."""
+    events, marks = _run_sweep_one_port(monkeypatch, halt_rc=0)
+    assert events.index("cut") == events.index("halt") + 1
+    assert "safe_off_ts" in marks.get("S1", {})   # delivered halt → shelved
+
+
+def test_sweep_shelve_claims_nothing_on_failed_halt(monkeypatch):
+    """A failed poweroff delivery must still cut VBUS but must NOT stamp
+    safe_off — a bare cut is not a shelve (the watch may run on battery)."""
+    events, marks = _run_sweep_one_port(monkeypatch, halt_rc=1)
+    assert "cut" in events
+    assert "safe_off_ts" not in marks.get("S1", {})

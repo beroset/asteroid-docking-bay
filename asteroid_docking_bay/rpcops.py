@@ -35,7 +35,7 @@ from .config import (_config_lock, _store_smart_verdict, allocate_ssh_ip,
                      flash_config, load_config, save_config,
                      orbit_add, orbit_forget, orbit_members,
                      hands_cal_for, set_hands_cal, set_hub_name)
-from .usb import (_sysfs_path_to_serial_map, _sysfs_set_power,
+from .usb import (_sysfs_path_to_serial_map,
                   test_port_power_switching, uhubctl_cycle, uhubctl_set_power)
 from .watchctl import DIAG_ROOT, Watch
 from .ops import ChargeOp, DrainOp, WorkbenchOp, _flash_one_watch
@@ -1504,7 +1504,10 @@ def _sweep_one_port(loc: str, port: int, prefer_adb: bool, emit) -> "str | None"
     if not serial:
         emit(f"[{slot}] no watch enumerated in {wait_secs}s — drained or empty. "
              f"Cutting power, logging as needs-charge.")
-        _sysfs_set_power(loc, port, False)
+        try:
+            uhubctl_set_power(loc, port, False)
+        except RuntimeError as e:
+            emit(f"[{slot}] power-cut warning: {e}")
         return None
 
     # Pull the FULL Control Center data while the watch is LIVE — battery, kernel,
@@ -1563,30 +1566,34 @@ def _sweep_one_port(loc: str, port: int, prefer_adb: bool, emit) -> "str | None"
         except RuntimeError as e:
             emit(f"[{slot}] PPPS error: {e}")
 
-    # Clean shutdown so it doesn't sit draining on battery after we cut VBUS.
+    # Clean shutdown, then cut VBUS IMMEDIATELY — same order as port.poweroff:
+    # the shutdown command is synchronous, so it is delivered before the cut,
+    # and any wait here races the halt (a watch still up when VBUS drops can
+    # bounce back on). The old wait-for-adb-drop also faked confirmations:
+    # adb drops on a REBOOT too, so watches that rebooted instead of halting
+    # were stamped "shelved" while running on battery (2026-07-25 fleet drain,
+    # audit F4). Delivery of the command is the only evidence claimed here.
     emit(f"[{slot}] clean poweroff…")
-    powered_off = False
+    graceful = False
     if transport == "adb":
-        _run(f"adb -s {serial} shell poweroff", check=False, timeout=15)
-        for _ in range(12):
-            time.sleep(3)
-            if _adb_state(adb_devices(), serial) != "device":
-                powered_off = True
-                break
+        rc, _, _ = _run(f"adb -s {serial} shell poweroff", check=False, timeout=15)
+        graceful = (rc == 0)
     else:
         try:
             SshTransport(ssh_ip or USB_SSH_IP).shell("poweroff", timeout=10)
-            time.sleep(6)
-            powered_off = True
+            graceful = True
         except Exception:
             pass
-    _sysfs_set_power(loc, port, False)
-    # Stamp a CONFIRMED graceful shutdown so the row reads "shelved" (deliberate,
-    # not draining) rather than an ambiguous "---". Only on a real poweroff — a
-    # bare VBUS cut must never claim to be a safe shelve.
-    if powered_off:
+    try:
+        uhubctl_set_power(loc, port, False)
+    except RuntimeError as e:
+        emit(f"[{slot}] power-cut warning: {e}")
+    # Stamp a graceful shutdown so the row reads "shelved" (deliberate, not
+    # draining) rather than an ambiguous "---". Only on a delivered poweroff —
+    # a bare VBUS cut must never claim to be a safe shelve.
+    if graceful:
         last_seen.mark(serial, safe_off_ts=time.time())
-    emit(f"[{slot}] {'shelved' if powered_off else 'powered off (poweroff unconfirmed)'}"
+    emit(f"[{slot}] {'shelved' if graceful else 'powered off (halt delivery unconfirmed)'}"
          f" — {codename} done.")
     return codename
 
@@ -1600,7 +1607,7 @@ def _onboard_sweep_prepare(args):
     n = 0
     for loc, port in _sweep_leaf_ports(cfg):
         try:
-            _sysfs_set_power(loc, port, False)
+            uhubctl_set_power(loc, port, False)
             n += 1
         except Exception as e:
             log.debug("sweep_prepare %s.%s: %s", loc, port, e)
