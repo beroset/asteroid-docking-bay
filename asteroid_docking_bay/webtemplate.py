@@ -149,7 +149,7 @@ _WEB_TEMPLATE = """\
       line-height:1;vertical-align:middle;flex:none}
     .sdot .svgi{width:14px;height:14px;vertical-align:0}
     .sdot .pwri{width:15px;height:15px}
-    .sdot.on{border-color:#3fb950;background:#3fb950;color:#0d1117}   /* powered: solid lit green (a thin outline washed out in sun glare) */
+    .sdot.on{border-color:#3fb950;color:#3fb950}
     .sdot.err{border-color:#f85149;color:#f85149}
     .sdot.warn{border-color:#d29922;color:#d29922}
     .sdot.dim{border-color:#3d4756;color:#8b949e}
@@ -294,18 +294,33 @@ _WEB_TEMPLATE = """\
     .cbadge.bat.warn{border-color:#d29922;color:#d29922}
     .cbadge.bat.low{border-color:#f85149;color:#f85149}
     button.cbadge.bat:hover{background:rgba(255,255,255,.05)}
-    /* Battery gauge: fixed width (~the column title), grey outline, a fill that
-       grows left→right. The fill is coloured only when connected; grey when off. */
-    .batw{position:relative;display:inline-block;box-sizing:border-box;width:68px;height:var(--pill-h);
-      border-radius:var(--pill-r);border:1px solid rgba(240,246,252,.55);background:none;overflow:hidden;
-      cursor:pointer;font:var(--pill-fs) monospace;color:#c9d1d9;vertical-align:middle;padding:0}
-    .batw:hover{filter:brightness(1.18)}
-    .batfill{position:absolute;top:0;left:0;bottom:0;width:0;background:rgba(120,130,145,.28);transition:width .4s ease}
-    .batw.high .batfill{background:rgba(63,185,80,.32)}
-    .batw.ok .batfill{background:rgba(210,153,34,.30)}
-    .batw.low .batfill{background:rgba(248,81,73,.34)}
-    .batw.off .batfill{background:rgba(120,130,145,.28)}
-    .batlbl{position:relative;z-index:1;display:flex;align-items:center;justify-content:center;height:100%}
+    /* ── Fill pill — the shared level/duration primitive of the pill language.
+       A pill whose background fills left→right, under a centred label. Two modes:
+         • LEVEL — width:N% (a static level, e.g. battery charge).
+         • TIMED — .timed fills 0→100% over --dur, offset by --el (seconds already
+           elapsed) so a mid-phase re-render RESUMES the fill instead of restarting
+           it (e.g. an onboarding phase). Colour the fill with a variant class. */
+    .fillpill{position:relative;display:inline-flex;align-items:center;justify-content:center;
+      box-sizing:border-box;min-height:var(--pill-h);border-radius:var(--pill-r);border:1px solid;
+      background:none;overflow:hidden;font:var(--pill-fs) monospace;color:#c9d1d9;
+      vertical-align:middle;padding:0 var(--pill-px)}
+    button.fillpill{cursor:pointer}
+    button.fillpill:hover{filter:brightness(1.18)}
+    .fillpill .pfill{position:absolute;top:0;left:0;bottom:0;width:0;background:rgba(120,130,145,.28);transition:width .4s ease;z-index:0}
+    .fillpill .plbl{position:relative;z-index:1;display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+    .fillpill.timed .pfill{width:0;animation:pfill var(--dur,30s) linear forwards;animation-delay:calc(-1 * var(--el,0s))}
+    @keyframes pfill{from{width:0}to{width:100%}}
+    .fillpill.high .pfill{background:rgba(63,185,80,.32)}
+    .fillpill.ok .pfill{background:rgba(210,153,34,.30)}
+    .fillpill.low .pfill{background:rgba(248,81,73,.34)}
+    .fillpill.off .pfill{background:rgba(120,130,145,.28)}
+    .fillpill.busy .pfill{background:rgba(88,166,255,.30)}
+    /* instances: battery = fixed-width grey-outline gauge; ob = onboard action;
+       busy = a running timed phase (blue, like the re-identify pulse). */
+    .fillpill.bat{width:68px;border-color:rgba(240,246,252,.55)}
+    .fillpill.ob{border-color:#1f6b39;color:#2c8a4c}
+    .fillpill.ob:hover{background:#0d1f13}
+    .fillpill.busy{border-color:#58a6ff;color:#58a6ff}
     /* Clickable badges are real <button>s so the cursor is a pointer, not a
        text caret; the non-clickable ones stay <span>s. */
     button.cbadge{cursor:pointer}
@@ -435,6 +450,16 @@ _WEB_TEMPLATE = """\
 <script>
 const srcs={};
 const chargeEnd={};
+// Onboarding in flight, per slot: {t0, dur} — drives the Onboard pill's timed
+// fill and the connection-column blink. ONBOARD_SECS is the expected power-on →
+// boot → identify window (approximate; the fill caps at full if it overruns and
+// clears the moment onboarding finishes).
+const onboardStart={};
+const ONBOARD_SECS=45;
+// Last rendered status payload, so a click can repaint the row's new state
+// (onboarding fill, pulsing) INSTANTLY from cache instead of waiting on a slow
+// /api/status round-trip.
+let lastData=null;
 let countdownRunning=false;
 let showHidden=false;
 const refreshing=new Set();
@@ -519,6 +544,22 @@ function mklife(p){
   // own pink pill beside the codename; the power state lives in the Stats dot.
   return p.lifecycle==='worn'?`<span class="cbadge life worn" title="worn — off the rig via the wear toggle; port held for re-docking">worn</span>`:'';
 }
+// The fill pill — the shared level/duration primitive (battery, onboarding, …).
+// `fill` is a percent 0-100 (a LEVEL), or {dur, el} for a TIMED fill that animates
+// 0→100 over `dur` seconds, resumed `el` seconds in so a re-render mid-phase does
+// not restart it. `variant` adds width/colour classes (bat/high/ok/low/off/busy/
+// ob). Renders a <button> when o.click is given, else a <span>.
+function fillPill(variant,fill,inner,o){
+  o=o||{};
+  const timed=(fill&&typeof fill==='object');
+  const cls='fillpill'+(variant?' '+variant:'')+(timed?' timed':'');
+  const outStyle=timed?` style="--dur:${fill.dur}s;--el:${(fill.el||0).toFixed(1)}s"`:'';
+  const fillStyle=timed?'':` style="width:${Math.max(0,Math.min(100,fill||0))}%"`;
+  const t=o.title?` title="${esc(o.title)}"`:'';
+  const tag=o.click?'button':'span';
+  const clk=o.click?` onclick="${o.click}"`:'';
+  return `<${tag} class="${cls}"${outStyle}${t}${clk}><span class="pfill"${fillStyle}></span><span class="plbl">${inner}</span></${tag}>`;
+}
 function batBand(v,lo,hi){return v==null?'':(v<lo?'low':v<=hi?'ok':'');}
 function batPill(p,cls,inner,title){
   // The battery cell as a pill: the charge percent, plus one line of appended
@@ -553,8 +594,8 @@ function mkbatCell(p,lo,hi){
   const tip=connected?'battery — click for details'
     :('watch off the bus — last reading'+(age?' '+age+' ago':''));
   const clk=p.serial?` onclick="openBI('${esc(p.serial)}','${esc(p.codename||p.serial)}',event)"`:'';
-  const w=Math.max(0,Math.min(100,pct));
-  return `<button class="batw ${band}"${clk} title="${tip}"><span class="batfill" style="width:${w}%"></span><span class="batlbl">${pct}%</span></button>`;
+  return fillPill('bat '+band, Math.max(0,Math.min(100,pct)), pct+'%',
+    {title:tip, click:p.serial?`openBI('${esc(p.serial)}','${esc(p.codename||p.serial)}',event)`:''});
 }
 function mkthumb(p){
   // Product photo thumbnail; removes itself if the watch has no image (404).
@@ -637,12 +678,21 @@ function biHistFetch(serial){
     if(ctlTab==='bat'&&ctlCache[serial])renderControl(ctlCache[serial]);
   }).catch(()=>{});
 }
-function mkport(p){
+function mkport(p,slot){
+  // Click the port label to set its physical socket number (sX). Ports sort by
+  // socket, so mapping sockets as you power ports up reorders the rows into the
+  // rig's physical layout.
+  const clk=slot?` onclick="doSetSocket('${slot}',${p.socket!=null?p.socket:"''"})" style="cursor:pointer" title="click to set this port's physical socket number (sorts the rows)"`:'';
   let s = p.socket!=null
-    ? `<b style="color:#c9d1d9">s${p.socket}</b> <span class="dim" style="font-size:10px">p${p.port}</span>`
-    : `<span class="dim">p${p.port}</span>`;
+    ? `<span${clk}><b style="color:#c9d1d9">s${p.socket}</b> <span class="dim" style="font-size:10px">p${p.port}</span></span>`
+    : `<span${clk} class="dim">p${p.port} <span style="font-size:9px;opacity:.5">+s</span></span>`;
   if(p.excluded) s = `<span class="err" title="${esc(p.excluded)}">avoid</span> ` + s;
   return s;
+}
+function doSetSocket(slot,cur){
+  const v=prompt('Physical socket number for this port (blank to clear):',cur!==''&&cur!=null?cur:'');
+  if(v===null)return;
+  fetch('/api/socket/'+_api(slot)+'?n='+encodeURIComponent(v.trim()),{method:'POST'}).then(()=>refresh());
 }
 const AOSLOGO='<svg viewBox="0 0 2000 2000" width="13" height="13" style="vertical-align:-2px;margin-right:5px" shape-rendering="crispEdges" xmlns="http://www.w3.org/2000/svg"><defs><rect id="T" width="2" height="2"/></defs><g transform="matrix(100 100 -100 100 1000 0)"><g><use href="#T" style="fill:#be3729"/><use href="#T" id="b" x="2" style="fill:#dc2919"/><use href="#T" id="c" x="4" style="fill:#e54b3a"/><use href="#T" id="d" x="6" style="fill:#e56934"/><use href="#T" id="e" x="8" style="fill:#e57c21"/></g><g transform="translate(-2,2)"><use href="#b"/><use href="#c"/><use href="#T" id="f" x="10" style="fill:#e58a21"/></g><g transform="translate(-4,4)"><use href="#c"/><use href="#e"/><use href="#T" id="g" x="12" style="fill:#f19a11"/></g><g transform="translate(-6,6)"><use href="#d"/><use href="#e"/><use href="#f"/><use href="#T" id="h" x="14" style="fill:#f0ae0e"/></g><g transform="translate(-8,8)"><use href="#e"/><use href="#f"/><use href="#g"/><use href="#h"/><use href="#T" x="16" style="fill:#f0c30e"/></g></g></svg>';
 function mkadb(adb,fbprod,os,serial,sshIp,name){
@@ -804,6 +854,7 @@ function deorbit(serial,name){
     .catch(()=>toast('de-orbit failed'));
 }
 function render(data){
+  lastData=data;
   const tb=document.getElementById('tb');
   const hubs=(data&&data.hubs)||[];
   // Catch a forgotten screen-force-on (mcetool -D on) anywhere in the fleet:
@@ -844,15 +895,22 @@ function render(data){
           :(p.orbited_codename
             ?`<span class="dim" title="this port's watch left the cradle and is now in Orbit (on WiFi) — the port is free">${esc(p.orbited_codename)} <span class="orbit-hint">&#8599; orbit</span></span>`
             :(p.fastboot_product?`<span class="warn">${esc(p.fastboot_product)}</span>`:'<span class="dim">&mdash;</span>'));
-        const adbCell=p.adb==='fastboot'?`<span class="warn">${fbLabel}</span>`
-          :mkadbrow(p);
+        const onb=onboardStart[slot];
+        // Onboarding blinks white in the connection column, exactly like booting/
+        // reconnecting, so a port being brought up reads the same everywhere.
+        const adbCell=onb?'<span class="cbadge life booting" title="onboarding — powering on, booting and identifying the watch">onboarding</span>'
+          :(p.adb==='fastboot'?`<span class="warn">${fbLabel}</span>`:mkadbrow(p));
         const pwrCls=p.power===true?'tgl tgl-on':'tgl tgl-off';
         const pwrLbl=p.power===true?'<span class="dot don"></span>ON':'<span class="dot doff"></span>OFF';
         const pwrFn=`pwrGo(this,'${slot}')`;
-        const onboardBtn=p.excluded?'':`<button class="btn ob"${d} onclick="doRemap('${slot}')" title="power on, boot, then identify and map this watch">Onboard</button>`;
+        // Onboard is a fill pill: idle it's a green action button; while onboarding
+        // it fills left→right over the expected duration (the timed fill primitive).
+        const onboardBtn=p.excluded?''
+          :(onb?fillPill('busy',{dur:onb.dur,el:(Date.now()-onb.t0)/1000},'onboarding&hellip;',{title:'onboarding — power on, boot, identify'})
+               :fillPill('ob',0,'Onboard',{click:`doRemap('${slot}')`,title:'power on, boot, then identify and map this watch'}));
         rows.push(
           `<tr class="wr empty${p.excluded?' excl':''}" id="wr-${slot}">` +
-          `<td class="pcell"><button class="${pwrCls}"${d} title="${p.power===true?'power the port off':'power the port on'}" onclick="${pwrFn}">${pwrLbl}</button>${mkport(p)}</td>` +
+          `<td class="pcell"><button class="${pwrCls}"${d} title="${p.power===true?'power the port off':'power the port on'}" onclick="${pwrFn}">${pwrLbl}</button>${mkport(p,slot)}</td>` +
           `<td class="smtc">${mksmart(p,slot,d)}</td>` +
           `<td class="connc">${adbCell}</td>` +
           `<td class="thumb">${mkthumb(p)}</td>` +
@@ -885,6 +943,11 @@ function render(data){
         // excluded (excluded ports are opted out of automatic power entirely).
         const needPwr=(p.power!==true&&!noSw&&!p.excluded);
         const dp=(busy||noSw||p.excluded)?' disabled':'';
+        // Keep the PORT POWER toggle live even on a 'not smart' port: that verdict
+        // is often a transient false negative (a slow or momentarily-busy switch),
+        // and a dimmed/disabled toggle reads as a powered-off port. Let the user
+        // retry; only a genuinely busy or excluded port disables it.
+        const dpwr=(busy||p.excluded)?' disabled':'';
         const adb=mkadbrow(p);
         let bat;
         if(wb){
@@ -925,7 +988,7 @@ function render(data){
         const isRef=refreshing.has(slot);
         rows.push(
           `<tr class="wr${isRef?' refreshing':''}${p.excluded?' excl':''}${isNew?' justplugged':''}${p.lifecycle==='worn'?' worn':''}" id="wr-${slot}">` +
-          `<td class="pcell"><button class="${pwrCls}"${dp} title="${noSw?'port cannot switch power (not smart)':(p.power===true?'power the port off':'power the port on')}" onclick="${pwrFn}">${pwrLbl}</button>${mkport(p)}</td>` +
+          `<td class="pcell"><button class="${pwrCls}"${dpwr} title="${noSw?'marked not-smart — click to try switching anyway':(p.power===true?'power the port off':'power the port on')}" onclick="${pwrFn}">${pwrLbl}</button>${mkport(p,slot)}</td>` +
           `<td class="smtc">${mksmart(p,slot,dp)}</td>` +
           `<td class="connc"${p.serial?` id="conn-${esc(p.serial)}"`:''}>${adb}</td>` +
           `<td class="thumb">${mkthumb(p)}</td>` +
@@ -2136,7 +2199,9 @@ function doContinue(c){
 }
 function doCy(c){
   const r=document.getElementById('wr-'+c);
-  if(r)r.querySelectorAll('button').forEach(b=>b.disabled=true);
+  // Never disable the power toggle (.tgl): a slow or failed PPPS cycle must not
+  // leave the port un-switchable — you can always still power it off/on.
+  if(r)r.querySelectorAll('button:not(.tgl)').forEach(b=>b.disabled=true);
   toast('power-cycling — testing port switching…');
   fetch('/api/cycle/'+_api(c),{method:'POST'}).then(rr=>rr.json()).then(d=>{
     if(d.smart===true)toast('port switches power (smart ✓)');
@@ -2275,13 +2340,16 @@ function doRemap(c){
   if(!box)return;
   box.textContent='';box.classList.add('show');
   refreshing.add(c);                                   // pulse the row while it re-identifies
+  onboardStart[c]={t0:Date.now(),dur:ONBOARD_SECS};    // start the timed fill + blink
   const r=document.getElementById('wr-'+c);
-  if(r)r.querySelectorAll('button').forEach(b=>b.disabled=true);
+  if(r)r.querySelectorAll('button:not(.tgl)').forEach(b=>b.disabled=true);
+  if(lastData)render(lastData);                        // paint the onboarding state INSTANTLY
+  refresh();                                            // then reconcile with the server
   const es=new EventSource('/api/remap/'+_api(c));
   srcs[c]=es;
   es.onmessage=ev=>{box.textContent+=ev.data+'\\n';box.scrollTop=box.scrollHeight};
-  es.addEventListener('done',()=>{box.textContent+='\\n\\u2500\\u2500 done \\u2500\\u2500\\n';box.scrollTop=box.scrollHeight;es.close();delete srcs[c];refreshing.delete(c);setTimeout(refresh,1000)});
-  es.onerror=()=>{box.textContent+='\\n\\u2500\\u2500 connection lost \\u2500\\u2500\\n';es.close();delete srcs[c];refreshing.delete(c);refresh()};
+  es.addEventListener('done',()=>{box.textContent+='\\n\\u2500\\u2500 done \\u2500\\u2500\\n';box.scrollTop=box.scrollHeight;es.close();delete srcs[c];refreshing.delete(c);delete onboardStart[c];setTimeout(refresh,1000)});
+  es.onerror=()=>{box.textContent+='\\n\\u2500\\u2500 connection lost \\u2500\\u2500\\n';es.close();delete srcs[c];refreshing.delete(c);delete onboardStart[c];refresh()};
 }
 // Seeded starfield (mulberry32 PRNG → same field every load), painted once into
 // the fixed backdrop. Ported from moWerk's Depth Drift generator: 150 stars,

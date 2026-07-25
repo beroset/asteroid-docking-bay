@@ -363,13 +363,14 @@ def uhubctl_set_power(location: str, port: int, on: bool) -> bool:
     Raises RuntimeError on uhubctl command failure.
     """
     action = "on" if on else "off"
-    # Fast path: write the port's power directly via sysfs (no bus scan) — but
-    # ONLY when sysfs can reach every side of the shared VBUS. On a USB3-
-    # connected hub whose USB3 companion has no sysfs disable, sysfs cuts only
-    # the USB2 side and VBUS stays up; fall through to uhubctl, which is
-    # companion-aware (cuts both sides AND updates the sysfs disable, so the
-    # fast read stays correct afterwards).
-    if _sysfs_power_is_complete(location, port) and _sysfs_set_power(location, port, on):
+    # Fast path: write the port's power directly via sysfs (no bus scan).
+    # Powering ON only needs ONE side up — VBUS is on if either side is enabled,
+    # and a watch (a USB2 device) enumerates on the USB2 side — so sysfs
+    # disable=0 always suffices and is instant. Powering OFF needs EVERY side
+    # of the shared VBUS down, so it takes the sysfs path only when sysfs reaches
+    # them all (a USB3 companion with no sysfs disable would otherwise keep VBUS
+    # up); when it can't, it falls through to companion-aware uhubctl.
+    if (on or _sysfs_power_is_complete(location, port)) and _sysfs_set_power(location, port, on):
         actual = _sysfs_get_power(location, port)       # fresh read-back
         if actual is not None:
             power_cache.put((location, port), actual)

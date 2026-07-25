@@ -454,3 +454,36 @@ def test_enum_stuck_flags_a_powered_port_that_never_enumerates():
     # an unpowered port never arms; an on-adb port is not stuck
     assert ws._enum_stuck("1-2:2", power=False, adb_state=None, present=False, now=t0 + 999) is False
     assert ws._enum_stuck("1-2:3", True, "device", False, t0) is False
+
+
+def test_soft_remap_retries_unidentified_watch_not_skip_forever(monkeypatch):
+    """A watch whose codename can't be read on one pass (flaky bus / just booting)
+    must be RE-probed after a short delay, not made permanently invisible — the
+    'switch 3 on, only 1 appears' bug. Once identified it auto-onboards and the
+    skip clears."""
+    ws._soft_remap_unknown.clear()
+    cfg = {"hubs": [{"location": "1-2", "ports": {}, "port_serials": {}}],
+           "serials": {}}
+    monkeypatch.setattr(ws, "_parse_hub_port_path", lambda p: ("1-2", 1))
+    monkeypatch.setattr(ws, "load_config", lambda: cfg)
+    monkeypatch.setattr(ws, "save_config", lambda c: None)
+
+    # Pass 1: identification fails → skipped, marked unknown (with a timestamp).
+    monkeypatch.setattr(ws, "get_watch_codename", lambda s: None)
+    ws._soft_remap(cfg, {"1-2.1": "S1"})
+    assert "S1" in ws._soft_remap_unknown
+
+    # Pass 2, immediately after: inside the retry window → not re-probed.
+    calls = []
+    monkeypatch.setattr(ws, "get_watch_codename",
+                        lambda s: calls.append(s) or "skipjack")
+    ws._soft_remap(cfg, {"1-2.1": "S1"})
+    assert calls == []
+
+    # Pass 3, once the skip has aged past the window → re-probed, identifies,
+    # auto-onboards, and the skip is cleared.
+    ws._soft_remap_unknown["S1"] = 0.0
+    ws._soft_remap(cfg, {"1-2.1": "S1"})
+    assert calls == ["S1"]
+    assert cfg["hubs"][0]["ports"].get("1") == "skipjack"
+    assert "S1" not in ws._soft_remap_unknown

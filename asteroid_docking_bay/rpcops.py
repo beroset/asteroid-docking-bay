@@ -1004,6 +1004,32 @@ def _hub_hide(args):
     return {"ok": True, "hidden": state}
 
 
+@DISPATCH.op("socket.set")
+def _socket_set(args):
+    """Set (or clear, with a blank value) a port's physical socket number, stored
+    in the hub's `sockets` map. Ports sort by socket, so this records the rig's
+    physical socket order as you map it."""
+    loc, port = args["loc"], int(args["port"])
+    raw = str(args.get("n", "")).strip()
+    with _config_lock:
+        cfg = load_config()
+        hub = next((h for h in cfg.get("hubs", []) if h["location"] == loc), None)
+        if hub is None:
+            return {"ok": False, "error": "hub not found"}
+        socks = hub.setdefault("sockets", {})
+        if raw == "":
+            socks.pop(str(port), None)
+            val = None
+        else:
+            try:
+                val = int(raw)
+            except ValueError:
+                return {"ok": False, "error": "socket must be a number"}
+            socks[str(port)] = val
+        save_config(cfg)
+    return {"ok": True, "socket": val}
+
+
 @DISPATCH.op("hub.rename")
 def _hub_rename(args):
     """Set (or clear, with an empty name) the friendly name for a physical hub,

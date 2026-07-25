@@ -30,8 +30,18 @@ from .watchctl import (GEOMETRY_PROBE_VERSION, Watch, _watch_os,
                        _watch_os_for)
 
 
-# Serials that could not be identified via ADB — don't re-probe every refresh.
-_soft_remap_unknown: set[str] = set()
+# Serials ADB couldn't identify YET — retried, never skipped forever. A watch
+# that fluffs identification once (get_watch_codename returns None during the
+# flaky-bus / just-booting window) must not become permanently invisible: re-probe
+# after a short delay so it auto-onboards the moment it can be read. Keyed by the
+# last failed-identify time.
+_soft_remap_unknown: dict[str, float] = {}
+_SOFT_REMAP_RETRY_S = 20
+# Serialize ADB identification. Probing a whole fresh fleet at once (24 watches
+# → 24 `adb shell` codename reads in one pass) floods and crashes the adb server.
+# Identify at most this many NEW watches per status pass; the rest come on the
+# next pass. Known watches (already in `serials`) map with no adb call.
+_SOFT_REMAP_IDENTIFY_PER_PASS = 1
 
 # slot → first time the port was seen powered+connected but not enumerating.
 # That combination persisting is the signature of a flat/bootlooping watch
@@ -187,10 +197,12 @@ def _soft_remap(cfg: dict, online_by_path: dict[str, str]) -> "dict | None":
     Returns the updated config, or None if nothing changed.
     """
     hub_locs = {hub["location"] for hub in cfg.get("hubs", [])}
+    now = time.time()
     moves: list[tuple[str, str, str]] = []
     for path, serial in online_by_path.items():
         parsed = _parse_hub_port_path(path)
-        if parsed is None or parsed[0] not in hub_locs or serial in _soft_remap_unknown:
+        recent_unknown = now - _soft_remap_unknown.get(serial, 0) < _SOFT_REMAP_RETRY_S
+        if parsed is None or parsed[0] not in hub_locs or recent_unknown:
             continue
         loc, port = parsed
         hub = next(hub for hub in cfg["hubs"] if hub["location"] == loc)
@@ -207,12 +219,18 @@ def _soft_remap(cfg: dict, online_by_path: dict[str, str]) -> "dict | None":
     with _config_lock:
         cfg = load_config()
         changed = False
+        identified = 0
         for loc, port_str, serial in moves:
-            codename = (cfg.get("serials", {}).get(serial)
-                        or get_watch_codename(serial))
+            codename = cfg.get("serials", {}).get(serial)
             if not codename:
-                _soft_remap_unknown.add(serial)
+                if identified >= _SOFT_REMAP_IDENTIFY_PER_PASS:
+                    continue                        # serialize: defer to next pass
+                codename = get_watch_codename(serial)
+                identified += 1
+            if not codename:
+                _soft_remap_unknown[serial] = now   # retry in _SOFT_REMAP_RETRY_S
                 continue
+            _soft_remap_unknown.pop(serial, None)   # identified → clear any skip
             hub = next((hub for hub in cfg.get("hubs", [])
                         if hub["location"] == loc), None)
             if hub is None:

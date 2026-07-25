@@ -729,9 +729,9 @@ def test_battery_gauge_fills_by_level_and_colours_only_when_connected(tmp_path):
     r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
     assert r.returncode == 0, r.stderr[:400]
     out = json.loads(r.stdout.strip().splitlines()[-1])
-    assert 'class="batw ok"' in out["live"] and "width:60%" in out["live"], out["live"]
+    assert 'class="fillpill bat ok"' in out["live"] and "width:60%" in out["live"], out["live"]
     assert "openBI('S9'" in out["live"] and "60%" in out["live"]
-    assert 'class="batw off"' in out["off"] and "width:55%" in out["off"], "offline gauge not grey"
+    assert 'class="fillpill bat off"' in out["off"] and "width:55%" in out["off"], "offline gauge not grey"
     assert "Charging" not in out["live"], "charge status should not repeat in the gauge"
 
 

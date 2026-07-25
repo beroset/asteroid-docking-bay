@@ -110,6 +110,7 @@ Deliberately mirrors the existing `/api/*` routes and module seams — the
 | `watch.fbreport` | fastboot getvar all -> downloadable text report |
 | `config.hide / hide_hub` | config mutations |
 | `hub.rename` | set a physical hub's friendly name (by address prefix) |
+| `socket.set` | set/clear a port's physical socket number (ports sort by it) |
 | `flash.start`, `onboard.start` | streaming ops |
 
 The dispatch table is an allow-list; unknown ops get `ok:false`. Nothing

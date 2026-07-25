@@ -47,6 +47,26 @@ def test_hub_rename_round_trips_and_clears(monkeypatch):
     assert "1-9.1" not in store["hub_names"]
 
 
+def test_socket_set_stores_int_rejects_nonnumber_and_clears(monkeypatch):
+    store = {"hubs": [{"location": "1-2", "sockets": {}}]}
+    monkeypatch.setattr(rpcops, "load_config", lambda: store)
+    monkeypatch.setattr(rpcops, "save_config", lambda cfg: store.update(cfg))
+    d = rpcops.DISPATCH._data["socket.set"]({"loc": "1-2", "port": 3, "n": "7"})
+    assert d == {"ok": True, "socket": 7}
+    assert store["hubs"][0]["sockets"]["3"] == 7           # stored as int → sorts
+    # non-numeric is rejected, leaves the value untouched
+    assert rpcops.DISPATCH._data["socket.set"](
+        {"loc": "1-2", "port": 3, "n": "x"})["ok"] is False
+    assert store["hubs"][0]["sockets"]["3"] == 7
+    # blank clears
+    d = rpcops.DISPATCH._data["socket.set"]({"loc": "1-2", "port": 3, "n": ""})
+    assert d == {"ok": True, "socket": None}
+    assert "3" not in store["hubs"][0]["sockets"]
+    # unknown hub errors, not crashes
+    assert rpcops.DISPATCH._data["socket.set"](
+        {"loc": "9-9", "port": 1, "n": "1"})["ok"] is False
+
+
 def test_registered_ops_are_the_documented_contract():
     """The allow-list IS the security boundary: adding an op must be a
     conscious, reviewed act. If this fails because you added one, update it
@@ -68,7 +88,7 @@ def test_registered_ops_are_the_documented_contract():
         "watch.image", "ssh.switch_adb", "watch.switch_ssh",
         "port.set", "port.cycle", "port.poweroff", "port.reboot",
         "port.bootloader", "port.recovery", "port.continue",
-        "port.hide", "hub.hide", "hub.rename",
+        "port.hide", "hub.hide", "hub.rename", "socket.set",
         "charge.start", "charge.stop", "prefs.set_usb_mode",
         "workbench.start", "workbench.stop", "wear.set",
         "drain.start", "drain.stop", "drain.history",

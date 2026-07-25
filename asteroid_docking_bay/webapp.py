@@ -171,6 +171,14 @@ def serve(args, cfg: dict):
         _bust_status_cache()
         return json.dumps(d)
 
+    # Set a port's physical socket number (blank clears); value rides the query.
+    @app.post("/api/socket/<loc>/<port:int>")
+    def api_set_socket(loc, port):
+        resp.content_type = "application/json"
+        d = _call("socket.set", {"loc": loc, "port": port, "n": request.query.get("n", "")})
+        _bust_status_cache()
+        return json.dumps(d)
+
     @app.post("/api/watch/<serial>/toggle/<tech>/<state>")
     def api_watch_toggle(serial, tech, state):
         resp.content_type = "application/json"
