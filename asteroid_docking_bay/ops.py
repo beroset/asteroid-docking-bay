@@ -206,22 +206,14 @@ def _background_warmer() -> None:
             if not bus_busy:
                 maybe_heal_wedged_adb()
             cfg = load_config()
-            for hub in cfg.get("hubs", []):
-                loc = hub["location"]
-                for iface in usb._SYSFS_USB.glob(f"{loc}:*"):
-                    for pd in sorted(iface.glob(f"{loc}-port*")):
-                        try:
-                            n = int(pd.name.rsplit("port", 1)[1])
-                        except ValueError:
-                            continue
-                        if (usb._SYSFS_USB / f"{loc}.{n}").exists():
-                            continue            # occupied → known powered
-                        if usb.power_cache.get((loc, n)) is not None:
-                            continue            # still fresh, skip the slow read
-                        v = usb._sysfs_get_power(loc, n)
-                        if v is not None:
-                            usb.power_cache.put((loc, n), v)
-                        time.sleep(0.25)        # gentle on the bus
+            # NOTE: the warmer no longer polls EMPTY ports. Reading an empty
+            # port's `disable` attr is slow (hangs for seconds on a powered-down
+            # port) AND renegotiates these flaky A16/USB3 hubs — which knocks the
+            # other watches off the bus. Onboarding is now driven from the DEVICE
+            # side (a watch appearing on ADB/SSH → resolve its port), not by
+            # probing sockets, so an empty port is simply never touched. Occupied
+            # ports are still read via the status path (a present child device
+            # already proves the port is powered — no `disable` read needed).
             # Orbit reachability: probe each orbiting watch over WiFi (a bounded
             # TCP connect) and cache the verdict, so the status path shows a live
             # WiFi badge without blocking. A reachable member also gets a fresh
