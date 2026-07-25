@@ -1467,7 +1467,10 @@ def _sweep_one_port(loc: str, port: int, prefer_adb: bool, emit) -> "str | None"
     Returns the codename onboarded, or None (no watch / too drained to boot)."""
     slot = f"{loc}:{port}"
     sysfs_path = f"{loc}.{port}"
-    wait_secs = charge_config(load_config()).onboard_wait_seconds or 90
+    # A freshly-equipped watch on a port that `prepare` powered off has to
+    # COLD-boot (~50s) before it exposes ADB, so give it a real window — at least
+    # 60s, more if the per-port onboard wait is configured higher.
+    wait_secs = max(charge_config(load_config()).onboard_wait_seconds or 0, 60)
     emit(f"[{slot}] powering on…")
     try:
         uhubctl_set_power(loc, port, True)
