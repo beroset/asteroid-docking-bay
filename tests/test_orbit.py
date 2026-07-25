@@ -231,7 +231,7 @@ def test_orbit_hub_view_skips_docked_serial(monkeypatch):
     monkeypatch.setattr(ws.orbit, "is_reachable_cached", lambda s: True)
     monkeypatch.setattr(ws.last_seen, "get", lambda s: {})
     cfg = {"orbit": {"S1": {"serial": "S1", "ip": "x"}}}
-    assert ws._orbit_hub_view(cfg, {"S1"}) is None              # docked → dock wins
+    assert ws._orbit_hub_view(cfg, {"S1"})["ports"] == []       # docked → dock wins
 
 
 def test_orbit_hub_view_unreachable_keeps_last_known(monkeypatch):
@@ -244,8 +244,15 @@ def test_orbit_hub_view_unreachable_keeps_last_known(monkeypatch):
     assert row["battery_cached"] == 42                          # but last-known shown
 
 
-def test_orbit_hub_view_none_when_empty():
-    assert ws._orbit_hub_view({}, set()) is None
+def test_orbit_hub_view_renders_empty():
+    """The Orbit hub is emitted even with NO members: its header carries the
+    launch-by-IP input, so hiding the empty section hid the only way to
+    (re)populate it — after the 0.9 rig-test data reset the whole feature
+    looked deleted (found 2026-07-26). Planted-bug: restore the old
+    `return None` on empty rows and this fails."""
+    view = ws._orbit_hub_view({}, set())
+    assert view["virtual"] is True and view["location"] == "orbit"
+    assert view["ports"] == []
 
 
 # ── ops ──────────────────────────────────────────────────────────────────────

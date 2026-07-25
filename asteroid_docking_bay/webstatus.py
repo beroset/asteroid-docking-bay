@@ -743,8 +743,7 @@ def _web_status_data(cfg: dict) -> list[dict]:
     result.sort(key=_hub_key)
     _ph["render"] = time.perf_counter() - _t_render
     orbit_view = _timed("orbit", lambda: _orbit_hub_view(cfg, connected_serials))
-    if orbit_view:
-        result.append(orbit_view)          # always last, below the physical hubs
+    result.append(orbit_view)              # always last, below the physical hubs
     _persist_exact_codenames(_detected_exact)
     elapsed = time.perf_counter() - _t0
     if elapsed > 1.0:     # quiet when fast; flag only the occasional slow refresh,
@@ -764,12 +763,17 @@ def _port_handed_off(serial, adb_state, orbit_map, reachable) -> bool:
                 and serial in orbit_map and reachable(serial))
 
 
-def _orbit_hub_view(cfg: dict, connected_serials: set) -> "dict | None":
+def _orbit_hub_view(cfg: dict, connected_serials: set) -> dict:
     """The Orbit port as a virtual hub-view: one row per orbiting watch that is
     not physically on a rig port right now (a docked watch stays on its USB row;
     an undocked one that is still reachable hands off to here). Reachability comes
     from the warmer-fed cache and battery/geometry from last_seen, so this stays
-    pure cache reads — no probe, no block. None when nothing is in orbit."""
+    pure cache reads — no probe, no block.
+
+    Emitted even with NO members: the section header carries the launch-by-IP
+    input, so hiding the empty section hid the only way to (re)populate it —
+    after the 0.9 rig-test data reset the whole feature looked deleted
+    (2026-07-26). The frontend has always had the empty-state row for this."""
     members = orbit_members(cfg)
     rows: list[dict] = []
     for serial, member in members.items():
@@ -796,8 +800,6 @@ def _orbit_hub_view(cfg: dict, connected_serials: set) -> "dict | None":
             "geometry": cached.get("geometry"),
             "added": member.get("added"),
         })
-    if not rows:
-        return None
     rows.sort(key=lambda r: (r["codename"] or "").lower())
     return {"location": "orbit", "description": "Orbit — over the air",
             "ports": rows, "virtual": True, "hidden": False}
