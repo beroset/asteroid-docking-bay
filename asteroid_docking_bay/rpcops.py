@@ -1552,20 +1552,29 @@ def _sweep_one_port(loc: str, port: int, prefer_adb: bool, emit) -> "str | None"
 
     # Clean shutdown so it doesn't sit draining on battery after we cut VBUS.
     emit(f"[{slot}] clean poweroff…")
+    powered_off = False
     if transport == "adb":
         _run(f"adb -s {serial} shell poweroff", check=False, timeout=15)
         for _ in range(12):
             time.sleep(3)
             if _adb_state(adb_devices(), serial) != "device":
+                powered_off = True
                 break
     else:
         try:
             SshTransport(ssh_ip or USB_SSH_IP).shell("poweroff", timeout=10)
             time.sleep(6)
+            powered_off = True
         except Exception:
             pass
     _sysfs_set_power(loc, port, False)
-    emit(f"[{slot}] shelved (off) — {codename} done.")
+    # Stamp a CONFIRMED graceful shutdown so the row reads "shelved" (deliberate,
+    # not draining) rather than an ambiguous "---". Only on a real poweroff — a
+    # bare VBUS cut must never claim to be a safe shelve.
+    if powered_off:
+        last_seen.mark(serial, safe_off_ts=time.time())
+    emit(f"[{slot}] {'shelved' if powered_off else 'powered off (poweroff unconfirmed)'}"
+         f" — {codename} done.")
     return codename
 
 
