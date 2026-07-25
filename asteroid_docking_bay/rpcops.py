@@ -1420,12 +1420,22 @@ def _sweep_leaf_ports(cfg: dict) -> "list[tuple[str, int]]":
     return out
 
 
+# Set by onboard.sweep_skip while a sweep runs; the active boot-wait aborts on
+# its next tick and the port is treated as a no-show (cut + logged). An Event,
+# not a flag: the wait loop and the skip op run on different threads.
+_sweep_skip = threading.Event()
+
 
 def _sweep_wait_adb(sysfs_path: str, secs: int, emit) -> "str | None":
-    """Wait up to `secs` for a watch to boot and expose ADB at this sysfs port."""
+    """Wait up to `secs` for a watch to boot and expose ADB at this sysfs port.
+    Returns early (None) when the user skips the port via onboard.sweep_skip."""
     st = time.monotonic()
     nxt = 20
     while time.monotonic() - st < secs:
+        if _sweep_skip.is_set():
+            _sweep_skip.clear()
+            emit("  port skipped by user")
+            return None
         devices = adb_devices()
         s = _sysfs_path_to_serial_map(set(devices.keys())).get(sysfs_path)
         if s and _adb_state(devices, s) == "device":
@@ -1623,12 +1633,24 @@ def _onboard_sweep_prepare(args):
     return {"ok": True, "ports": n}
 
 
+@DISPATCH.op("onboard.sweep_skip")
+def _onboard_sweep_skip(args):
+    """Skip the running sweep's current port: its boot-wait aborts on the next
+    tick and the port is cut + logged as a no-show. No-op error when no sweep
+    is running, so a stale button can't arm a skip for a future sweep."""
+    if _remap_tasks.get("__sweep__", {}).get("done") is not False:
+        return {"ok": False, "error": "no sweep is running"}
+    _sweep_skip.set()
+    return {"ok": True}
+
+
 @DISPATCH.stream_op("onboard.sweep_run")
 def _onboard_sweep_run(args):
     """Run the onboard sweep: one port at a time, watches already equipped."""
     if _remap_tasks.get("__sweep__", {}).get("done") is False:
         yield "a sweep is already running"
         return
+    _sweep_skip.clear()                 # a stale pre-sweep skip must not fire
     cfg = load_config()
     prefer_adb = usb_mode_preference(cfg) != "ssh"
     ports = _sweep_leaf_ports(cfg)

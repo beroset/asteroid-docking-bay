@@ -389,6 +389,11 @@ def serve(args, cfg: dict):
 
     # Onboard sweep: POST prepare (power every socket down), then GET run (SSE
     # streams onboarding each equipped socket one at a time).
+    @app.post("/api/onboard-sweep/skip")
+    def api_sweep_skip():
+        resp.content_type = "application/json"
+        return json.dumps(_call("onboard.sweep_skip"))
+
     @app.post("/api/onboard-sweep/prepare")
     def api_sweep_prepare():
         resp.content_type = "application/json"

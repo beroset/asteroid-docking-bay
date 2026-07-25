@@ -110,6 +110,7 @@ def test_registered_ops_are_the_documented_contract():
         "workbench.start", "workbench.stop", "wear.set",
         "drain.start", "drain.stop", "drain.history",
         "flash.start", "onboard.start", "onboard.sweep_prepare", "onboard.sweep_run",
+        "onboard.sweep_skip",
     }
 
 
@@ -926,6 +927,32 @@ def test_sweep_shelve_claims_nothing_on_failed_halt(monkeypatch):
     events, marks = _run_sweep_one_port(monkeypatch, halt_rc=1)
     assert "cut" in events
     assert "safe_off_ts" not in marks.get("S1", {})
+
+
+def test_sweep_skip_aborts_the_boot_wait(monkeypatch):
+    """onboard.sweep_skip makes the active boot-wait return early (the port is
+    then handled as a no-show) and clears the event so the next port's wait
+    runs normally. Planted-bug: drop the event check in _sweep_wait_adb and
+    this fails on the timing assertion."""
+    import time
+    rpcops._sweep_skip.set()
+    monkeypatch.setattr(rpcops, "adb_devices", lambda: {})
+    monkeypatch.setattr(rpcops, "_sysfs_path_to_serial_map", lambda s: {})
+    t0 = time.monotonic()
+    assert rpcops._sweep_wait_adb("1-3.2", 30, lambda m: None) is None
+    assert time.monotonic() - t0 < 5           # aborted, not timed out
+    assert not rpcops._sweep_skip.is_set()     # cleared for the next port
+
+
+def test_sweep_skip_requires_a_running_sweep(monkeypatch):
+    """A stale skip click with no sweep running must not arm a skip that
+    would silently eat the first port of a FUTURE sweep."""
+    monkeypatch.setattr(rpcops, "_remap_tasks", {})
+    assert rpcops.DISPATCH._data["onboard.sweep_skip"]({})["ok"] is False
+    assert not rpcops._sweep_skip.is_set()
+    monkeypatch.setattr(rpcops, "_remap_tasks", {"__sweep__": {"done": False}})
+    assert rpcops.DISPATCH._data["onboard.sweep_skip"]({})["ok"] is True
+    rpcops._sweep_skip.clear()
 
 
 def test_sweep_leaf_ports_skips_hidden_hubs_and_excluded_ports(monkeypatch):
