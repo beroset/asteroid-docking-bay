@@ -142,3 +142,32 @@ hand, need good sockets). Fleet otherwise shelved and dark. KW88/harmony
 sits offline-on-adb at `1-6.2`. The flashed catfish (`720EX8C130737`,
 build refreshed on the chassis port after its flaky-build diagnosis) —
 seated back on faulty s1, needs a good socket too.
+
+## Post-audit correction (2026-07-26, ~02:00) — the deploy gap
+
+Found after the audit was committed: the deploy procedure was violated all
+evening. The w541 service loads the package from
+`~/.local/share/asteroid-docking-bay/lib` (copied by `install.sh`); every
+"deploy" tonight rsynced the repo and restarted the service but never ran
+`install.sh` — so **the service executed 13:55-vintage code all evening**
+(the rework as the previous session left it, none of tonight's commits).
+Consequences for the claims above:
+
+- **E6 is solved, cause: me.** The in-service warmer never fired the SSH
+  peel because the service never had the peel. The manual run worked
+  because it imported from the repo. Not a code mystery — a deploy gap.
+- **Sweep #2's holding shelves are NOT evidence for the poweroff-race fix**
+  — that sweep ran the OLD wait-then-cut code, and its 17 shelves held
+  anyway. The fix (3661e0d) remains code-reviewed and planted-bug-tested
+  but rig-unproven; the old code's race is evidently narrower than the
+  worst case, or these 17 models halt cleanly regardless. Downgraded from
+  "confirmed on rig" to "tested, awaiting rig evidence".
+- The evening's live observations (2.02s renders, dock swept, no skip
+  button, unauthorized shown as needs-charge) were all OLD code behaving
+  as old code — consistent, in hindsight, to the decimal.
+
+`install.sh` + restart executed at 01:5x; the orbit section, sweep skip,
+exclusions, unauthorized outcome and the SSH/.15 machinery are live in the
+service from this point on. Lesson recorded in session memory as binding:
+**deploy = rsync + install.sh + restart** — the rule was written in
+CLAUDE.md all along.
