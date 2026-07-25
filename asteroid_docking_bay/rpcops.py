@@ -28,7 +28,7 @@ import threading
 import time
 
 from .util import _run, log
-from .adb import _adb_state, adb_devices, get_battery_level, get_watch_codename
+from .adb import _adb_state, adb_devices, get_watch_codename
 from .config import (_config_lock, _store_smart_verdict, allocate_ssh_ip,
                      charge_config, ssh_ip_for_serial, usb_mode_preference,
                      find_codename_for_loc_port, find_serial_for_loc_port,
@@ -1429,11 +1429,10 @@ def _sweep_wait_adb(sysfs_path: str, secs: int, emit) -> "str | None":
     return None
 
 
-def _sweep_map_and_register(loc, port, serial, codename, battery,
-                            resolution, ssh_ip, source, emit):
-    """Map the watch to its port (clearing any stale seat) AND write it to the
-    fleet registry with its first data — closing the mapped-but-not-registered
-    gap that left the fleet log empty."""
+def _sweep_map_to_port(loc, port, serial, codename, ssh_ip, emit):
+    """Map the watch to its port, clearing any stale seat the same serial held
+    elsewhere. The fleet-registry write is done by the caller from the full CC
+    read (kernel/Qt/MACs/battery), not here."""
     with _config_lock:
         cfg = load_config()
         cfg.setdefault("serials", {})[serial] = codename
@@ -1456,10 +1455,7 @@ def _sweep_map_and_register(loc, port, serial, codename, battery,
         if ssh_ip:
             cfg.setdefault("ssh_ips", {})[serial] = ssh_ip
         save_config(cfg)
-    # The fleet log: first data captured at onboard, change-logged thereafter.
-    registry.note(serial, source=source, codename=codename,
-                  battery=battery, resolution=resolution, ip=ssh_ip)
-    emit(f"  registered {codename} in the fleet log")
+    emit(f"  mapped {codename} -> {loc}:p{port}")
 
 
 def _sweep_one_port(loc: str, port: int, prefer_adb: bool, emit) -> "str | None":
@@ -1468,9 +1464,9 @@ def _sweep_one_port(loc: str, port: int, prefer_adb: bool, emit) -> "str | None"
     slot = f"{loc}:{port}"
     sysfs_path = f"{loc}.{port}"
     # A freshly-equipped watch on a port that `prepare` powered off has to
-    # COLD-boot (~50s) before it exposes ADB, so give it a real window — at least
-    # 60s, more if the per-port onboard wait is configured higher.
-    wait_secs = max(charge_config(load_config()).onboard_wait_seconds or 0, 60)
+    # COLD-boot before it exposes ADB. Cold-boot time varies (40-70s), so give it
+    # a real window — at least 90s, more if the per-port onboard wait is higher.
+    wait_secs = max(charge_config(load_config()).onboard_wait_seconds or 0, 90)
     emit(f"[{slot}] powering on…")
     try:
         uhubctl_set_power(loc, port, True)
@@ -1511,35 +1507,45 @@ def _sweep_one_port(loc: str, port: int, prefer_adb: bool, emit) -> "str | None"
         _sysfs_set_power(loc, port, False)
         return None
 
-    # Identify + first data.
-    if transport == "adb":
-        with _config_lock:
-            codename = load_config().get("serials", {}).get(serial)
-        codename = codename or get_watch_codename(serial) or serial
-        battery = get_battery_level(serial)
-        resolution = None
-    else:
-        info = orbit.probe(ssh_ip or USB_SSH_IP) or {}
-        codename = info.get("codename") or serial
-        resolution = info.get("resolution")
-        try:
-            from .adb import battery_and_screen
-            battery, _, _ = battery_and_screen(
-                serial, shell=SshTransport(ssh_ip or USB_SSH_IP).shell)
-        except Exception:
-            battery = None
+    # Pull the FULL Control Center data while the watch is LIVE — battery, kernel,
+    # Qt / release / SoC, MACs, resolution, settings — and cache it, so a shelved
+    # watch is NOT a dead click: everything the CC window and the fleet log show
+    # is gathered now, once, and kept. Done before the poweroff so `safe_off_ts`
+    # stays newer than this reading and the row still reads "shelved".
+    w = (Watch(serial, transport=SshTransport(ssh_ip or USB_SSH_IP))
+         if transport == "ssh" else Watch(serial))
+    emit(f"[{slot}] reading full data over {transport.upper()}…")
+    try:
+        data = w.cc_data() or {}
+    except Exception as e:
+        emit(f"[{slot}] data read warning: {e}")
+        data = {}
+    try:
+        geo = w.geometry() or {}
+    except Exception:
+        geo = {}
+    codename = (geo.get("machine")
+                or load_config().get("serials", {}).get(serial)
+                or (get_watch_codename(serial) if transport == "adb" else None)
+                or serial)
+    battery = data.get("bat_cap")
     emit(f"[{slot}] {transport.upper()}: {codename} ({serial})"
-         + (f" @ {ssh_ip}" if ssh_ip else ""))
+         + (f" @ {ssh_ip}" if ssh_ip else "")
+         + (f" — {battery}%" if battery is not None else ""))
 
-    # Record the live battery to last_seen (drives the grey OFFLINE battery pill
-    # once the watch is shelved). Done now, while it is still live and BEFORE the
-    # poweroff stamps safe_off_ts — so safe_off_ts stays newer and the row still
-    # reads "shelved".
-    if battery is not None:
+    if data:
+        last_seen.record(serial, cc=data, cc_ts=time.time(), battery=battery)
+    elif battery is not None:
         last_seen.record(serial, battery=battery)
+    # Full fleet-registry entry from the same read (identity/versions change-logged).
+    registry.note(serial, source="onboard-sweep", codename=codename,
+                  resolution=geo.get("resolution"), kernel=data.get("kernel"),
+                  qt=data.get("qt"), release=data.get("release"),
+                  soc=data.get("soc"), wlanmac=data.get("wlanmac"),
+                  btmac=data.get("btmac_self"), battery=battery, ip=data.get("ip"))
+    emit(f"  registered {codename} in the fleet log (full data cached)")
 
-    _sweep_map_and_register(loc, port, serial, codename, battery,
-                            resolution, ssh_ip, "onboard-sweep", emit)
+    _sweep_map_to_port(loc, port, serial, codename, ssh_ip, emit)
 
     # PPPS test — the watch is up, so this verifies a real VBUS cut for free.
     if transport == "adb":
