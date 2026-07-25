@@ -1531,6 +1531,13 @@ def _sweep_one_port(loc: str, port: int, prefer_adb: bool, emit) -> "str | None"
     emit(f"[{slot}] {transport.upper()}: {codename} ({serial})"
          + (f" @ {ssh_ip}" if ssh_ip else ""))
 
+    # Record the live battery to last_seen (drives the grey OFFLINE battery pill
+    # once the watch is shelved). Done now, while it is still live and BEFORE the
+    # poweroff stamps safe_off_ts — so safe_off_ts stays newer and the row still
+    # reads "shelved".
+    if battery is not None:
+        last_seen.record(serial, battery=battery)
+
     _sweep_map_and_register(loc, port, serial, codename, battery,
                             resolution, ssh_ip, "onboard-sweep", emit)
 
