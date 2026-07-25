@@ -1,0 +1,48 @@
+{
+  "audit": "usb-brittleness-xhci-slots",
+  "date": "2026-07-25",
+  "branch": "onboard-discovery-rework",
+  "method": "read-only live inspection of the w541 rig over SSH: sysfs topology walk, timed disable-register sweep, journalctl (kernel + service), manual adb server restart test, lsusb -v control-transfer probe, slot arithmetic",
+  "root_cause": {
+    "id": "F1",
+    "title": "xHCI device-slot exhaustion on Intel 8-Series controller (32 slots)",
+    "confidence": "confirmed",
+    "evidence": [
+      "kernel: 'usb 1-2.2: Not enough host controller resources for new device state' + 'can't set config #1, error -12', retrying every ~67s for hours",
+      "exactly 32 devices on buses 1+3 at audit time (21 + 11)",
+      "each A16 = 5 cascaded Realtek 4-port chips, each enumerating on USB2 AND as USB3 companion: 20 hub slots for two A16s",
+      "stuck watches answer lsusb -v control transfers (live) but have no interface directories (unconfigured)"
+    ]
+  },
+  "findings": [
+    {"id": "F2", "title": "UI power dots read a cold cache no one fills since 5082d12 removed empty-port polling; registers meanwhile match mo's LED counts", "confidence": "confirmed", "fix": "B"},
+    {"id": "F3", "title": "'disable reads hang seconds / renegotiate the hub' does not reproduce: 40 registers in 0.8s total (3-90ms each) on a quiet bus; prior hangs were contention with the F1 retry storm and uhubctl scans", "confidence": "confirmed_on_quiet_bus", "fix": "B"},
+    {"id": "F4", "title": "sweep re-implemented poweroff with a 3-36s adb-drop wait before the VBUS cut (port.poweroff documents cut-immediately) and stamps safe_off on adb-drop, which also fires on reboot -> false 'shelved', fleet drained", "confidence": "confirmed_code_inspection", "fix": "D"},
+    {"id": "F5", "title": "reconnect/onboard latencies are wait-loop artefacts: 15s poll granularity (adb_wait_seconds) and >=90s blind waits on an adb server that can never list a slot-starved watch", "confidence": "confirmed", "fix": "C"},
+    {"id": "F6", "title": "adb-wedge self-heal keys on adb interface descriptors, which slot-starved watches lack -> blind to the active failure; server restart correctly changes nothing (tested)", "confidence": "confirmed", "fix": "E"},
+    {"id": "F7", "title": "the 8th-watch 'brownout' is slot exhaustion at the USB layer; hubs are self-powered (bmAttributes=e0, kernel power budget not involved); electrical residue is mo's domain", "confidence": "confirmed_usb_layer", "fix": "A"},
+    {"id": "F8", "title": "shelved-port disable registers agree with dark LEDs: yesterday's VBUS cuts did cut; the shelve failure was watches rebooting before the cut (F4), not the cut", "confidence": "confirmed_register_side_led_crosscheck_pending", "fix": null},
+    {"id": "F9", "title": "stuck inventory: KW88 (1-2.2), narwhal (1-1.3.4.3), sawfish (1-1.3.3.3) slot-starved live; ZenWatch GCNZ (1-1.4.2) starved in 0afe mode; two ZenWatches configured in 0afe but invisible to fastboot", "confidence": "confirmed", "fix": "cleanup_after_A"}
+  ],
+  "disproven": [
+    "stale-corpse-node theory for the current stuck watches (they answer control transfers)",
+    "A16 cannot switch VBUS on direct-host wiring (registers track LEDs)",
+    "disable reads inherently slow/destructive (F3)",
+    "electrical brownout as the primary 8th-watch mechanism (F7)",
+    "adb server wedge as the current reconnect blocker (F6)",
+    "bus-powered hub kernel power-budget refusal (bmAttributes=e0 self-powered)"
+  ],
+  "fix_directions": {
+    "A": "free controller slots: unbind idle SS companion trees (+10), and/or move A16 uplinks to USB2-only host ports, and/or route hub ports to EHCI via XUSB2PR (removes ceiling entirely); operational shelving discipline + gauge as interim",
+    "B": "single serialized background register sweep (~1s/40 ports) feeding power_cache; UI dot = register; xHCI slot gauge with warning in header",
+    "C": "udev netlink event-driven discovery replacing 15s/90s polling; 'enumerated but unconfigured' becomes a detected, surfaced state",
+    "D": "one poweroff implementation (port.poweroff path): synchronous delivery then immediate VBUS cut; uptime-based verification; per-watch halt behaviour recorded in registry",
+    "E": "self-heal splits into: interfaces-present-but-server-blind -> restart server; enumerated-without-interfaces -> report slot exhaustion"
+  },
+  "open_questions_for_mo": [
+    "target concurrency: N-live-rest-shelved, or all 32 sockets enumerated at once? (decides A1/A2 vs A3)",
+    "go-ahead for the reversible unbind falsification test on 3-2, then a one-port VBUS/LED check with the SS side unbound",
+    "are A16 #2's physical per-port buttons all ON? (audit assumed so)",
+    "re-evaluate the measured voltage droop knowing config-refusals were concurrent"
+  ]
+}
