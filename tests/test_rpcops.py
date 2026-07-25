@@ -880,7 +880,8 @@ def _run_sweep_one_port(monkeypatch, halt_rc):
     monkeypatch.setattr(
         rpcops, "uhubctl_set_power",
         lambda l, p, on: events.append("cut" if not on else "power-on"))
-    monkeypatch.setattr(rpcops, "_sweep_wait_adb", lambda path, secs, emit: "S1")
+    monkeypatch.setattr(rpcops, "_sweep_wait_adb",
+                        lambda path, secs, emit: ("S1", None))
     monkeypatch.setattr(rpcops, "adb_devices",
                         lambda: (events.append("poll"), {})[1])
     monkeypatch.setattr(rpcops, "get_watch_codename", lambda s: "skipjack")
@@ -905,7 +906,8 @@ def _run_sweep_one_port(monkeypatch, halt_rc):
         def geometry(self): return {"machine": "skipjack"}
     monkeypatch.setattr(rpcops, "Watch", _FakeWatch)
 
-    assert rpcops._sweep_one_port("1-3.3.3", 2, True, lambda m: None) == "skipjack"
+    assert rpcops._sweep_one_port("1-3.3.3", 2, True,
+                                  lambda m: None) == ("skipjack", None)
     return events, marks
 
 
@@ -939,7 +941,7 @@ def test_sweep_skip_aborts_the_boot_wait(monkeypatch):
     monkeypatch.setattr(rpcops, "adb_devices", lambda: {})
     monkeypatch.setattr(rpcops, "_sysfs_path_to_serial_map", lambda s: {})
     t0 = time.monotonic()
-    assert rpcops._sweep_wait_adb("1-3.2", 30, lambda m: None) is None
+    assert rpcops._sweep_wait_adb("1-3.2", 30, lambda m: None) == (None, None)
     assert time.monotonic() - t0 < 5           # aborted, not timed out
     assert not rpcops._sweep_skip.is_set()     # cleared for the next port
 
@@ -974,3 +976,28 @@ def test_sweep_leaf_ports_skips_hidden_hubs_and_excluded_ports(monkeypatch):
         {"location": "1-9", "hidden": True},
     ]}
     assert rpcops._sweep_leaf_ports(cfg) == [("1-3", 1)]
+
+
+def test_sweep_unauthorized_watch_stays_powered_and_is_noted(monkeypatch):
+    """A watch that is alive but ADB-unauthorized (the WearOS RSA prompt) is
+    NOT a no-show: its port stays POWERED (a cut would strand it running on
+    battery), the sighting lands in the fleet registry by USB serial, and the
+    sweep reports 'unauthorized'. Planted-bug: routing it through the no-show
+    branch (cut + needs-charge) fails the no-cut assertion."""
+    import types
+    events, noted = [], {}
+    monkeypatch.setattr(rpcops, "charge_config",
+                        lambda c: types.SimpleNamespace(onboard_wait_seconds=0))
+    monkeypatch.setattr(rpcops, "load_config", lambda: {"serials": {}})
+    monkeypatch.setattr(rpcops, "uhubctl_set_power",
+                        lambda l, p, on: events.append("cut" if not on else "power-on"))
+    monkeypatch.setattr(rpcops, "_sweep_wait_adb",
+                        lambda path, secs, emit: (None, "unauthorized"))
+    monkeypatch.setattr(rpcops, "_detect_rndis", lambda *a: False)
+    monkeypatch.setattr(rpcops, "_sysfs_serial_at", lambda l, p: "WEAR123")
+    monkeypatch.setattr(rpcops, "registry", types.SimpleNamespace(
+        note=lambda serial, **kw: noted.update({serial: kw})))
+    assert rpcops._sweep_one_port("1-6", 1, True,
+                                  lambda m: None) == (None, "unauthorized")
+    assert "cut" not in events                 # left powered
+    assert "WEAR123" in noted                  # sighted in the fleet registry

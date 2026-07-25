@@ -35,7 +35,7 @@ from .config import (_config_lock, _store_smart_verdict, allocate_ssh_ip,
                      flash_config, load_config, save_config,
                      orbit_add, orbit_forget, orbit_members,
                      hands_cal_for, set_hands_cal, set_hub_name)
-from .usb import (_sysfs_path_to_serial_map,
+from .usb import (_sysfs_path_to_serial_map, _sysfs_serial_at,
                   test_port_power_switching, uhubctl_cycle, uhubctl_set_power)
 from .watchctl import DIAG_ROOT, Watch
 from .ops import ChargeOp, DrainOp, WorkbenchOp, _flash_one_watch
@@ -1426,26 +1426,37 @@ def _sweep_leaf_ports(cfg: dict) -> "list[tuple[str, int]]":
 _sweep_skip = threading.Event()
 
 
-def _sweep_wait_adb(sysfs_path: str, secs: int, emit) -> "str | None":
-    """Wait up to `secs` for a watch to boot and expose ADB at this sysfs port.
-    Returns early (None) when the user skips the port via onboard.sweep_skip."""
+def _sweep_wait_adb(sysfs_path: str, secs: int, emit) -> "tuple[str | None, str | None]":
+    """Wait up to `secs` for a watch to boot and come fully online on ADB at
+    this sysfs port. Returns (serial, None) once online, or (None, blocker) on
+    timeout — blocker is the last not-online adb state seen here (WearOS
+    'unauthorized': present, awaiting the on-watch RSA confirmation — the hint
+    gives the user the rest of the window to tap it) or None for a plain
+    no-show. Returns early on onboard.sweep_skip."""
     st = time.monotonic()
     nxt = 20
+    blocker = None
     while time.monotonic() - st < secs:
         if _sweep_skip.is_set():
             _sweep_skip.clear()
             emit("  port skipped by user")
-            return None
+            return None, blocker
         devices = adb_devices()
         s = _sysfs_path_to_serial_map(set(devices.keys())).get(sysfs_path)
-        if s and _adb_state(devices, s) == "device":
-            return s
+        state = _adb_state(devices, s) if s else None
+        if state == "device":
+            return s, None
+        if state and state != blocker:
+            blocker = state
+            if state == "unauthorized":
+                emit("  watch present but ADB unauthorized — confirm the RSA "
+                     "dialog on the watch now ('always allow' makes it stick)")
         el = time.monotonic() - st
         if el >= nxt:
             emit(f"  …waiting for boot ({int(el)}/{secs}s)")
             nxt += 20
         time.sleep(1.5)
-    return None
+    return None, blocker
 
 
 def _sweep_map_to_port(loc, port, serial, codename, ssh_ip, emit):
@@ -1477,9 +1488,12 @@ def _sweep_map_to_port(loc, port, serial, codename, ssh_ip, emit):
     emit(f"  mapped {codename} -> {loc}:p{port}")
 
 
-def _sweep_one_port(loc: str, port: int, prefer_adb: bool, emit) -> "str | None":
+def _sweep_one_port(loc: str, port: int, prefer_adb: bool, emit) -> "tuple[str | None, str | None]":
     """Onboard whatever is on one port, end-to-end, then leave it cleanly OFF.
-    Returns the codename onboarded, or None (no watch / too drained to boot)."""
+    Returns (codename, None) on success, else (None, reason): "no_show" (empty
+    or too drained to boot — port cut) or "unauthorized" (watch alive, awaiting
+    the on-watch ADB confirmation — port left POWERED so the user can confirm
+    and onboard it individually; cutting would strand it running on battery)."""
     slot = f"{loc}:{port}"
     sysfs_path = f"{loc}.{port}"
     # A freshly-equipped watch on a port that `prepare` powered off has to
@@ -1492,7 +1506,7 @@ def _sweep_one_port(loc: str, port: int, prefer_adb: bool, emit) -> "str | None"
     except RuntimeError as e:
         emit(f"[{slot}] power warning: {e}")
 
-    serial = _sweep_wait_adb(sysfs_path, wait_secs, emit)
+    serial, blocked = _sweep_wait_adb(sysfs_path, wait_secs, emit)
     transport, ssh_ip = "adb", None
 
     # No ADB → maybe it came up in developer/SSH mode as RNDIS on the shared .15.
@@ -1511,7 +1525,7 @@ def _sweep_one_port(loc: str, port: int, prefer_adb: bool, emit) -> "str | None"
                     _switch_ssh_to_adb(USB_SSH_IP)
                 except Exception as e:
                     emit(f"[{slot}] switch warning: {e}")
-                s2 = _sweep_wait_adb(sysfs_path, wait_secs, emit)
+                s2, _ = _sweep_wait_adb(sysfs_path, wait_secs, emit)
                 if s2:
                     serial, transport, ssh_ip = s2, "adb", None
                 else:
@@ -1520,6 +1534,15 @@ def _sweep_one_port(loc: str, port: int, prefer_adb: bool, emit) -> "str | None"
                 serial, transport = s, "ssh"
                 emit(f"[{slot}] keeping SSH, assigned IP {ssh_ip}")
 
+    if not serial and blocked == "unauthorized":
+        usb_serial = _sysfs_serial_at(loc, port)
+        emit(f"[{slot}] watch alive but ADB UNAUTHORIZED"
+             + (f" ({usb_serial})" if usb_serial else "")
+             + " — approve this computer on the watch ('always allow'), then "
+               "onboard this port individually. Leaving it powered.")
+        registry.note(usb_serial, source="onboard-sweep",
+                      note="adb unauthorized — awaiting on-watch confirmation")
+        return None, "unauthorized"
     if not serial:
         emit(f"[{slot}] no watch enumerated in {wait_secs}s — drained or empty. "
              f"Cutting power, logging as needs-charge.")
@@ -1527,7 +1550,7 @@ def _sweep_one_port(loc: str, port: int, prefer_adb: bool, emit) -> "str | None"
             uhubctl_set_power(loc, port, False)
         except RuntimeError as e:
             emit(f"[{slot}] power-cut warning: {e}")
-        return None
+        return None, "no_show"
 
     # Pull the FULL Control Center data while the watch is LIVE — battery, kernel,
     # Qt / release / SoC, MACs, resolution, settings — and cache it, so a shelved
@@ -1614,7 +1637,7 @@ def _sweep_one_port(loc: str, port: int, prefer_adb: bool, emit) -> "str | None"
         last_seen.mark(serial, safe_off_ts=time.time())
     emit(f"[{slot}] {'shelved' if graceful else 'powered off (halt delivery unconfirmed)'}"
          f" — {codename} done.")
-    return codename
+    return codename, None
 
 
 @DISPATCH.op("onboard.sweep_prepare")
@@ -1657,21 +1680,30 @@ def _onboard_sweep_run(args):
     yield (f"Onboard sweep starting: {len(ports)} sockets, one at a time "
            f"(prefer {'ADB' if prefer_adb else 'SSH'}).")
     q: "queue.Queue[str | None]" = queue.Queue()
-    result = {"on": [], "skip": []}
+    result = {"on": [], "skip": [], "unauthorized": []}
 
     def _run():
         for loc, port in ports:
             try:
-                cn = _sweep_one_port(loc, port, prefer_adb, q.put)
-                (result["on"] if cn else result["skip"]).append(
-                    f"{loc}:{port}" + (f" {cn}" if cn else ""))
+                cn, why = _sweep_one_port(loc, port, prefer_adb, q.put)
+                if cn:
+                    result["on"].append(f"{loc}:{port} {cn}")
+                elif why == "unauthorized":
+                    result["unauthorized"].append(f"{loc}:{port}")
+                else:
+                    result["skip"].append(f"{loc}:{port}")
             except Exception as e:
                 q.put(f"[{loc}:{port}] ERROR: {e}")
                 result["skip"].append(f"{loc}:{port}")
         q.put(f"═══ sweep done: {len(result['on'])} onboarded, "
-              f"{len(result['skip'])} need charge/empty ═══")
+              f"{len(result['skip'])} need charge/empty, "
+              f"{len(result['unauthorized'])} unauthorized ═══")
         if result["skip"]:
             q.put("needs charge / empty: " + ", ".join(result["skip"]))
+        if result["unauthorized"]:
+            q.put("ADB unauthorized (left powered — confirm on the watch, "
+                  "then onboard individually): "
+                  + ", ".join(result["unauthorized"]))
         _remap_tasks["__sweep__"] = {"done": True}
         q.put(None)
 
