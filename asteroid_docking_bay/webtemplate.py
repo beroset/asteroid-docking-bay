@@ -321,6 +321,9 @@ _WEB_TEMPLATE = """\
     .fillpill.ob{border-color:#1f6b39;color:#2c8a4c}
     .fillpill.ob:hover{background:#0d1f13}
     .fillpill.busy{border-color:#58a6ff;color:#58a6ff}
+    /* Once the initial fill has run out but we're still looking (slow boot /
+       pre-charge), the pill pulses instead of filling — same beat as booting. */
+    .fillpill.busy.pulsing{animation:bootpulse 1.2s ease-in-out infinite}
     /* Clickable badges are real <button>s so the cursor is a pointer, not a
        text caret; the non-clickable ones stay <span>s. */
     button.cbadge{cursor:pointer}
@@ -456,7 +459,7 @@ const chargeEnd={};
 // boot → identify window (approximate; the fill caps at full if it overruns and
 // clears the moment onboarding finishes).
 const onboardStart={};
-const ONBOARD_SECS=45;
+const ONBOARD_SECS=60;
 // Last rendered status payload, so a click can repaint the row's new state
 // (onboarding fill, pulsing) INSTANTLY from cache instead of waiting on a slow
 // /api/status round-trip.
@@ -906,9 +909,19 @@ function render(data){
         const pwrFn=`pwrGo(this,'${slot}')`;
         // Onboard is a fill pill: idle it's a green action button; while onboarding
         // it fills left→right over the expected duration (the timed fill primitive).
-        const onboardBtn=p.excluded?''
-          :(onb?fillPill('busy',{dur:onb.dur,el:(Date.now()-onb.t0)/1000},'onboarding&hellip;',{title:'onboarding — power on, boot, identify'})
-               :fillPill('ob',0,'Onboard',{click:`doRemap('${slot}')`,title:'power on, boot, then identify and map this watch'}));
+        // While onboarding the pill is CLICKABLE (click again to stop — it never
+        // gives up on its own). For the first ONBOARD_SECS it fills left→right;
+        // after that it keeps looking (slow boot / pre-charge) and pulses.
+        let onboardBtn;
+        if(p.excluded){onboardBtn='';}
+        else if(onb){
+          const el=(Date.now()-onb.t0)/1000;
+          onboardBtn=(el<onb.dur)
+            ?fillPill('busy',{dur:onb.dur,el:el},'onboarding&hellip;',{click:`doRemap('${slot}')`,title:'onboarding — click to stop'})
+            :fillPill('busy pulsing',100,'still looking&hellip;',{click:`doRemap('${slot}')`,title:'still looking (slow boot / pre-charge) — click to stop'});
+        }else{
+          onboardBtn=fillPill('ob',0,'Onboard',{click:`doRemap('${slot}')`,title:'power on, boot, then identify and map this watch'});
+        }
         rows.push(
           `<tr class="wr empty${p.excluded?' excl':''}" id="wr-${slot}">` +
           `<td class="pcell"><button class="${pwrCls}"${d} title="${p.power===true?'power the port off':'power the port on'}" onclick="${pwrFn}">${pwrLbl}</button>${mkport(p,slot)}</td>` +
@@ -2350,21 +2363,54 @@ function doOnboardSweep(){
   }).catch(()=>toast('sweep prepare failed'));
 }
 function doRemap(c){
-  if(srcs[c])return;
+  // Clicking while it's already onboarding STOPS it — onboarding never gives up
+  // on its own, only the user ends the attempt.
+  if(srcs[c]){
+    srcs[c]._stop=true;srcs[c].close();delete srcs[c];
+    refreshing.delete(c);delete onboardStart[c];
+    toast('onboarding '+c+' stopped');
+    if(lastData)render(lastData);refresh();
+    return;
+  }
+  toast('onboarding '+c+'\\u2026');                     // instant, render-independent feedback
   const box=document.getElementById('log-'+c);
-  if(!box)return;
-  box.textContent='';box.classList.add('show');
+  if(box){box.textContent='';box.classList.add('show');}
   refreshing.add(c);                                   // pulse the row while it re-identifies
   onboardStart[c]={t0:Date.now(),dur:ONBOARD_SECS};    // start the timed fill + blink
-  const r=document.getElementById('wr-'+c);
-  if(r)r.querySelectorAll('button:not(.tgl)').forEach(b=>b.disabled=true);
   if(lastData)render(lastData);                        // paint the onboarding state INSTANTLY
-  refresh();                                            // then reconcile with the server
+  _openOnboard(c);
+}
+// One backend onboard attempt (power on → boot window → identify). If it finds
+// nothing and the user hasn't stopped it, we re-open — so onboarding keeps
+// looking indefinitely (slow boot / flat-battery pre-charge) until a watch
+// enumerates or the user clicks to stop.
+function _openOnboard(c){
+  const box=document.getElementById('log-'+c);
   const es=new EventSource('/api/remap/'+_api(c));
-  srcs[c]=es;
-  es.onmessage=ev=>{box.textContent+=ev.data+'\\n';box.scrollTop=box.scrollHeight};
-  es.addEventListener('done',()=>{box.textContent+='\\n\\u2500\\u2500 done \\u2500\\u2500\\n';box.scrollTop=box.scrollHeight;es.close();delete srcs[c];refreshing.delete(c);delete onboardStart[c];setTimeout(refresh,1000)});
-  es.onerror=()=>{box.textContent+='\\n\\u2500\\u2500 connection lost \\u2500\\u2500\\n';es.close();delete srcs[c];refreshing.delete(c);delete onboardStart[c];refresh()};
+  es._found=false;srcs[c]=es;
+  es.onmessage=ev=>{
+    if(/^Mapped /.test(ev.data))es._found=true;
+    if(box){box.textContent+=ev.data+'\\n';box.scrollTop=box.scrollHeight}
+  };
+  es.addEventListener('done',()=>{
+    es.close();
+    if(es._found){                                     // success → finish
+      if(box){box.textContent+='\\n\\u2500\\u2500 onboarded \\u2500\\u2500\\n';box.scrollTop=box.scrollHeight}
+      delete srcs[c];refreshing.delete(c);delete onboardStart[c];
+      toast(c+' onboarded');setTimeout(refresh,800);
+    }else if(onboardStart[c]&&!es._stop){              // still looking → try again
+      delete srcs[c];setTimeout(()=>{if(onboardStart[c])_openOnboard(c)},1500);
+    }else{                                             // stopped mid-attempt
+      delete srcs[c];refreshing.delete(c);delete onboardStart[c];refresh();
+    }
+  });
+  es.onerror=()=>{
+    es.close();delete srcs[c];
+    if(onboardStart[c]&&!es._stop){                    // reconnect and keep looking
+      if(box){box.textContent+='\\n\\u2500\\u2500 reconnecting\\u2026 \\u2500\\u2500\\n'}
+      setTimeout(()=>{if(onboardStart[c])_openOnboard(c)},2000);
+    }else{refreshing.delete(c);refresh();}
+  };
 }
 // Seeded starfield (mulberry32 PRNG → same field every load), painted once into
 // the fixed backdrop. Ported from moWerk's Depth Drift generator: 150 stars,
