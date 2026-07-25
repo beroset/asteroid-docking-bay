@@ -23,6 +23,7 @@ from .fastboot import _detect_rndis, _fastboot_getvar_product, _fastboot_list
 from .transport import SshTransport
 from .events import _latest_drain_summaries
 from .lastseen import last_seen
+from .registry import registry
 from .variants import exact_codename
 from .tasks import (_charge_tasks, _drain_tasks, _flash_tasks, _remap_tasks,
                     _workbench_tasks)
@@ -266,6 +267,11 @@ def _soft_remap(cfg: dict, online_by_path: dict[str, str]) -> "dict | None":
             port_serials[port_str] = serial
             cfg.setdefault("serials", {})[serial] = codename
             changed = True
+            # Onboarding a watch to a port MUST also write it to the fleet log —
+            # otherwise the registry stays empty (mapped-to-a-port but never
+            # "in the fleet"). Cheap: registry.note only logs on a real change.
+            registry.note(serial, source="soft-remap", codename=codename,
+                          battery=(last_seen.get(serial) or {}).get("battery"))
             log.info("soft-remap: %s (%s) now at %s:p%s%s",
                      codename, serial, loc, port_str,
                      f" (replacing {prev})" if prev and prev != codename else "")
