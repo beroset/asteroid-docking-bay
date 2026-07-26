@@ -232,7 +232,6 @@ _WEB_TEMPLATE = """\
     tr.justplugged>td{animation:plug 2s ease-out}
     @keyframes plug{0%{background:rgba(31,111,235,.4)}100%{background:transparent}}
     .wimg-shot.shape-round{border-radius:50%}.wimg-shot.shape-rect{border-radius:4px}
-    .bcmask{z-index:119}.bcpanel{z-index:120}   /* above the CC window (z100) */
     .bc-row{display:flex;align-items:center;gap:6px;font-size:10px;line-height:1.5}
     .bc-n{width:128px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#8b949e}
     .bc-track{flex:1;position:relative;height:8px;background:#161b22;border-radius:4px}
@@ -457,8 +456,6 @@ _WEB_TEMPLATE = """\
   <div id="wimg" class="wimg"></div>
   <div id="regmask" class="regmask" style="display:none" onclick="closeRegistry()"></div>
   <div id="reg" class="regpanel" style="display:none"></div>
-  <div id="bcmask" class="regmask bcmask" style="display:none" onclick="closeBootChart()"></div>
-  <div id="bcpanel" class="regpanel bcpanel" style="display:none"></div>
   <div id="btmask" class="regmask" style="display:none" onclick="closeBt()"></div>
   <div id="bt" class="regpanel" style="display:none"></div>
 <script>
@@ -1045,7 +1042,7 @@ let ctlTab='sys', ctlSshIp=null, ctlMode=null;
 let ctlMoved=false, ctlPlaced=false, _drag=null;   // manual pos, placed-once, active drag
 // The tab bar. Order is System → Network → Battery here; Settings and Live join
 // in later steps, landing the final System · Settings · Network · Battery · Live.
-const CTL_TABS=[['sys','System'],['set','Settings'],['net','Network'],['bat','Battery']];
+const CTL_TABS=[['sys','System'],['set','Settings'],['net','Network'],['bat','Battery'],['boot','Boot']];
 // Last-fetched payload per serial, so re-opening paints instantly from the
 // previous values while the fresh fetch is in flight — and a self-cancelling
 // poll keeps the open window live (important over SSH, where a fetch is slow).
@@ -1200,6 +1197,7 @@ function ctlTabTo(tab){
   if(tab==='set')settingsFetch(ctlSerial);
   if(tab==='sys'&&wxData===null)wxFetch();
   if(tab==='sys'&&ctlSerial&&wxOnWatch[ctlSerial]===undefined)wxFetchOnWatch(ctlSerial);
+  if(tab==='boot'&&bcData[ctlSerial]===undefined)bcFetch(ctlSerial);
   renderControl(ctlCache[ctlSerial]||null);
 }
 function ctlFetch(){
@@ -1247,7 +1245,7 @@ function renderControl(d){
   const a=document.activeElement;
   if(a&&a.tagName==='INPUT'&&cc.contains(a))return;
   cc.classList.toggle('stale-cc',!!(d&&d.stale));
-  const body=ctlTab==='set'?bodySet(d):ctlTab==='net'?bodyNet(d):ctlTab==='bat'?bodyBat(d):bodySys(d);
+  const body=ctlTab==='set'?bodySet(d):ctlTab==='net'?bodyNet(d):ctlTab==='bat'?bodyBat(d):ctlTab==='boot'?bodyBoot():bodySys(d);
   cc.innerHTML=ctlChrome(d,body);
   ctlPlace(true);
 }
@@ -1275,27 +1273,29 @@ function bodySys(d){
     `<div class="cc-tgls">`+
       `<button class="cc-tgl" onclick="ccBuzz()" title="vibrate to locate in the dock">Buzz</button>`+
       `<button class="cc-tgl${d.screen_forced?' scrnon':''}${ctlPending.has('sys:screen')?' cmd-pending':''}" onclick="ccScreen(${d.screen_forced?0:1})" title="${d.screen_forced?'demo mode is ON — the screen is forced on and draining. Click to release.':'force the screen on (mce demo mode — stays on and drains until released!)'}">Screen: ${d.screen_forced?'ON':'OFF'}</button>`+
-      `<button class="cc-tgl" onclick="doScreenshot('${d.serial}')" title="screenshot in a new tab">Shot</button>`+
-      `<button class="cc-tgl" onclick="bootChart()" title="systemd's boot accounting: per-service startup waterfall — what actually took time this boot">Boot</button></div>`+
+      `<button class="cc-tgl" onclick="doScreenshot('${d.serial}')" title="screenshot in a new tab">Shot</button></div>`+
     bodyWeather();
 }
-// Boot analysis opens its OWN floating panel above the CC — 40 services made
-// the CC taller than the screen when rendered inline (mo, 2026-07-26).
-function bootChart(){
-  const p=document.getElementById('bcpanel'),m=document.getElementById('bcmask');
-  const serial=ctlSerial,name=ctlName;
-  if(!p||!serial)return;
-  p.style.display='flex';m.style.display='block';
-  const hd='<div class="reg-hd"><b>Boot analysis</b><span class="dim">'+esc(name||serial)+'</span><a href="#" class="reg-x" onclick="closeBootChart();return false">&times;</a></div>';
-  p.innerHTML=hd+'<div class="reg-body" style="padding:10px 14px"><span class="dim">reading boot accounting&hellip;</span></div>';
+// Boot tab: systemd's boot accounting, fetched once per serial (bcData cache
+// survives the 3s re-render; a fresh boot is re-read via the refresh link).
+let bcData={};        // serial -> bootchart payload, false while in flight
+function bcFetch(serial){
+  bcData[serial]=false;
   fetch('/api/watch/'+encodeURIComponent(serial)+'/bootchart').then(r=>r.json()).then(d=>{
-    p.innerHTML=hd+'<div class="reg-body" style="padding:10px 14px">'+
-      (d.ok?bcHtml(d):'<span class="dim">'+esc(d.error||'boot accounting unavailable')+'</span>')+'</div>';
-  }).catch(()=>{p.innerHTML=hd+'<div class="reg-body" style="padding:10px 14px"><span class="dim">failed</span></div>';});
+    bcData[serial]=d;
+    if(ctlSerial===serial&&ctlTab==='boot')renderControl(ctlCache[serial]||{});
+  }).catch(()=>{bcData[serial]={ok:false,error:'fetch failed'};
+    if(ctlSerial===serial&&ctlTab==='boot')renderControl(ctlCache[serial]||{});});
 }
-function closeBootChart(){
-  const p=document.getElementById('bcpanel'),m=document.getElementById('bcmask');
-  if(p)p.style.display='none';if(m)m.style.display='none';
+function bcRefresh(){delete bcData[ctlSerial];bcFetch(ctlSerial);renderControl(ctlCache[ctlSerial]||{});}
+function bodyBoot(){
+  const d=bcData[ctlSerial];
+  let inner;
+  if(d===false||d===undefined)inner='<span class="dim">reading boot accounting&hellip;</span>';
+  else if(!d.ok)inner='<span class="dim">'+esc(d.error||'boot accounting unavailable')+'</span>';
+  else inner=bcHtml(d);
+  return '<div class="cc-sec"><div class="cc-sech">Boot analysis <a href="#" class="dim" style="float:right;text-decoration:none" onclick="bcRefresh();return false" title="re-read after a fresh boot">refresh</a></div>'+
+    '<div style="max-height:52vh;overflow-y:auto">'+inner+'</div></div>';
 }
 function bcHtml(d){
   const fin=d.finish_s||0,us=d.userspace_s||0;
