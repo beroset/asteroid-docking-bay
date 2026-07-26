@@ -148,3 +148,18 @@ def test_set_power_uses_uhubctl_when_sysfs_cannot_reach_companion(tmp_path, monk
     assert u.uhubctl_set_power("1-9.1.3.3", 4, False) is True
     assert sysfs_called == []                               # fast path skipped
     assert calls and "-a off" in calls[0]                   # uhubctl drove it
+
+
+def test_topology_fingerprint_tracks_devices_ignores_interfaces(monkeypatch):
+    """The status cache busts on this fingerprint, so it must change exactly
+    when a DEVICE appears or vanishes. Interface dirs (colon entries) are
+    excluded — they churn on driver binds without any enumeration change.
+    Planted-bug: drop the ':' filter and the interface assertion fails."""
+    import asteroid_docking_bay.usb as usb
+    base = ["1-3", "1-3.2", "usb1"]
+    monkeypatch.setattr(usb.os, "listdir", lambda p: list(base))
+    fp0 = usb.usb_topology_fingerprint()
+    monkeypatch.setattr(usb.os, "listdir", lambda p: base + ["1-3.2:1.0"])
+    assert usb.usb_topology_fingerprint() == fp0      # interfaces don't count
+    monkeypatch.setattr(usb.os, "listdir", lambda p: base + ["1-3.3"])
+    assert usb.usb_topology_fingerprint() != fp0      # a device does

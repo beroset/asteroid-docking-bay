@@ -2440,11 +2440,11 @@ function seedStars(){
   const el=document.getElementById('stars');if(el)el.innerHTML=html;
 }
 seedStars();
-// 4s poll: the 15s it replaces dated from the uhubctl era (13-72s status
-// builds); sysfs builds are a few hundred ms and the server caps rebuilds
-// at one per 2s regardless of tab count, so a fast poll costs nearly
-// nothing. Worst-case sysfs-change-to-eyeballs lag: ~17s -> ~6s.
-refresh();setInterval(refresh,4000);
+// 3s poll (was 15s, a uhubctl-era relic): sysfs builds are a few hundred
+// ms and the server caps rebuilds at one per 2s across every tab — except
+// when its topology fingerprint sees a device appear/vanish, which busts
+// the cache instantly. Enumeration changes land in ~1.5-3s.
+refresh();setInterval(refresh,3000);
 </script>
 </body>
 </html>

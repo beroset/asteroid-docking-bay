@@ -22,7 +22,7 @@ from wsgiref.simple_server import WSGIServer, WSGIRequestHandler, make_server
 
 from .util import log
 from .config import _config_lock, load_config, save_config, seed_hub_names
-from .usb import _sysfs_switch_mode, hub_vendors
+from .usb import _sysfs_switch_mode, hub_vendors, usb_topology_fingerprint
 from .ops import _background_warmer, _resume_persisted_tasks
 from .webtemplate import _WEB_TEMPLATE
 
@@ -157,9 +157,15 @@ def serve(args, cfg: dict):
         resp.content_type = "application/json"
         with status_lock:
             now = time.monotonic()
-            if now - status_cache["ts"] > 2.0:
+            # The TTL caps the cost of the expensive per-watch reads; the
+            # topology fingerprint (a ~1ms listing) overrides it the moment a
+            # device appears or vanishes, so enumeration changes never wait
+            # out the cache — they show on the very next poll.
+            fp = usb_topology_fingerprint()
+            if now - status_cache["ts"] > 2.0 or fp != status_cache.get("fp"):
                 status_cache["body"] = json.dumps(_call("status.get"))
                 status_cache["ts"] = now
+                status_cache["fp"] = fp
             return status_cache["body"]
 
     # Hub rename: the name is free text (spaces, empty to clear), so it rides the

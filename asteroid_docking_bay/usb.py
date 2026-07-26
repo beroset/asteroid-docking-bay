@@ -556,6 +556,16 @@ def test_port_power_switching(location: str, port: int,
     return verdict, why
 
 
+def usb_topology_fingerprint() -> int:
+    """A cheap fingerprint of what is enumerated on the bus: the set of device
+    entries under /sys/bus/usb/devices, interface dirs excluded. Changes exactly
+    when a device appears or vanishes — one ~1ms directory listing, no USB
+    traffic. Lets the status cache keep its TTL for the expensive per-watch
+    reads while reacting to enumeration changes on the very next request."""
+    return hash(tuple(sorted(
+        e for e in os.listdir("/sys/bus/usb/devices") if ":" not in e)))
+
+
 def _sysfs_usb_mode(sysfs_path: str) -> "str | None":
     """Detect an AsteroidOS watch's USB gadget mode from the idProduct at a
     hub port's sysfs path: adb_mode reports 0a03, developer_mode (SSH) reports
