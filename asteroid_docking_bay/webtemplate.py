@@ -1299,7 +1299,7 @@ function bodyBoot(){
   else if(!d.ok)inner='<span class="dim">'+esc(d.error||'boot accounting unavailable')+'</span>';
   else inner=bcHtml(d);
   return '<div class="cc-sec"><div class="cc-sech">Boot analysis <a href="#" class="dim" style="float:right;text-decoration:none" onclick="bcRefresh();return false" title="re-read after a fresh boot">refresh</a></div>'+
-    '<div style="max-height:52vh;overflow-y:auto">'+inner+'</div></div>';
+    inner+'</div>';
 }
 function bcHtml(d){
   const fin=d.finish_s||0,us=d.userspace_s||0;
