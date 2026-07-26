@@ -48,7 +48,7 @@ _WEB_TEMPLATE = """\
     /* A disconnected watch's name dims well down, so the connected (full-white)
        ones stand out at a glance. */
     .offname{opacity:.6}
-    .cc{position:fixed;z-index:100;display:none;width:auto;min-width:340px;max-width:94vw;background:#161b22;border:1px solid #30363d;border-radius:8px;box-shadow:0 10px 34px rgba(0,0,0,.6);font-size:12px;overflow:hidden}
+    .cc{position:fixed;z-index:100;display:none;width:auto;min-width:340px;max-width:94vw;min-height:80px;background:#161b22;border:1px solid #30363d;border-radius:8px;box-shadow:0 10px 34px rgba(0,0,0,.6);font-size:12px;overflow:auto;resize:both}
     .cc-cols{display:flex;flex-wrap:wrap}
     .cc-col{flex:1 1 210px;min-width:200px}
     .cc-sec{padding:8px 14px}
@@ -1181,7 +1181,7 @@ function openControl(serial,name,ev,tab,sshIp,mode){
   if(ctlTab==='sys'&&wxData===null)wxFetch();
   if(ctlTab==='sys'&&ctlSerial&&wxOnWatch[ctlSerial]===undefined)wxFetchOnWatch(ctlSerial);
   if(ctlCache[serial])renderControl(ctlCache[serial]);   // instant, from the last open
-  else{cc.innerHTML=ctlChrome(null,`<div class="cc-sec"><span class="dim">loading&hellip;</span></div>`);ctlPlace();
+  else{renderControl({});                        // full skeleton, real size, dash values
        paintStale(serial,()=>ctlSerial,()=>!!ctlCache[serial],renderControl);}
   ctlFetch();
 }
@@ -1251,7 +1251,11 @@ function renderControl(d){
 }
 // ── System tab ──────────────────────────────────────────────────────────────
 function bodySys(d){
-  if(!d||!d.kernel)return `<div class="cc-sec"><span class="err">no data (watch offline?)</span></div>`;
+  d=d||{};
+  // Skeleton-first (mo): the full label grid renders at once with dash
+  // values, so the window opens at its real size instead of a stripe that
+  // snaps when data lands. _kv already renders null as a dash.
+  const hint=d.kernel?'':`<div class="dim" style="padding:2px 10px">reading&hellip; (dashes fill as values arrive)</div>`;
   const mt=+d.memtotal,mf=+d.memfree,memU=mt?Math.round((mt-mf)/1024):null,memT=mt?Math.round(mt/1024):null;
   const freq=_num(d.cpufreq);
   const dfp=(d.df||'').trim().split(/[ \t]+/);
@@ -1269,11 +1273,11 @@ function bodySys(d){
     // Worth showing verbatim: it is the field the porting community reads to
     // identify a device, so a human can check our detection against it.
     _kv('Bootloader',d.geometry&&d.geometry.bootloader));
-  return `<div class="cc-cols"><div class="cc-col">${sys}</div></div>`+
+  return hint+`<div class="cc-cols"><div class="cc-col">${sys}</div></div>`+
     `<div class="cc-tgls">`+
       `<button class="cc-tgl" onclick="ccBuzz()" title="vibrate to locate in the dock">Buzz</button>`+
       `<button class="cc-tgl${d.screen_forced?' scrnon':''}${ctlPending.has('sys:screen')?' cmd-pending':''}" onclick="ccScreen(${d.screen_forced?0:1})" title="${d.screen_forced?'demo mode is ON — the screen is forced on and draining. Click to release.':'force the screen on (mce demo mode — stays on and drains until released!)'}">Screen: ${d.screen_forced?'ON':'OFF'}</button>`+
-      `<button class="cc-tgl" onclick="doScreenshot('${d.serial}')" title="screenshot in a new tab">Shot</button></div>`+
+      `<button class="cc-tgl" onclick="doScreenshot('${d.serial||ctlSerial}')" title="screenshot in a new tab">Shot</button></div>`+
     bodyWeather();
 }
 // Boot tab: systemd's boot accounting, fetched once per serial (bcData cache
