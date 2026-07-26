@@ -377,8 +377,11 @@ def _maybe_measure_boot(serial: "str | None", adb_state: str) -> None:
 
     def _bg():
         try:
+            # Double-quote the command so a marker PIPELINE runs on the WATCH:
+            # adb_shell uses a host-side shell=True, and an unquoted `a | b`
+            # would pipe on the host (the battery_and_screen lesson).
             res = measure_boot(serial, t0,
-                               lambda c: adb_shell(serial, c), marker)
+                               lambda c: adb_shell(serial, f'"{c}"'), marker)
             if res:
                 registry.note(serial, source="boot-measure", **res)
                 log.info("boot measured for %s: %s", serial,
