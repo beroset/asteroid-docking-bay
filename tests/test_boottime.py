@@ -49,3 +49,35 @@ def test_measure_boot_survives_bad_marker_output():
     res = measure_boot("AAA", 1000.0, _shell_uptime(980.0, "not a number"),
                        marker_cmd="broken", now=2000.0, enum_ts=1055.0)
     assert res == {"boot_kernel_s": 20.0, "boot_adb_s": 55.0}   # no boot_ui_s
+
+
+BOOTCHART_OUT = """\
+UserspaceTimestampMonotonic=4866151
+FinishTimestampMonotonic=28918533
+---UNITS---
+Id=android-init.service
+InactiveExitTimestampMonotonic=8172854
+ActiveEnterTimestampMonotonic=8193771
+
+Id=never-ran.service
+InactiveExitTimestampMonotonic=0
+ActiveEnterTimestampMonotonic=0
+
+Id=user@1000.service
+InactiveExitTimestampMonotonic=9830898
+ActiveEnterTimestampMonotonic=12922169
+"""
+
+
+def test_parse_bootchart_summary_units_and_zero_drop():
+    """Manager stamps become the kernel/userspace/finish summary; each ran
+    unit carries start and activation span; units with a zero start stamp
+    never ran this boot and are dropped. Planted-bug: remove the ie<=0 skip
+    and a phantom bar at t=0 appears, failing the unit count."""
+    from asteroid_docking_bay.boottime import parse_bootchart
+    d = parse_bootchart(BOOTCHART_OUT)
+    assert d["userspace_s"] == 4.87 and d["finish_s"] == 28.92
+    assert [u["unit"] for u in d["units"]] == ["android-init.service",
+                                               "user@1000.service"]
+    assert d["units"][1]["start_s"] == 9.83
+    assert d["units"][1]["dur_s"] == 3.09

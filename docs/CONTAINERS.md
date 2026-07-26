@@ -115,6 +115,7 @@ Deliberately mirrors the existing `/api/*` routes and module seams — the
 | `onboard.sweep_prepare` | power all sockets down before an onboard sweep |
 | `onboard.sweep_run` | streaming: onboard every equipped socket, one at a time |
 | `onboard.sweep_skip` | skip the running sweep's current port (boot-wait aborts) |
+| `watch.bootchart` | systemd boot accounting: summary + per-service activation spans |
 
 The dispatch table is an allow-list; unknown ops get `ok:false`. Nothing
 generic (no eval-style "run this shell command" op) — adding a capability

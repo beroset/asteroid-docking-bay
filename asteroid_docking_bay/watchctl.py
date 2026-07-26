@@ -15,6 +15,7 @@ from pathlib import Path
 
 from .util import _run, log
 from .adb import _adb_state, adb_devices, adb_shell, get_watch_codename
+from .boottime import BOOTCHART_CMD, parse_bootchart
 from .transport import AdbTransport
 from .config import ChargeConfig, find_serial_for_codename, save_config
 from .watch_settings import (QUICKPANEL_KEY, dconf_arg, effective_settings,
@@ -249,6 +250,17 @@ class Watch:
         bi = info.get("blank_inhibit", "").lower()
         info["screen_forced"] = bool(bi) and bi != "disabled"
         return info
+
+    def bootchart(self) -> dict:
+        """systemd's boot-timing accounting — the systemd-analyze dataset
+        without the tool (not shipped on the watch images; the underlying
+        D-Bus properties are there regardless): manager timestamps plus every
+        service's activation span, one transport round-trip. {} when
+        unreachable or the accounting is empty."""
+        rc, out, _ = self.t.shell(shlex.quote(BOOTCHART_CMD), timeout=25)
+        if rc != 0 or "---UNITS---" not in out:
+            return {}
+        return parse_bootchart(out)
 
     def geometry(self) -> dict:
         """Screen shape + resolution, for masking screenshots and showing the

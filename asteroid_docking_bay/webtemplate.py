@@ -232,6 +232,11 @@ _WEB_TEMPLATE = """\
     tr.justplugged>td{animation:plug 2s ease-out}
     @keyframes plug{0%{background:rgba(31,111,235,.4)}100%{background:transparent}}
     .wimg-shot.shape-round{border-radius:50%}.wimg-shot.shape-rect{border-radius:4px}
+    .bc-row{display:flex;align-items:center;gap:6px;font-size:10px;line-height:1.5}
+    .bc-n{width:128px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#8b949e}
+    .bc-track{flex:1;position:relative;height:8px;background:#161b22;border-radius:4px}
+    .bc-bar{position:absolute;top:1px;height:6px;background:#3fb950;border-radius:3px}
+    .bc-t{width:44px;text-align:right;color:#8b949e}
     .cc.stale-cc{border-color:#7a5b1e}.cc.stale-cc .cc-hd{background:#241d0e}
     .cc.stale-cc .cc-tgl,.cc.stale-cc .cc-act{opacity:.4;pointer-events:none}   /* offline: controls do nothing, so block + dim them */
     .dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px;vertical-align:middle}
@@ -1265,8 +1270,31 @@ function bodySys(d){
     `<div class="cc-tgls">`+
       `<button class="cc-tgl" onclick="ccBuzz()" title="vibrate to locate in the dock">Buzz</button>`+
       `<button class="cc-tgl${d.screen_forced?' scrnon':''}${ctlPending.has('sys:screen')?' cmd-pending':''}" onclick="ccScreen(${d.screen_forced?0:1})" title="${d.screen_forced?'demo mode is ON — the screen is forced on and draining. Click to release.':'force the screen on (mce demo mode — stays on and drains until released!)'}">Screen: ${d.screen_forced?'ON':'OFF'}</button>`+
-      `<button class="cc-tgl" onclick="doScreenshot('${d.serial}')" title="screenshot in a new tab">Shot</button></div>`+
+      `<button class="cc-tgl" onclick="doScreenshot('${d.serial}')" title="screenshot in a new tab">Shot</button>`+
+      `<button class="cc-tgl" onclick="bootChart()" title="systemd's boot accounting: per-service startup waterfall — what actually took time this boot">Boot</button></div>`+
+    (bcData[ctlSerial]?bcHtml(bcData[ctlSerial]):'')+
     bodyWeather();
+}
+let bcData={};   // serial -> fetched bootchart (survives the 3s re-render)
+function bootChart(){
+  toast('reading boot accounting…');
+  fetch('/api/watch/'+encodeURIComponent(ctlSerial)+'/bootchart').then(r=>r.json()).then(d=>{
+    if(!d.ok){toast(d.error||'boot accounting unavailable');return;}
+    bcData[ctlSerial]=d;renderControl(ctlCache[ctlSerial]||{});
+  }).catch(()=>toast('boot accounting failed'));
+}
+function bcHtml(d){
+  const fin=d.finish_s||0,us=d.userspace_s||0;
+  const all=d.units||[],units=all.filter(u=>u.dur_s>=0.05);
+  const span=Math.max(fin,0.1,...all.map(u=>u.start_s+u.dur_s));
+  let h='<div class="dim" style="margin:2px 0 6px">kernel '+us.toFixed(1)+'s &middot; userspace '+Math.max(fin-us,0).toFixed(1)+'s &middot; finished '+fin.toFixed(1)+'s</div>';
+  units.forEach(u=>{
+    const l=(u.start_s/span*100).toFixed(1),w=Math.max(u.dur_s/span*100,0.8).toFixed(1);
+    h+='<div class="bc-row"><span class="bc-n" title="'+esc(u.unit)+'">'+esc(u.unit.replace(/[.]service$/,''))+'</span>'+
+       '<span class="bc-track"><span class="bc-bar" style="left:'+l+'%;width:'+w+'%"></span></span>'+
+       '<span class="bc-t">'+u.dur_s.toFixed(2)+'s</span></div>';});
+  if(!units.length)h+='<div class="dim">no per-service spans recorded this boot</div>';
+  return '<div class="cc-sec"><div class="cc-sech">Boot analysis</div>'+h+'</div>';
 }
 function ccBuzz(){fetch('/api/watch/'+encodeURIComponent(ctlSerial)+'/buzz',{method:'POST'}).then(()=>toast('buzzed'));}
 function ccScreen(on){ctlPending.add('sys:screen');renderControl(ctlCache[ctlSerial]||{});setTimeout(()=>{ctlPending.delete('sys:screen');},2600);fetch('/api/watch/'+encodeURIComponent(ctlSerial)+'/screen/'+(on?'on':'off'),{method:'POST'}).then(()=>{toast(on?'screen forced on \u2014 release it when done!':'screen released');ctlFetch();refresh();});}

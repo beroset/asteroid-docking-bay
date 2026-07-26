@@ -1089,6 +1089,23 @@ _register_lifecycle(WorkbenchOp, "workbench", "no workbench active")
 _register_lifecycle(DrainOp, "drain", "no drain test running")
 
 
+@DISPATCH.op("watch.bootchart")
+def _watch_bootchart(args):
+    """systemd's boot accounting for this watch (summary + per-service spans),
+    read live over whichever link is up. The finish time — systemd's own
+    'startup finished' — lands in the fleet registry as boot_finish_s,
+    complementing the host-measured boot_adb_s/boot_ui_s."""
+    serial = args["serial"]
+    d = _watch(serial).bootchart()
+    if not d:
+        return {"ok": False,
+                "error": "boot accounting unreadable — watch offline?"}
+    if d.get("finish_s"):
+        registry.note(serial, source="bootchart",
+                      boot_finish_s=round(d["finish_s"], 1))
+    return {"ok": True, **d}
+
+
 @DISPATCH.op("watch.timeline")
 def _watch_timeline(args):
     """The watch's battery-over-time points for the row sparkline, plus its

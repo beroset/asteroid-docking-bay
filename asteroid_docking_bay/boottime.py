@@ -89,3 +89,54 @@ def measure_boot(serial: str, t0: float, shell, marker_cmd: "str | None" = None,
             log.debug("boot marker cmd for %s: unparseable output %r",
                       serial, out[:80])
     return result
+
+
+# The systemd-analyze dataset without systemd-analyze (the tool is not shipped
+# on the watch images; the D-Bus accounting it renders is there regardless —
+# kido's lead, 2026-07-26): manager timestamps + per-service activation spans,
+# gathered in ONE transport round-trip.
+BOOTCHART_CMD = (
+    "systemctl show -p UserspaceTimestampMonotonic -p FinishTimestampMonotonic; "
+    "echo ---UNITS---; "
+    "systemctl list-units --type=service --all --no-legend 2>/dev/null"
+    " | awk '$1 ~ /\\.service$/ {print $1}'"
+    " | while read u; do systemctl show \"$u\" -p Id"
+    " -p InactiveExitTimestampMonotonic -p ActiveEnterTimestampMonotonic"
+    " 2>/dev/null; echo; done")
+
+
+def parse_bootchart(out: str) -> dict:
+    """systemd's boot accounting → {'userspace_s', 'finish_s', 'units': […]}.
+    Monotonic stamps are µs since kernel start. Each unit carries start_s
+    (InactiveExit) and dur_s (ActiveEnter − InactiveExit when both are set;
+    0 for units without a distinct activation span). Units with a zero start
+    stamp never ran this boot and are dropped — keeping them would draw
+    phantom bars at t=0. Pure — see tests."""
+    result: dict = {"userspace_s": None, "finish_s": None, "units": []}
+    header, _, units_part = out.partition("---UNITS---")
+    for line in header.splitlines():
+        k, _, v = line.strip().partition("=")
+        try:
+            if k == "UserspaceTimestampMonotonic":
+                result["userspace_s"] = round(int(v) / 1e6, 2)
+            elif k == "FinishTimestampMonotonic":
+                result["finish_s"] = round(int(v) / 1e6, 2)
+        except ValueError:
+            pass
+    for block in units_part.split("\n\n"):
+        props = dict(l.strip().split("=", 1) for l in block.splitlines()
+                     if "=" in l)
+        unit = props.get("Id")
+        try:
+            ie = int(props.get("InactiveExitTimestampMonotonic", 0))
+            ae = int(props.get("ActiveEnterTimestampMonotonic", 0))
+        except ValueError:
+            continue
+        if not unit or ie <= 0:
+            continue
+        dur = (ae - ie) / 1e6 if ae >= ie else 0.0
+        result["units"].append({"unit": unit,
+                                "start_s": round(ie / 1e6, 2),
+                                "dur_s": round(dur, 2)})
+    result["units"].sort(key=lambda u: u["start_s"])
+    return result
