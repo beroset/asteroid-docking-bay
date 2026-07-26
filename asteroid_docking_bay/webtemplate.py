@@ -236,6 +236,8 @@ _WEB_TEMPLATE = """\
     .bc-n{width:128px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#8b949e}
     .bc-track{flex:1;position:relative;height:8px;background:#161b22;border-radius:4px}
     .bc-bar{position:absolute;top:1px;height:6px;background:#3fb950;border-radius:3px}
+    .bc-bar.bc-crit{background:#d29922}
+    .bc-chain{color:#d29922}
     .bc-t{width:44px;text-align:right;color:#8b949e}
     .cc.stale-cc{border-color:#7a5b1e}.cc.stale-cc .cc-hd{background:#241d0e}
     .cc.stale-cc .cc-tgl,.cc.stale-cc .cc-act{opacity:.4;pointer-events:none}   /* offline: controls do nothing, so block + dim them */
@@ -1285,13 +1287,15 @@ function bootChart(){
 }
 function bcHtml(d){
   const fin=d.finish_s||0,us=d.userspace_s||0;
-  const all=d.units||[],units=all.filter(u=>u.dur_s>=0.05);
+  const all=d.units||[],chain=d.critical_chain||[],units=all.filter(u=>u.dur_s>=0.05||chain.includes(u.unit));
   const span=Math.max(fin,0.1,...all.map(u=>u.start_s+u.dur_s));
   let h='<div class="dim" style="margin:2px 0 6px">kernel '+us.toFixed(1)+'s &middot; userspace '+Math.max(fin-us,0).toFixed(1)+'s &middot; finished '+fin.toFixed(1)+'s</div>';
+  if(chain.length)h+='<div class="dim" style="margin:0 0 6px" title="the After= dependency chain that gated this boot — each unit waited for the previous">chain: <span class="bc-chain">'+chain.map(u=>esc(u.replace(/[.]service$/,''))).join(' &rarr; ')+'</span></div>';
   units.forEach(u=>{
+    const crit=chain.includes(u.unit);
     const l=(u.start_s/span*100).toFixed(1),w=Math.max(u.dur_s/span*100,0.8).toFixed(1);
-    h+='<div class="bc-row"><span class="bc-n" title="'+esc(u.unit)+'">'+esc(u.unit.replace(/[.]service$/,''))+'</span>'+
-       '<span class="bc-track"><span class="bc-bar" style="left:'+l+'%;width:'+w+'%"></span></span>'+
+    h+='<div class="bc-row"><span class="bc-n" title="'+esc(u.unit)+(u.after&&u.after.length?' — after: '+esc(u.after.join(' ')):'')+'">'+esc(u.unit.replace(/[.]service$/,''))+'</span>'+
+       '<span class="bc-track"><span class="bc-bar'+(crit?' bc-crit':'')+'" style="left:'+l+'%;width:'+w+'%"></span></span>'+
        '<span class="bc-t">'+u.dur_s.toFixed(2)+'s</span></div>';});
   if(!units.length)h+='<div class="dim">no per-service spans recorded this boot</div>';
   return '<div class="cc-sec"><div class="cc-sech">Boot analysis</div>'+h+'</div>';

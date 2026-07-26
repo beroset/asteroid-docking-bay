@@ -100,7 +100,7 @@ BOOTCHART_CMD = (
     "echo ---UNITS---; "
     "systemctl list-units --type=service --all --no-legend 2>/dev/null"
     " | awk '$1 ~ /\\.service$/ {print $1}'"
-    " | while read u; do systemctl show \"$u\" -p Id"
+    " | while read u; do systemctl show \"$u\" -p Id -p After"
     " -p InactiveExitTimestampMonotonic -p ActiveEnterTimestampMonotonic"
     " 2>/dev/null; echo; done")
 
@@ -137,6 +137,39 @@ def parse_bootchart(out: str) -> dict:
         dur = (ae - ie) / 1e6 if ae >= ie else 0.0
         result["units"].append({"unit": unit,
                                 "start_s": round(ie / 1e6, 2),
-                                "dur_s": round(dur, 2)})
+                                "dur_s": round(dur, 2),
+                                "after": props.get("After", "").split()})
     result["units"].sort(key=lambda u: u["start_s"])
+    result["critical_chain"] = critical_chain(result["units"],
+                                              result["finish_s"])
     return result
+
+
+def critical_chain(units: "list[dict]",
+                   finish_s: "float | None" = None) -> "list[str]":
+    """The dependency chain that gated this boot, latest-finishing unit first
+    walked back through its After= edges — what systemd-analyze critical-chain
+    shows, computed host-side (kido: the ORDER is the diagnosis, a bar alone
+    is just a score). Anchored INSIDE the boot window: units started after
+    systemd's finish stamp are timer/deferred work, not boot (the live chain
+    once anchored on tmpfiles-clean, a unit that ran 15 minutes later). At
+    each step the gating dependency is the one that FINISHED latest among
+    those done before (or as) this unit started; edges to units that ran
+    later, or that we have no timing for (targets, mounts), do not gate and
+    are skipped. Pure — see tests."""
+    if finish_s:
+        units = [u for u in units if u["start_s"] <= finish_s + 0.01]
+    by = {u["unit"]: u for u in units}
+    if not by:
+        return []
+    fin = lambda u: u["start_s"] + u["dur_s"]
+    cur = max(units, key=fin)
+    chain = [cur["unit"]]
+    while True:
+        gating = [by[d] for d in cur.get("after", [])
+                  if d in by and fin(by[d]) <= cur["start_s"] + 0.01
+                  and by[d]["unit"] not in chain]
+        if not gating:
+            return list(reversed(chain))
+        cur = max(gating, key=fin)
+        chain.append(cur["unit"])

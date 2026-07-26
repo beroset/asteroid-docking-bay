@@ -64,6 +64,7 @@ InactiveExitTimestampMonotonic=0
 ActiveEnterTimestampMonotonic=0
 
 Id=user@1000.service
+After=android-init.service basic.target
 InactiveExitTimestampMonotonic=9830898
 ActiveEnterTimestampMonotonic=12922169
 """
@@ -81,3 +82,32 @@ def test_parse_bootchart_summary_units_and_zero_drop():
                                                "user@1000.service"]
     assert d["units"][1]["start_s"] == 9.83
     assert d["units"][1]["dur_s"] == 3.09
+
+
+def test_critical_chain_walks_gating_after_edges():
+    """The chain starts at the latest-finishing unit and walks back through
+    After= deps that FINISHED before it started — later-running or timing-less
+    deps (targets) never gate. Planted-bug: pick the gating dep by start
+    instead of finish and the chain picks early.service, failing this."""
+    from asteroid_docking_bay.boottime import critical_chain
+    units = [
+        {"unit": "slowdep.service", "start_s": 1.0, "dur_s": 3.0,
+         "after": []},
+        {"unit": "quick.service",  "start_s": 2.0, "dur_s": 0.1,
+         "after": []},
+        {"unit": "late.service",   "start_s": 5.0, "dur_s": 2.0,
+         "after": ["slowdep.service", "quick.service", "ghost.target"]},
+        # timer-fired long after boot: must never anchor the chain
+        {"unit": "tmpfiles-clean.service", "start_s": 900.0, "dur_s": 0.3,
+         "after": []},
+    ]
+    # quick STARTS later (2.0) but slowdep FINISHES later (4.0): the gating
+    # dep is the late finisher.
+    assert critical_chain(units, finish_s=8.0) == ["slowdep.service",
+                                                   "late.service"]
+
+
+def test_parse_bootchart_carries_chain():
+    from asteroid_docking_bay.boottime import parse_bootchart
+    d = parse_bootchart(BOOTCHART_OUT)
+    assert d["critical_chain"] == ["android-init.service", "user@1000.service"]
