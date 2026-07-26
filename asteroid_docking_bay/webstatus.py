@@ -9,8 +9,9 @@ import threading
 import time
 
 from .util import log
-from .adb import (_adb_state, _resolve_conn_state, adb_devices,
+from .adb import (_adb_state, _resolve_conn_state, adb_devices, adb_shell,
                   battery_and_screen, get_watch_codename)
+from .boottime import measure_boot
 from .config import (_config_lock, charge_config, find_codename_for_serial,
                      hub_name_entry_for, load_config, orbit_members,
                      record_exact_codename, save_config, ssh_ip_for_serial,
@@ -357,6 +358,37 @@ def _lifecycle(serial: "str | None", present: bool, power: "bool | None") -> "st
     return None
 
 
+def _maybe_measure_boot(serial: "str | None", adb_state: str) -> None:
+    """First live sighting after a deliberate (re)power completes the boot an
+    op started (booting_since still ahead of last_live_ts): measure it — in a
+    thread, off the status path, since the reads cost a few hundred ms. One
+    sample per boot: record() advances last_live_ts right after this check
+    (status builds are serialized under the webapp lock, so no double-fire),
+    and measure_boot itself discards re-enumerations of a watch that was
+    running all along (kernel older than T0). Over adb only for now; an SSH
+    sighting just skips."""
+    if not serial or adb_state != "device":
+        return
+    ls = last_seen.get(serial) or {}
+    t0 = ls.get("booting_since") or 0
+    if not t0 or (ls.get("last_live_ts") or 0) >= t0:
+        return
+    marker = load_config().get("boot_marker_cmd")
+
+    def _bg():
+        try:
+            res = measure_boot(serial, t0,
+                               lambda c: adb_shell(serial, c), marker)
+            if res:
+                registry.note(serial, source="boot-measure", **res)
+                log.info("boot measured for %s: %s", serial,
+                         ", ".join(f"{k}={v}s" for k, v in sorted(res.items())))
+        except Exception as exc:
+            log.debug("boot measure %s: %s", serial, exc)
+
+    threading.Thread(target=_bg, daemon=True).start()
+
+
 def _battery_view(adb_state: "str | None", serial: "str | None",
                   battery: "int | None", screen_forced: bool,
                   watch_os: "str | None") -> "tuple[int | None, float | None]":
@@ -368,6 +400,9 @@ def _battery_view(adb_state: "str | None", serial: "str | None",
     untouched — the caller keeps it None when offline and prefers cached only
     for display, so nothing mistakes a cached number for a fresh one."""
     if adb_state in ("device", "ssh"):
+        # This sighting may complete a boot the rig triggered — measure it
+        # BEFORE record() advances last_live_ts past the booting marker.
+        _maybe_measure_boot(serial, adb_state)
         # SSH is a live link too — record its reading so the row shows it fresh
         # and the cache stays current (os is read only over ADB, so it stays
         # None here and record()'s None-filter leaves any prior value intact).

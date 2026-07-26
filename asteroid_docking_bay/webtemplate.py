@@ -1948,7 +1948,9 @@ function renderRegistry(d){
     const cn=F(r,'codename')||'<span class="dim">unknown</span>';
     const src=r.last_source||'?';
     const seen=r.last_seen?fmtAge(r.last_seen)+' ago':'';
-    const kv=[F(r,'kernel')?'kernel '+esc(F(r,'kernel')):'',F(r,'qt')?'Qt '+esc(F(r,'qt')):''].filter(Boolean).join(' &middot; ');
+    const kv=[F(r,'kernel')?'kernel '+esc(F(r,'kernel')):'',F(r,'qt')?'Qt '+esc(F(r,'qt')):'',
+      F(r,'boot_adb_s')!=null?'boot '+esc(String(F(r,'boot_adb_s')))+'s'+(F(r,'boot_ui_s')!=null?' (ui '+esc(String(F(r,'boot_ui_s')))+'s)':''):''
+    ].filter(Boolean).join(' &middot; ');
     const nlog=(r.log||[]).length;
     const open=!!_regOpen[r.serial];
     const chevron=nlog?`<span class="reg-chev">${open?'&#9660;':'&#9654;'}</span>`:'';

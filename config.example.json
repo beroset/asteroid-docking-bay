@@ -25,22 +25,19 @@
       }
     }
   ],
-
   "serials": {
     "XXXXXXXXXXXXXXXX": "nemo",
     "YYYYYYYYYYYYYYYY": "sparrow",
     "ZZZZZZZZZZZZZZZZ": "dory",
     "WWWWWWWWWWWWWWWW": "beluga"
   },
-
   "charge": {
     "low_threshold": 40,
     "high_threshold": 80,
     "charge_duration_minutes": 30,
-
     "check_interval_hours": 12,
-
     "adb_wait_seconds": 15,
     "adb_wait_retries": 8
-  }
+  },
+  "boot_marker_cmd": ""
 }
