@@ -161,6 +161,13 @@ def serve(args, cfg: dict):
             # topology fingerprint (a ~1ms listing) overrides it the moment a
             # device appears or vanishes, so enumeration changes never wait
             # out the cache — they show on the very next poll.
+            # CAUTION (mo, 2026-07-26): this + the 3s client poll raised the
+            # rebuild rate ~5x over the uhubctl-era tuning (up to one adb/
+            # sysfs sweep per ~3s, and every enumeration event triggers one
+            # immediately — a churn storm means back-to-back rebuilds). If
+            # adb-server crashes or hub wedges (re)appear, suspect THIS
+            # pressure first: slow the poll (webtemplate setInterval) and/or
+            # drop the fingerprint bust to test before deeper debugging.
             fp = usb_topology_fingerprint()
             if now - status_cache["ts"] > 2.0 or fp != status_cache.get("fp"):
                 status_cache["body"] = json.dumps(_call("status.get"))
