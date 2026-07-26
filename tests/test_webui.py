@@ -671,7 +671,7 @@ def test_network_center_lists_usb_ip_and_mode_toggle(tmp_path):
     assert r.returncode == 0, r.stderr[:400]
     html = json.loads(r.stdout.strip().splitlines()[-1])
     assert "192.168.13.37" in html, f"Network Center is missing the USB IP: {html[:300]}"
-    assert "USB IP" in html
+    assert "Host link IP" in html   # the USB section labels it per-device now
     assert "switchAdb(" in html, "SSH-mode Network Center lacks the USB->ADB toggle"
     assert "ncToggle('wifi'" in html, "Network Center lacks the WiFi toggle"
 

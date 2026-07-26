@@ -1412,17 +1412,35 @@ function bodyNet(d){
   // ctlMode/ctlSshIp only override it transiently right after a manual switch.
   const mode=ctlMode||d.transport||'adb', isSsh=mode==='ssh';
   const usbip=ctlSshIp||d.ssh_ip||(isSsh?'192.168.13.37':'192.168.2.15');
-  const net=_sec('Addresses &amp; links',
-    _kv('USB IP',usbip)+_kv('USB mode',isSsh?'SSH (developer)':'ADB')+
-    _kv('WiFi',d.wifi==null?null:(d.wifi?'on':'off'))+_kv('WiFi IP',d.ip)+
-    _kvg('RX / TX',(mb(d.net_rx)||'0')+' / '+(mb(d.net_tx)||'0'),spark('rx',0,500000,'high')+spark('tx',0,500000,'high'))+
-    _kv('Bluetooth',d.bluetooth==null?null:(d.bluetooth?'on':'off'))+_kv('Phone',phone)+
-    _kv('WLAN MAC',d.wlanmac)+_kv('BT MAC',d.btmac_self)+_kv('Serial',d.serial));
+  // Grouped per network device (mo): WiFi · Bluetooth · USB, each its own
+  // section. BT adapter flags come from hciconfig: ISCAN = discoverable,
+  // PSCAN = connectable — derived here, absent (—) when unreadable.
+  const flags=d.bt_flags||'';
+  const btup=flags.indexOf('UP')>=0,disco=flags.indexOf('ISCAN')>=0,connb=flags.indexOf('PSCAN')>=0;
+  const sig=d.wifi?_num(d.wifi_signal)||null:null;   // 0/absent = no reading, not 0 dBm
+  const wifiSec=_sec('WiFi',
+    _kv('State',d.wifi==null?null:(d.wifi?'on':'off'))+
+    _kv('Network',d.wifi_ssid||null)+
+    _kv('Signal',sig!=null?sig+' dBm':null)+
+    _kv('IP',d.ip)+_kv('MAC',d.wlanmac)+
+    _kvg('RX / TX',(mb(d.net_rx)||'0')+' / '+(mb(d.net_tx)||'0'),spark('rx',0,500000,'high')+spark('tx',0,500000,'high')));
+  const btSec=_sec('Bluetooth',
+    _kv('State',d.bluetooth==null?null:(d.bluetooth?'on':'off'))+
+    _kv('Adapter',flags?(btup?'up':'down'):null)+
+    _kv('Discoverable',flags?(disco?'yes':'no'):null)+
+    _kv('Connectable',flags?(connb?'yes':'no'):null)+
+    _kv('Name',d.bt_name||null)+
+    _kv('Phone',phone)+_kv('MAC',d.btmac_self));
+  const usbSec=_sec('USB',
+    _kv('Mode',isSsh?'SSH (developer)':'ADB')+
+    _kv('Host link IP',usbip)+
+    _kv('Watch iface IP',d.usb_ifip||null)+
+    _kv('Serial',d.serial));
   const tgl=(t,l,on)=>`<button class="cc-tgl${on?' on':''}${ctlPending.has('net:'+t)?' cmd-pending':''}" onclick="ncToggle('${t}',${on?0:1})">${l}: ${on?'ON':'OFF'}</button>`;
   const modeToggle=isSsh
     ? `<button class="cc-tgl" onclick="switchAdb('${esc(d.serial||ctlSerial)}')" title="switch this watch's USB gadget back to ADB">USB &#8594; ADB</button>`
     : `<button class="cc-tgl" onclick="switchSsh('${esc(d.serial||ctlSerial)}')" title="switch this watch's USB gadget to SSH/developer mode">USB &#8594; SSH</button>`;
-  return `<div class="cc-cols"><div class="cc-col">${net}</div></div>`+
+  return `<div class="cc-cols"><div class="cc-col">${wifiSec}${usbSec}</div><div class="cc-col">${btSec}</div></div>`+
     `<div class="cc-tgls">${tgl('wifi','WiFi',d.wifi)}${tgl('bluetooth','BT',d.bluetooth)}${modeToggle}</div>`;
 }
 function ncToggle(tech,on){
