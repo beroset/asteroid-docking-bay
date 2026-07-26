@@ -584,3 +584,26 @@ def test_workbench_without_an_owner_still_works(monkeypatch):
 
     assert opsmod.WorkbenchOp.start("1-2", 1, {}) is None
     assert opsmod.WorkbenchOp.tasks["1-2:1"]["owner"] is None
+
+
+def test_warm_port_power_reads_only_empty_ports(monkeypatch, tmp_path):
+    """The power warmer caches the register state of EMPTY configured ports
+    only — a present child already proves power, and reading an occupied
+    port's register would be pure extra bus traffic. Planted-bug: drop the
+    child-present skip and the no-probe assertion fails."""
+    import asteroid_docking_bay.ops as ops
+    # fake sysfs: hub 9-9 with ports 1..3
+    iface = tmp_path / "9-9:1.0"
+    for p in (1, 2, 3):
+        (iface / f"9-9-port{p}").mkdir(parents=True)
+    monkeypatch.setattr(ops, "_SYSFS_USB", tmp_path)
+    monkeypatch.setattr(ops, "_port_device_present",
+                        lambda loc, p: p == 2)          # port 2 occupied
+    probed, cached = [], {}
+    monkeypatch.setattr(ops, "_sysfs_get_power",
+                        lambda loc, p: probed.append(p) or (p != 3))
+    monkeypatch.setattr(ops.power_cache, "put",
+                        lambda k, v: cached.update({k: v}))
+    ops._warm_port_power({"hubs": [{"location": "9-9"}]})
+    assert sorted(probed) == [1, 3]                     # occupied port skipped
+    assert cached == {("9-9", 1): True, ("9-9", 3): False}

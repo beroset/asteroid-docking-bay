@@ -17,7 +17,8 @@ from .config import (ChargeConfig, FlashConfig, charge_config, find_codename_for
                      is_port_smart, is_slot_smart, load_config, orbit_members)
 from . import fastboot, orbit, usb
 from .registry import registry
-from .usb import uhubctl_get_power, uhubctl_set_power
+from .usb import (_SYSFS_USB, _port_device_present, _sysfs_get_power,
+                  power_cache, uhubctl_get_power, uhubctl_set_power)
 from .transport import SshTransport
 from .fastboot import (_clear_ssh_known_hosts, _detect_rndis, _download_nightly,
                        _fastboot_devices, _flash_watch, _route_winner_iface,
@@ -187,6 +188,31 @@ def charge_to_target(codename: str, serial: "str | None", charge_cfg: ChargeConf
     return level
 
 
+def _warm_port_power(cfg: dict) -> None:
+    """Feed the power cache with the REAL register state of every configured
+    hub port that has no enumerated child (a present child already proves
+    power via the status scan). This is what makes the UI power dots track
+    the physical LEDs instead of showing a cold cache — 14 charging watches
+    once showed as 4 powered because only child-bearing ports were believed
+    (2026-07-26, the Sabrent bring-up). Register reads are ~3ms each on a
+    quiet bus; the hang-and-renegotiate fear that removed the old empty-port
+    polling did not reproduce (2026-07-25 audit, F3). Serialized in the
+    warmer, skipped while a bus-sensitive op runs."""
+    for hub in cfg.get("hubs", []):
+        loc = hub["location"]
+        for iface in _SYSFS_USB.glob(f"{loc}:*"):
+            for pd in iface.glob(f"{loc}-port*"):
+                try:
+                    port = int(pd.name.rsplit("port", 1)[1])
+                except ValueError:
+                    continue
+                if _port_device_present(loc, port):
+                    continue              # child proves power; no read needed
+                v = _sysfs_get_power(loc, port)
+                if v is not None:
+                    power_cache.put((loc, port), v)
+
+
 _last_ssh_realign = 0.0
 _SSH_REALIGN_COOLDOWN = 60.0
 
@@ -241,6 +267,7 @@ def _background_warmer() -> None:
             cfg = load_config()
             if not bus_busy:
                 _maybe_realign_stray_ssh(cfg)
+                _warm_port_power(cfg)
             # NOTE: the warmer no longer polls EMPTY ports. Reading an empty
             # port's `disable` attr is slow (hangs for seconds on a powered-down
             # port) AND renegotiates these flaky A16/USB3 hubs — which knocks the
