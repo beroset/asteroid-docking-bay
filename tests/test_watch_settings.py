@@ -301,3 +301,34 @@ def test_wake_set_refuses_foreign_vocabulary(monkeypatch):
     ok = rpcops.DISPATCH._data["watch.wake_set"](
         {"serial": "S1", "kind": "tilt", "value": "disabled"})
     assert ok["ok"] is True and "wrist-gesture-detection=disabled" in called[0]
+
+
+def test_parse_locale_reads_current_and_available():
+    from asteroid_docking_bay.watch_settings import parse_locale
+    got = parse_locale("   System Locale: LANG=en_GB.UTF-8\n    VC Keymap: (unset)\n",
+                       "en_GB\nde_DE\n")
+    assert got == {"current": "en_GB.UTF-8", "available": ["de_DE", "en_GB"]}
+    assert parse_locale("", "") == {"current": None, "available": []}
+
+
+def test_locale_set_refuses_a_locale_the_watch_lacks(monkeypatch):
+    """The picker only offers what the watch carries, and the op enforces it —
+    an unlisted (or shell-shaped) locale never reaches a command. Planted-bug:
+    drop the membership check and the injection value is executed."""
+    import asteroid_docking_bay.rpcops as rpcops
+    called = []
+
+    class _W:
+        t = type("T", (), {"shell": staticmethod(
+            lambda c, timeout=12: called.append(c) or (0, "", ""))})()
+
+        def settings_read(self):
+            return {"locale": {"current": "C", "available": ["en_GB"]}}
+
+    monkeypatch.setattr(rpcops, "_watch", lambda s: _W())
+    bad = rpcops.DISPATCH._data["watch.locale_set"](
+        {"serial": "S1", "locale": "en_GB; reboot"})
+    assert bad["ok"] is False and not called
+    ok = rpcops.DISPATCH._data["watch.locale_set"](
+        {"serial": "S1", "locale": "en_GB"})
+    assert ok["ok"] is True and called[0] == "localectl set-locale LANG=en_GB"

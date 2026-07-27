@@ -25,7 +25,7 @@ Setting = namedtuple("Setting", "group key label type default")
 #   "path" — the currently-selected file, shown read-only (mo: display only, no
 #            picker — a fleet manager rarely needs to set a watchface remotely)
 SETTINGS = [
-    Setting("Time & Date", "/org/asteroidos/settings/use-12h-format",
+    Setting("Units", "/org/asteroidos/settings/use-12h-format",
             "12-hour clock", "bool", False),
     Setting("Units", "/org/asteroidos/settings/use-fahrenheit",
             "Fahrenheit units", "bool", False),
@@ -205,3 +205,15 @@ def parse_mce_wake(out):
     if m:
         res["wrist"] = m.group(1)
     return res
+
+
+def parse_locale(status_out, locale_dirs):
+    """Current system locale + the locales this watch actually carries.
+    `localectl status` reports the live setting; the locale directory lists what
+    can be selected. Pure — see tests."""
+    import re
+    m = re.search(r"System Locale:\s*LANG=(\S+)", status_out or "")
+    current = m.group(1) if m else None
+    avail = sorted({l.strip() for l in (locale_dirs or "").split()
+                    if l.strip() and not l.strip().startswith(".")})
+    return {"current": current, "available": avail}

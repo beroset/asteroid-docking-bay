@@ -41,6 +41,7 @@ _JSON_ROUTES = [
     ("GET",  "/api/watch/<serial>/bootchart",      "watch.bootchart", {},             False),
     ("GET",  "/api/watch/<serial>/diag",           "watch.diag",      {},             False),
     ("POST", "/api/watch/<serial>/wake/<kind>/<value>", "watch.wake_set", {},         False),
+    ("POST", "/api/watch/<serial>/locale/<locale>",    "watch.locale_set", {},        False),
     ("GET",  "/api/watch/<serial>/settings",       "watch.settings_read", {},         False),
     ("GET",  "/api/watch/<serial>/hands",          "watch.hands",     {},             False),
     ("GET",  "/api/weather",                       "weather.get",     {},             False),

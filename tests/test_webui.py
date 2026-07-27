@@ -1148,7 +1148,7 @@ def test_settings_tab_renders_toggles_and_readonly_paths(tmp_path):
                  "\nglobal.fetch=()=>new Promise(()=>{});"
                  "ctlSerial='S9';ctlName='sk';ctlTab='set';ccOpen=new Set(['set-clock','set-sound','set-display','set-nightstand','set-units','set-appearance','set-quickpanel','set-usb','set-weather']);"
                  "ctlSettings['S9']={ok:true,settings:["
-                 "{group:'Time & Date',key:'/org/asteroidos/settings/use-12h-format',"
+                 "{group:'Units',key:'/org/asteroidos/settings/use-12h-format',"
                  "label:'12-hour clock',type:'bool',value:true,is_set:true},"
                  "{group:'Units',key:'/org/asteroidos/settings/use-fahrenheit',"
                  "label:'Fahrenheit units',type:'bool',value:false,is_set:false},"

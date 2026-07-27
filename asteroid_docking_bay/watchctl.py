@@ -21,7 +21,8 @@ from .transport import AdbTransport
 from .config import ChargeConfig, find_serial_for_codename, save_config
 from .watch_settings import (QUICKPANEL_KEY, dconf_arg, effective_settings,
                              quickpanel_ids, quickpanel_state,
-                             quickpanel_write_arg, writable, parse_mce_wake)
+                             quickpanel_write_arg, writable, parse_mce_wake,
+                             parse_locale)
 
 
 def wait_for_adb(codename: str, cfg: dict,
@@ -372,9 +373,15 @@ class Watch:
         # Wake gestures live in MCE, not dconf — one extra bounded read; a
         # watch without the lines just reports unknown states.
         rc2, mout, _ = self.t.shell("mcetool", timeout=10)
+        # System locale: what the watch reports and what it carries.
+        rc3, lout, _ = self.t.shell(
+            shlex.quote("localectl status 2>/dev/null; echo ---LOC---; "
+                        "ls /usr/share/locale 2>/dev/null"), timeout=10)
+        lstatus, _, ldirs = (lout if rc3 == 0 else "").partition("---LOC---")
         return {"settings": effective_settings(out),
                 "quickpanel": quickpanel_state(out),
-                "mce": parse_mce_wake(mout if rc2 == 0 else "")}
+                "mce": parse_mce_wake(mout if rc2 == 0 else ""),
+                "locale": parse_locale(lstatus, ldirs)}
 
     def quickpanel_set(self, tid: str, on: bool) -> bool:
         """Enable/disable one quick-panel toggle. dconf stores the whole set as a

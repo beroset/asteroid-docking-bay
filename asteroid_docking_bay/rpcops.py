@@ -230,7 +230,8 @@ def _watch_settings_read(args):
     if data is None:
         return {"ok": False, "error": "watch unreachable"}
     return {"ok": True, "settings": data["settings"],
-            "quickpanel": data["quickpanel"], "mce": data.get("mce")}
+            "quickpanel": data["quickpanel"], "mce": data.get("mce"),
+            "locale": data.get("locale")}
 
 
 @DISPATCH.op("watch.quickpanel_set")
@@ -1088,6 +1089,21 @@ def _register_lifecycle(op_cls, name, stop_error):
 _register_lifecycle(ChargeOp, "charge", "no charge running")
 _register_lifecycle(WorkbenchOp, "workbench", "no workbench active")
 _register_lifecycle(DrainOp, "drain", "no drain test running")
+
+
+@DISPATCH.op("watch.locale_set")
+def _watch_locale_set(args):
+    """Set the system locale via localectl — the same localed the settings app
+    drives. Gated on what the WATCH itself lists under /usr/share/locale, so a
+    locale it does not carry (or anything shell-shaped) can never be set."""
+    serial, loc = args["serial"], args.get("locale", "")
+    w = _watch(serial)
+    data = w.settings_read() or {}
+    avail = (data.get("locale") or {}).get("available") or []
+    if loc not in avail:
+        return {"ok": False, "error": "this watch does not carry that locale"}
+    rc, _, err = w.t.shell(f"localectl set-locale LANG={loc}", timeout=12)
+    return {"ok": rc == 0, **({} if rc == 0 else {"error": err.strip()[:120]})}
 
 
 @DISPATCH.op("watch.wake_set")
