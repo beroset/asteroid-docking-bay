@@ -137,3 +137,34 @@ These are what make a number mean something a week later on another watch:
 - Whether P8/P9 ship at all, given they cannot join the comparable score.
 - Whether the bench watchface lives in this repo, in unofficial-watchfaces, or
   ships as an a-d-b asset pushed on demand.
+
+## Parked idea: the Benchy phases (moWerk, 2026-07-27) — NOT built
+
+Borrow 3D printing's own benchmark. Three escalating variants, the last two
+worth a phase each because they hit paths nothing else here touches:
+
+1. **Flat Benchy** — a PNG/SVG of the boat bumping in size and rotating.
+   Cheap to add; tests texture sampling + rotation, and it is instantly
+   readable as "this is a benchmark".
+2. **Wireframe Benchy** — the real thing in motion: decimate the STL
+   host-side to a few hundred edges, embed the vertex/edge list in the QML,
+   and per frame rotate (3×3 matrix in JS) → project → feed a `ShapePath`.
+   The full model is ~225k triangles, so decimation is mandatory; the
+   remaining JS matrix work plus per-frame re-tessellation is exactly the
+   CPU/geometry stress a benchmark wants.
+3. **Shader Benchy** — the missing shader phase. Qt6 needs a baked `.qsb`
+   (inline GLSL crashes it), so this one carries a build step the others do
+   not. `ShaderEffect` supports a `GridMesh` + vertex shader, so a
+   height/normal map of the hull displaced and lit per frame is achievable
+   without a mesh pipeline; a raymarched SDF is the prettier, slower option.
+
+Probe first: whether `QtQuick3D` exists on the images (`ls /usr/lib/qml/QtQuick3D`).
+If it does, variant 3 becomes trivial and gains a real 3D phase; if not — the
+likely case — variants 2 and 3 stand on their own.
+
+**Licence check before anything ships.** 3DBenchy was long CC BY-ND
+(NoDerivatives — which a wireframe or shader adaptation would arguably
+violate); after the 2025 takedown controversy it was, as recalled, released
+into the public domain. RECALLED, NOT VERIFIED: confirm the current terms at
+the source before publishing any derived artefact, and attribute Creative
+Tools regardless of what the licence strictly requires.
