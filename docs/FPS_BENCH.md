@@ -1,9 +1,15 @@
 # a-d-b-bench — the fleet FPS benchmark watchface (spec)
 
-Status: **spec, nothing built yet.** Drafted 2026-07-27 by moWerk (concept,
-visual direction, phase ideas) + Claude (phase design against the RAG,
-measurement and comparability rules). Watchface authoring is moWerk's domain;
-this spec is the proposal he reviews before any QML is written.
+Status: **spec + the watchface written; never run on hardware.** Drafted
+2026-07-27 by moWerk (concept, visual direction, phase ideas, the Nutty Null
+layout) + Claude (phase design against the RAG, measurement and comparability
+rules, the QML). The face is `assets/watchfaces/nutty-benchy.qml` — it passes
+qmllint, which says nothing about how it renders. Watchface authoring is
+moWerk's domain; he reviews it before it ships anywhere.
+
+**Qt6 only** (moWerk, standing decision): the migration is near complete, so
+no Qt5 path is written and any Qt5 remainder found on the way is refactored
+out rather than accommodated.
 
 ## Why a watchface
 
@@ -20,13 +26,25 @@ each watch has different content, so the numbers would not be comparable, and
 "it scrolled badly" is not a diagnosis. Fixed scene, fixed phases, per-phase
 numbers.
 
-## What it looks like
+## What it looks like — nutty-benchy
 
-It is a real watchface — it shows the time — that runs a **timed phase
-sequence** like a desktop GPU benchmark: phase name and progress, the live FPS
-in large type, and a rolling frame-time graph (the last ~120 frames) so drops
-are visible as spikes, not just a lower average. moWerk's visual direction:
-striking to watch, not a test pattern.
+It wears **Nutty Null**'s layout (moWerk's own watchface, unofficial-watchfaces
+`digital-nutty-null`), which stays fixed: one huge glyph dead-centre, a
+travelling numeral on the inner rim, one whisper line below. Three changes make
+it a benchmark:
+
+- the **centre glyph carries the workload** and is Black weight rather than
+  Thin — heavier coverage means a bigger glyph bitmap to rasterise and upload,
+  which raises the worst case instead of merely looking different;
+- the hour numeral and its fading neighbours become the **FPS rotator**: the
+  live FPS travels the rim and its trail *follows* it, each trailing numeral
+  holding an older reading, so values push backwards through the tail as the
+  head sweeps on. The trail IS the history display — no separate graph needed;
+- the whisper line names the phase and its position in the run.
+
+It opens with a **5→0 countdown** so there is time to reach the rig and find
+the watch among the others, then runs the phases back to back. Trail numerals
+turn red below 45 fps, so a bad phase is visible from across the room.
 
 ## Phases
 
@@ -58,10 +76,9 @@ Optional, NOT part of the comparable core score:
 
 - **P8 GC pressure** — `createObject`/`destroy` churn (RAG lists it as
   expensive). Jittery by nature; run it only when explicitly asked.
-- **P9 Shader** — a `ShaderEffect` pass. Cross-version hazard: Qt6 requires a
-  pre-compiled `.qsb` and **crashes on inline GLSL**, Qt5 needs the inline
-  GLSL. Two different artefacts = not the same test. Ship both, report
-  separately, never fold into the score.
+- **P9 Shader** — a `ShaderEffect` pass, if wanted later. Qt6 requires a
+  pre-compiled `.qsb` (inline GLSL crashes), so it needs a build step the
+  other phases do not: `qsb --glsl '100 es,120,150' -o out.frag.qsb in.frag`.
 
 ## Measuring the frames
 
@@ -88,9 +105,10 @@ These are what make a number mean something a week later on another watch:
    phases (P3, P4) do proportionally more work on a bigger panel — that is real
    hardware truth, so report **raw FPS and Mpix/s side by side** and state which
    phases are pixel-normalized.
-3. **Qt5 ≠ Qt6 on effects.** `Qt5Compat.GraphicalEffects` `DropShadow` and Qt6's
-   `MultiEffect` are different code paths, so P3 is **version-scoped**: compare
-   it only within a Qt generation.
+3. **One Qt.** Qt6 only, fleet-wide — `MultiEffect`, never
+   `Qt5Compat.GraphicalEffects`. This removes what would otherwise have been
+   the ugliest comparability caveat: two effect code paths producing numbers
+   that could not be compared to each other.
 4. **Never `layer.samples`** — a confirmed no-op on all AsteroidOS hardware that
    only logs a warning.
 5. **Gate every animation** with `running: <phase active> && visible`. Rendering
