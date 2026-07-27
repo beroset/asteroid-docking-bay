@@ -237,6 +237,9 @@ _WEB_TEMPLATE = """\
     .bc-track{flex:1;position:relative;height:8px;background:#161b22;border-radius:4px}
     .bc-bar{position:absolute;top:1px;height:6px;background:#3fb950;border-radius:3px}
     .bc-bar.bc-crit{background:#d29922}
+    .bc-bar.bc-kern{background:#30506e}
+    .bc-run{position:absolute;top:3px;height:2px;background:rgba(63,185,80,.25);border-radius:1px}
+    .bc-axis{flex:1;position:relative;height:12px;font-size:9px;color:#6e7681;overflow:hidden}
     .bc-chain{color:#d29922}
     .bc-t{width:44px;text-align:right;color:#8b949e}
     .cc.stale-cc{border-color:#7a5b1e}.cc.stale-cc .cc-hd{background:#241d0e}
@@ -1302,20 +1305,38 @@ function bodyBoot(){
     inner+'</div>';
 }
 function bcHtml(d){
+  // Aligned with systemd-analyze plot's grammar (checked against the real
+  // SVG): axis BOUNDED to the boot window, a kernel band first, per unit an
+  // activation segment plus a faint running band to the window edge, and
+  // second-gridlines. Units (re)started after boot are excluded — one of
+  // them once stretched the axis to hours and crushed every bar (catfish).
   const fin=d.finish_s||0,us=d.userspace_s||0;
-  const all=d.units||[],chain=d.critical_chain||[],units=all.filter(u=>u.dur_s>=0.05||chain.includes(u.unit));
-  const span=Math.max(fin,0.1,...all.map(u=>u.start_s+u.dur_s));
+  const all=d.units||[],chain=d.critical_chain||[];
+  const span=Math.max(fin*1.05,us,0.1);
+  const inWin=all.filter(u=>u.start_s<=span);
+  const late=all.length-inWin.length;
+  const units=inWin.filter(u=>u.dur_s>=0.05||chain.includes(u.unit));
+  const step=span>60?10:span>25?5:span>12?2:1;
+  let ticks='';for(let t=0;t<=span;t+=step)ticks+='<span style="position:absolute;left:'+(t/span*100).toFixed(1)+'%">'+t+'s</span>';
+  const grid='background:repeating-linear-gradient(to right,#1b2129 0,#1b2129 1px,transparent 1px,transparent '+(step/span*100).toFixed(2)+'%)';
   let h='<div class="dim" style="margin:2px 0 6px">kernel '+us.toFixed(1)+'s &middot; userspace '+Math.max(fin-us,0).toFixed(1)+'s &middot; finished '+fin.toFixed(1)+'s</div>';
   if(chain.length)h+='<div class="dim" style="margin:0 0 6px" title="the After= dependency chain that gated this boot — each unit waited for the previous">chain: <span class="bc-chain">'+chain.map(u=>esc(u.replace(/[.]service$/,''))).join(' &rarr; ')+'</span></div>';
+  h+='<div class="bc-row"><span class="bc-n"></span><span class="bc-axis" style="position:relative">'+ticks+'</span><span class="bc-t"></span></div>';
+  h+='<div class="bc-row"><span class="bc-n">kernel</span><span class="bc-track" style="'+grid+'"><span class="bc-bar bc-kern" style="left:0;width:'+(us/span*100).toFixed(1)+'%"></span></span><span class="bc-t">'+us.toFixed(1)+'s</span></div>';
   units.forEach(u=>{
     const crit=chain.includes(u.unit);
-    const l=(u.start_s/span*100).toFixed(1),w=Math.max(u.dur_s/span*100,0.8).toFixed(1);
+    const l=(u.start_s/span*100),w=Math.max(u.dur_s/span*100,0.5);
+    const runL=Math.min(l+w,100),runW=Math.max(100-runL,0);
     h+='<div class="bc-row"><span class="bc-n" title="'+esc(u.unit)+(u.after&&u.after.length?' — after: '+esc(u.after.join(' ')):'')+'">'+esc(u.unit.replace(/[.]service$/,''))+'</span>'+
-       '<span class="bc-track"><span class="bc-bar'+(crit?' bc-crit':'')+'" style="left:'+l+'%;width:'+w+'%"></span></span>'+
+       '<span class="bc-track" style="'+grid+'">'+
+         '<span class="bc-run" style="left:'+runL.toFixed(1)+'%;width:'+runW.toFixed(1)+'%"></span>'+
+         '<span class="bc-bar'+(crit?' bc-crit':'')+'" style="left:'+l.toFixed(1)+'%;width:'+w.toFixed(1)+'%"></span></span>'+
        '<span class="bc-t">'+u.dur_s.toFixed(2)+'s</span></div>';});
   if(!units.length)h+='<div class="dim">no per-service spans recorded this boot</div>';
+  if(late>0)h+='<div class="dim" style="margin-top:4px">'+late+' unit(s) (re)started after boot — not shown</div>';
   return h;
 }
+
 function ccBuzz(){fetch('/api/watch/'+encodeURIComponent(ctlSerial)+'/buzz',{method:'POST'}).then(()=>toast('buzzed'));}
 function ccScreen(on){ctlPending.add('sys:screen');renderControl(ctlCache[ctlSerial]||{});setTimeout(()=>{ctlPending.delete('sys:screen');},2600);fetch('/api/watch/'+encodeURIComponent(ctlSerial)+'/screen/'+(on?'on':'off'),{method:'POST'}).then(()=>{toast(on?'screen forced on \u2014 release it when done!':'screen released');ctlFetch();refresh();});}
 function releaseScreen(s){fetch('/api/watch/'+encodeURIComponent(s)+'/screen/off',{method:'POST'}).then(()=>{toast('screen released');refresh()});}
