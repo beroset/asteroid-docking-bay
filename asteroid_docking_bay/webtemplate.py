@@ -1758,6 +1758,23 @@ function avRows(kind){
   }
   return '<div class="cc-grid">'+items+'</div>';
 }
+function wakeRows(){
+  // MCE wake gestures in the watch's own vocabulary — the doubletap policy is
+  // a tri-state, not a boolean, so it renders as its three states verbatim.
+  const st=ctlSettings[ctlSerial], mce=(st&&st.mce)||{};
+  const pick=(kind,cur,vals)=>vals.map(v=>
+    `<button class="cc-act mini${cur===v?' on':''}${ctlPending.has('wake:'+kind+v)?' cmd-pending':''}" onclick="wakeSet('${kind}','${v}')">${v}</button>`).join(' ');
+  return '<div class="cc-grid">'+
+    '<div class="cc-k">Tap to wake</div><div class="cc-v">'+pick('tap',mce.doubletap,['never','always','proximity'])+'</div>'+
+    '<div class="cc-k">Tilt to wake</div><div class="cc-v">'+pick('tilt',mce.wrist,['enabled','disabled'])+'</div></div>';
+}
+function wakeSet(kind,value){
+  const s=ctlSerial;
+  ctlPending.add('wake:'+kind+value);renderControl(ctlCache[s]||{});
+  fetch('/api/watch/'+encodeURIComponent(s)+'/wake/'+kind+'/'+value,{method:'POST'})
+    .then(r=>r.json()).then(d=>{if(!d.ok)toast('wake setting failed'+(d.error?': '+d.error:''));setTimeout(()=>settingsFetch(s),400);})
+    .catch(()=>{toast('wake setting failed');settingsFetch(s);});
+}
 function usbModeRows(d){
   // Doubled from Radios (mo): users coming from the on-watch settings app may
   // expect the USB mode here. Same switch, same handlers.
@@ -1771,7 +1788,7 @@ function usbModeRows(d){
 function bodySet(d){
   return _clps('set-clock','Clock',_wrapInner(bodyClock(d)))
     +_clps('set-sound','Sound',avRows('sound'))
-    +_clps('set-display','Display',avRows('display')+setGroup('Display'))
+    +_clps('set-display','Display',avRows('display')+setGroup('Display')+wakeRows())
     +_clps('set-nightstand','Nightstand',setGroup('Nightstand'))
     +_clps('set-time','Time &amp; units',setGroup('Time & units'))
     +_clps('set-appearance','Appearance',setGroup('Appearance'))

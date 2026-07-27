@@ -117,6 +117,7 @@ Deliberately mirrors the existing `/api/*` routes and module seams — the
 | `onboard.sweep_skip` | skip the running sweep's current port (boot-wait aborts) |
 | `watch.bootchart` | systemd boot accounting: summary + per-service activation spans |
 | `watch.diag` | kernel diagnostics: suspend blockers, freq residency, eMMC wear, failed units |
+| `watch.wake_set` | MCE wake gestures: doubletap policy, wrist/tilt detection |
 
 The dispatch table is an allow-list; unknown ops get `ok:false`. Nothing
 generic (no eval-style "run this shell command" op) — adding a capability

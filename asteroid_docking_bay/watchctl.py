@@ -21,7 +21,7 @@ from .transport import AdbTransport
 from .config import ChargeConfig, find_serial_for_codename, save_config
 from .watch_settings import (QUICKPANEL_KEY, dconf_arg, effective_settings,
                              quickpanel_ids, quickpanel_state,
-                             quickpanel_write_arg, writable)
+                             quickpanel_write_arg, writable, parse_mce_wake)
 
 
 def wait_for_adb(codename: str, cfg: dict,
@@ -369,8 +369,12 @@ class Watch:
         rc, out, _ = self.user_cmd("HOME=/home/ceres dconf dump /", timeout=15)
         if rc != 0:
             return None
+        # Wake gestures live in MCE, not dconf — one extra bounded read; a
+        # watch without the lines just reports unknown states.
+        rc2, mout, _ = self.t.shell("mcetool", timeout=10)
         return {"settings": effective_settings(out),
-                "quickpanel": quickpanel_state(out)}
+                "quickpanel": quickpanel_state(out),
+                "mce": parse_mce_wake(mout if rc2 == 0 else "")}
 
     def quickpanel_set(self, tid: str, on: bool) -> bool:
         """Enable/disable one quick-panel toggle. dconf stores the whole set as a

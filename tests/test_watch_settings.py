@@ -67,7 +67,7 @@ def test_effective_set_key_overrides_default_and_marks_set():
 def test_catalog_covers_only_non_redundant_settings():
     rows = effective_settings("")
     assert len(rows) == len(SETTINGS)
-    assert all(r["type"] in ("bool", "path") for r in rows)
+    assert all(r["type"] in ("bool", "path", "value") for r in rows)   # value = read-only scalar (burn-in level)
     keys = {r["key"] for r in rows}
     # The controls that already live in other tabs/menus must NOT be duplicated.
     assert not any(t in k for k in keys
@@ -273,3 +273,31 @@ def test_weather_sync_preserves_apostrophes_in_city_names(monkeypatch):
     w.weather_sync([("/org/asteroidos/weather/city", "string", "St. John's")])
     joined = " ".join(cmds)
     assert "John" in joined and "Johns" not in joined, joined   # not stripped
+
+
+def test_parse_mce_wake_reads_both_and_degrades():
+    """Wake gestures come from mcetool's own lines, verbatim vocabulary;
+    absent lines (older mce builds) degrade to None, never a guess."""
+    from asteroid_docking_bay.watch_settings import parse_mce_wake
+    out = ("Double-tap wakeup policy:            proximity \n"
+           "Wrist gesture detection:             enabled\n")
+    assert parse_mce_wake(out) == {"doubletap": "proximity", "wrist": "enabled"}
+    assert parse_mce_wake("") == {"doubletap": None, "wrist": None}
+
+
+def test_wake_set_refuses_foreign_vocabulary(monkeypatch):
+    """The wake op can only express the watch's own values — anything else is
+    refused before a shell is ever built. Planted-bug: drop the validation
+    and the injection-shaped value reaches mcetool."""
+    import asteroid_docking_bay.rpcops as rpcops
+    called = []
+    monkeypatch.setattr(rpcops, "_watch",
+                        lambda s: type("W", (), {"t": type("T", (), {
+                            "shell": staticmethod(lambda c, timeout=10:
+                                                  called.append(c) or (0, "", ""))})()})())
+    bad = rpcops.DISPATCH._data["watch.wake_set"](
+        {"serial": "S1", "kind": "tap", "value": "always; rm -rf /"})
+    assert bad["ok"] is False and not called
+    ok = rpcops.DISPATCH._data["watch.wake_set"](
+        {"serial": "S1", "kind": "tilt", "value": "disabled"})
+    assert ok["ok"] is True and "wrist-gesture-detection=disabled" in called[0]

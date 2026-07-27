@@ -229,7 +229,8 @@ def _watch_settings_read(args):
     data = _watch(args["serial"]).settings_read()
     if data is None:
         return {"ok": False, "error": "watch unreachable"}
-    return {"ok": True, "settings": data["settings"], "quickpanel": data["quickpanel"]}
+    return {"ok": True, "settings": data["settings"],
+            "quickpanel": data["quickpanel"], "mce": data.get("mce")}
 
 
 @DISPATCH.op("watch.quickpanel_set")
@@ -1087,6 +1088,22 @@ def _register_lifecycle(op_cls, name, stop_error):
 _register_lifecycle(ChargeOp, "charge", "no charge running")
 _register_lifecycle(WorkbenchOp, "workbench", "no workbench active")
 _register_lifecycle(DrainOp, "drain", "no drain test running")
+
+
+@DISPATCH.op("watch.wake_set")
+def _watch_wake_set(args):
+    """Set a wake gesture over MCE: kind 'tap' (doubletap policy never/always/
+    proximity) or 'tilt' (wrist gesture enabled/disabled). Values outside the
+    watch's own vocabulary are refused here — this op can express nothing
+    else."""
+    from .watch_settings import WAKE_FLAGS
+    kind, value = args.get("kind"), args.get("value")
+    if kind not in WAKE_FLAGS or value not in WAKE_FLAGS[kind][1]:
+        return {"ok": False, "error": "unknown wake gesture or value"}
+    flag = WAKE_FLAGS[kind][0]
+    rc, _, err = _watch(args["serial"]).t.shell(f"mcetool {flag}={value}",
+                                                timeout=10)
+    return {"ok": rc == 0, **({} if rc == 0 else {"error": err.strip()[:120]})}
 
 
 @DISPATCH.op("watch.diag")

@@ -37,6 +37,8 @@ SETTINGS = [
             "Nightstand always-on", "bool", True),
     Setting("Nightstand", "/desktop/asteroid/nightstand/use-custom-watchface",
             "Nightstand custom watchface", "bool", False),
+    Setting("Display", "/org/asteroidos/settings/burn-in-protection-level",
+            "Burn-in protection level", "value", 0),
     Setting("Appearance", "/desktop/asteroid/watchface", "Watchface", "path", None),
     Setting("Appearance", "/desktop/asteroid/applauncher", "Launcher", "path", None),
     Setting("Appearance", "/desktop/asteroid/background-filename", "Wallpaper", "path", None),
@@ -176,3 +178,30 @@ def quickpanel_write_arg(states):
     body = ", ".join(f"'{tid}': <{'true' if states.get(tid) else 'false'}>"
                      for tid, _, _ in QUICKPANEL)
     return "{" + body + "}"
+
+
+# ── MCE wake gestures ────────────────────────────────────────────────────────
+# Tap-to-wake and tilt-to-wake are MCE settings, not dconf (upstream
+# asteroid-settings drives them over MCE D-Bus; the shell equivalent is
+# mcetool --set-doubletap-wakeup / --set-wrist-gesture-detection). Values are
+# surfaced verbatim — the tri-state doubletap policy is the watch's own
+# vocabulary, not reinterpreted as a boolean.
+WAKE_FLAGS = {
+    "tap":  ("--set-doubletap-wakeup", ("never", "always", "proximity")),
+    "tilt": ("--set-wrist-gesture-detection", ("enabled", "disabled")),
+}
+
+
+def parse_mce_wake(out):
+    """Current wake-gesture states from full `mcetool` output:
+    {'doubletap': never|always|proximity|None, 'wrist': enabled|disabled|None}.
+    None = the line is absent on this watch/mce build. Pure — see tests."""
+    import re
+    res = {"doubletap": None, "wrist": None}
+    m = re.search(r"Double-tap wakeup policy:\s*(\S+)", out)
+    if m and m.group(1) in WAKE_FLAGS["tap"][1]:
+        res["doubletap"] = m.group(1)
+    m = re.search(r"[Ww]rist.*?:\s*(enabled|disabled)", out)
+    if m:
+        res["wrist"] = m.group(1)
+    return res
