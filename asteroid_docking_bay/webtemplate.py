@@ -48,7 +48,7 @@ _WEB_TEMPLATE = """\
     /* A disconnected watch's name dims well down, so the connected (full-white)
        ones stand out at a glance. */
     .offname{opacity:.6}
-    .cc{position:fixed;z-index:100;display:none;width:auto;min-width:340px;max-width:94vw;min-height:80px;background:#161b22;border:1px solid #30363d;border-radius:8px;box-shadow:0 10px 34px rgba(0,0,0,.6);font-size:12px;overflow:auto;resize:both}
+    .cc{position:fixed;z-index:100;display:none;width:560px;min-width:340px;max-width:94vw;min-height:80px;max-height:calc(100vh - 16px);background:#161b22;border:1px solid #30363d;border-radius:8px;box-shadow:0 10px 34px rgba(0,0,0,.6);font-size:12px;overflow:auto;resize:both}
     .cc-cols{display:flex;flex-wrap:wrap}
     .cc-col{flex:1 1 210px;min-width:200px}
     .cc-sec{padding:8px 14px}
@@ -1051,6 +1051,7 @@ function render(data){
 // and NO graphReset, so every tab's graph keeps filling across a switch.
 let ctlSerial=null, ctlName=null, ctlAX=0, ctlAY=0;
 let ctlTab='vit', ctlSshIp=null, ctlMode=null;
+let ctlRowTop=0, ctlRowH=0;   // the triggering row's geometry (see placeCC)
 let ctlMoved=false, ctlPlaced=false, _drag=null;   // manual pos, placed-once, active drag
 // The tab bar. Order is System → Network → Battery here; Settings and Live join
 // in later steps, landing the final System · Settings · Network · Battery · Live.
@@ -1140,11 +1141,30 @@ function placeOverlay(el,ax,ay){
   if(top+h>window.innerHeight-8) top=ay-h-10;
   el.style.left=Math.max(8,left)+'px'; el.style.top=Math.max(8,top)+'px';
 }
+// The Control Center anchors to its ROW, not the click point (mo): the panel
+// header carries the same codename as the row, so it sits ON that row and
+// covers it — no doubled codename, and the window starts high enough to use
+// the height it has. Horizontally it opens right of the product photo, which
+// with the fixed panel width keeps every tab the same size and place.
+// When the panel would run off the bottom, its BOTTOM matches the row instead
+// of flipping to an arbitrary gap above (mo).
+function ccTop(rowTop,rowH,hdH,panelH,viewH){
+  // Pure — see tests. Header centred on the row; if that overflows the
+  // viewport, the panel's BOTTOM matches the row's bottom instead.
+  let top=rowTop+(rowH-hdH)/2;
+  if(top+panelH>viewH-8)top=rowTop+rowH-panelH;
+  return Math.max(8,Math.round(top));
+}
+function placeCC(el){
+  const hd=el.querySelector('.cc-hd');
+  el.style.left=Math.max(8,Math.min(ctlAX,window.innerWidth-el.offsetWidth-8))+'px';
+  el.style.top=ccTop(ctlRowTop,ctlRowH,hd?hd.offsetHeight:32,el.offsetHeight,window.innerHeight)+'px';
+}
 // Place the window once per open (locked when real content lands), then leave
 // it put: re-placing on every tab switch and poll made it hop around as the tab
 // bodies differ in size (mo). A drag pins it the same way.
 function ctlPlace(lock){
-  if(!ctlMoved&&!ctlPlaced)placeOverlay(document.getElementById('cc'),ctlAX,ctlAY);
+  if(!ctlMoved&&!ctlPlaced)placeCC(document.getElementById('cc'));
   if(lock)ctlPlaced=true;
 }
 // Drag the window by its title bar to park it beside a toggle. The header is
@@ -1178,6 +1198,13 @@ function paintStale(serial,curSerial,cacheHas,renderFn){
 function openControl(serial,name,ev,tab,sshIp,mode){
   ev.stopPropagation(); graphReset();      // fresh graphs for a fresh watch, not per tab
   ctlSerial=serial; ctlName=name; ctlAX=ev.clientX; ctlAY=ev.clientY;
+  // Row geometry drives the placement; the click point is only the fallback
+  // (an orbit row or a caller outside the table has no thumbnail to sit beside).
+  const _row=(ev.target&&ev.target.closest)?ev.target.closest('tr'):null;
+  const _rr=_row?_row.getBoundingClientRect():null;
+  ctlRowTop=_rr?_rr.top:ev.clientY; ctlRowH=_rr?_rr.height:0;
+  const _ph=_row?_row.querySelector('.thumbwrap,img.wthumb'):null;
+  if(_ph)ctlAX=_ph.getBoundingClientRect().right+10;
   ctlTab=tab||'vit'; ctlMoved=false; ctlPlaced=false;   // a new open re-anchors
   // Reset the click's USB context each open — a codename/battery open carries
   // none, and a stale value from a previous open is exactly what made the
@@ -1786,16 +1813,20 @@ function usbModeRows(d){
          '<div class="cc-k">Switch</div><div class="cc-v">'+btn+'</div></div>';
 }
 function bodySet(d){
-  return _clps('set-clock','Clock',_wrapInner(bodyClock(d)))
-    +_clps('set-sound','Sound',avRows('sound'))
-    +_clps('set-display','Display',avRows('display')+setGroup('Display')+wakeRows())
+  // Section order mirrors the on-watch settings app (mo), so muscle memory
+  // carries over: Display, Nightstand, Quick panel, Wallpaper & Watchface,
+  // Sound, Time & Date (the one open by default), Units, USB mode, Weather.
+  return _clps('set-display','Display',avRows('display')+setGroup('Display')+wakeRows())
     +_clps('set-nightstand','Nightstand',setGroup('Nightstand'))
-    +_clps('set-time','Time &amp; units',setGroup('Time & units'))
-    +_clps('set-appearance','Appearance',setGroup('Appearance'))
     +_clps('set-quickpanel','Quick panel',_wrapInner(bodyQuickpanel((ctlSettings[ctlSerial]||{}).quickpanel)))
+    +_clps('set-appearance','Wallpaper &amp; Watchface',setGroup('Appearance'))
+    +_clps('set-sound','Sound',avRows('sound'))
+    +_clps('set-clock','Time &amp; Date',_wrapInner(bodyClock(d))+setGroup('Time & Date'))
+    +_clps('set-units','Units',setGroup('Units'))
     +_clps('set-usb','USB mode',usbModeRows(d))
     +_clps('set-weather','Weather',_wrapInner(bodyWeather()));
 }
+
 function avRecord(){
   const box=document.getElementById('av-mic'), s=ctlSerial; if(!box)return;
   box.innerHTML='<span class="dim">recording 5s&hellip;</span>';

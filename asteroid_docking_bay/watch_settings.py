@@ -25,9 +25,9 @@ Setting = namedtuple("Setting", "group key label type default")
 #   "path" — the currently-selected file, shown read-only (mo: display only, no
 #            picker — a fleet manager rarely needs to set a watchface remotely)
 SETTINGS = [
-    Setting("Time & units", "/org/asteroidos/settings/use-12h-format",
+    Setting("Time & Date", "/org/asteroidos/settings/use-12h-format",
             "12-hour clock", "bool", False),
-    Setting("Time & units", "/org/asteroidos/settings/use-fahrenheit",
+    Setting("Units", "/org/asteroidos/settings/use-fahrenheit",
             "Fahrenheit units", "bool", False),
     Setting("Display", "/org/asteroidos/settings/always-on-display",
             "Always-on display", "bool", True),
