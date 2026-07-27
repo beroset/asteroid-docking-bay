@@ -232,6 +232,7 @@ _WEB_TEMPLATE = """\
     tr.justplugged>td{animation:plug 2s ease-out}
     @keyframes plug{0%{background:rgba(31,111,235,.4)}100%{background:transparent}}
     .wimg-shot.shape-round{border-radius:50%}.wimg-shot.shape-rect{border-radius:4px}
+    .clps-inner>.cc-sec{border:none;margin:0;padding:0}.clps-inner .cc-sech{display:none}
     .bc-row{display:flex;align-items:center;gap:6px;font-size:10px;line-height:1.5}
     .bc-n{width:128px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#8b949e}
     .bc-track{flex:1;position:relative;height:8px;background:#161b22;border-radius:4px}
@@ -1045,7 +1046,7 @@ let ctlTab='vit', ctlSshIp=null, ctlMode=null;
 let ctlMoved=false, ctlPlaced=false, _drag=null;   // manual pos, placed-once, active drag
 // The tab bar. Order is System → Network → Battery here; Settings and Live join
 // in later steps, landing the final System · Settings · Network · Battery · Live.
-const CTL_TABS=[['ident','Identity'],['vit','Vitals'],['net','Radios'],['bat','Power'],['doc','Doctor'],['set','Settings']];
+const CTL_TABS=[['ident','Identity'],['vit','Vitals'],['net','Radios'],['bat','Power'],['diag','Diag'],['ana','Analysis'],['set','Settings']];
 // Last-fetched payload per serial, so re-opening paints instantly from the
 // previous values while the fresh fetch is in flight — and a self-cancelling
 // poll keeps the open window live (important over SSH, where a fetch is slow).
@@ -1181,7 +1182,8 @@ function openControl(serial,name,ev,tab,sshIp,mode){
   cc.style.display='block';
   if(ctlTab==='bat')biHistFetch(serial);
   if(ctlTab==='set'){settingsFetch(serial);if(wxData===null)wxFetch();if(wxOnWatch[serial]===undefined)wxFetchOnWatch(serial);}
-  if(ctlTab==='doc'){if(bcData[serial]===undefined)bcFetch(serial);if(dgData[serial]===undefined)dgFetch(serial);}
+  if(ctlTab==='diag'&&dgData[serial]===undefined)dgFetch(serial);
+  if(ctlTab==='ana'&&bcData[serial]===undefined)bcFetch(serial);
   if(ctlCache[serial])renderControl(ctlCache[serial]);   // instant, from the last open
   else{renderControl({});                        // full skeleton, real size, dash values
        paintStale(serial,()=>ctlSerial,()=>!!ctlCache[serial],renderControl);}
@@ -1197,7 +1199,8 @@ function ctlTabTo(tab){
   ctlTab=tab;                              // no refetch, no graphReset: the poll
   if(tab==='bat')biHistFetch(ctlSerial);   // keeps every metric filling regardless
   if(tab==='set'){settingsFetch(ctlSerial);if(wxData===null)wxFetch();if(wxOnWatch[ctlSerial]===undefined)wxFetchOnWatch(ctlSerial);}
-  if(tab==='doc'){if(bcData[ctlSerial]===undefined)bcFetch(ctlSerial);if(dgData[ctlSerial]===undefined)dgFetch(ctlSerial);}
+  if(tab==='diag'&&dgData[ctlSerial]===undefined)dgFetch(ctlSerial);
+  if(tab==='ana'&&bcData[ctlSerial]===undefined)bcFetch(ctlSerial);
   renderControl(ctlCache[ctlSerial]||null);
 }
 function ctlFetch(){
@@ -1235,10 +1238,10 @@ function ctlChrome(d,body){
       `<span class="cc-x" onclick="closeControl()">&times;</span></div>`+
     `<div class="cc-tabs">${tabs}</div>`+
     `<div class="cc-body">${body}</div>`+
-    `<div class="cc-tgls">`+
+    ((ctlTab==='vit'||ctlTab==='bat')?`<div class="cc-tgls">`+
       `<button class="cc-tgl" onclick="ccBuzz()" title="vibrate to locate in the dock">Buzz</button>`+
       `<button class="cc-tgl${d&&d.screen_forced?' scrnon':''}${ctlPending.has('sys:screen')?' cmd-pending':''}" onclick="ccScreen(${d&&d.screen_forced?0:1})" title="${d&&d.screen_forced?'demo mode is ON — the screen is forced on and draining. Click to release.':'force the screen on (mce demo mode — stays on and drains until released!)'}">Screen: ${d&&d.screen_forced?'ON':'OFF'}</button>`+
-      `<button class="cc-tgl" onclick="doScreenshot('${(d&&d.serial)||ctlSerial}')" title="screenshot in a new tab">Shot</button></div>`;
+      `<button class="cc-tgl" onclick="doScreenshot('${(d&&d.serial)||ctlSerial}')" title="screenshot in a new tab">Shot</button></div>`:'');
 }
 function renderControl(d){
   const cc=document.getElementById('cc');
@@ -1249,7 +1252,7 @@ function renderControl(d){
   const a=document.activeElement;
   if(a&&a.tagName==='INPUT'&&cc.contains(a))return;
   cc.classList.toggle('stale-cc',!!(d&&d.stale));
-  const body=ctlTab==='set'?bodySet(d):ctlTab==='net'?bodyNet(d):ctlTab==='bat'?bodyBat(d):ctlTab==='doc'?bodyDoc():ctlTab==='ident'?bodyIdent(d):bodyVit(d);
+  const body=ctlTab==='set'?bodySet(d):ctlTab==='net'?bodyNet(d):ctlTab==='bat'?bodyBat(d):ctlTab==='diag'?bodyDiagTab():ctlTab==='ana'?bodyAna():ctlTab==='ident'?bodyIdent(d):bodyVit(d);
   cc.innerHTML=ctlChrome(d,body);
   ctlPlace(true);
 }
@@ -1299,9 +1302,9 @@ function dgFetch(serial){
   dgData[serial]=false;
   fetch('/api/watch/'+encodeURIComponent(serial)+'/diag').then(r=>r.json()).then(d=>{
     dgData[serial]=d;
-    if(ctlSerial===serial&&ctlTab==='doc')renderControl(ctlCache[serial]||{});
+    if(ctlSerial===serial&&(ctlTab==='diag'||ctlTab==='ana'))renderControl(ctlCache[serial]||{});
   }).catch(()=>{dgData[serial]={ok:false,error:'fetch failed'};
-    if(ctlSerial===serial&&ctlTab==='doc')renderControl(ctlCache[serial]||{});});
+    if(ctlSerial===serial&&(ctlTab==='diag'||ctlTab==='ana'))renderControl(ctlCache[serial]||{});});
 }
 function dgHtml(d){
   const S=(t,inner)=>'<div class="cc-sec"><div class="cc-sech">'+t+'</div>'+inner+'</div>';
@@ -1335,23 +1338,22 @@ function bcFetch(serial){
   bcData[serial]=false;
   fetch('/api/watch/'+encodeURIComponent(serial)+'/bootchart').then(r=>r.json()).then(d=>{
     bcData[serial]=d;
-    if(ctlSerial===serial&&ctlTab==='doc')renderControl(ctlCache[serial]||{});
+    if(ctlSerial===serial&&(ctlTab==='diag'||ctlTab==='ana'))renderControl(ctlCache[serial]||{});
   }).catch(()=>{bcData[serial]={ok:false,error:'fetch failed'};
-    if(ctlSerial===serial&&ctlTab==='doc')renderControl(ctlCache[serial]||{});});
+    if(ctlSerial===serial&&(ctlTab==='diag'||ctlTab==='ana'))renderControl(ctlCache[serial]||{});});
 }
-// Doctor tab: verdict first, instruments behind collapsed sections (the
-// disclosure pattern mo asked to judge — Diag + Boot merged, one question:
-// "why is it slow/draining/broken?").
-let ccOpen=new Set();
+// Diag + Analysis tabs (split from the too-tall Doctor, mo): Diag = verdict
+// pills + the doctor dataset; Analysis = the boot waterfall. Collapse state
+// is shared app-wide; Settings seeds with only the Clock open.
+let ccOpen=new Set(['set-clock']);
 function ccSecToggle(id){if(ccOpen.has(id))ccOpen.delete(id);else ccOpen.add(id);renderControl(ctlCache[ctlSerial]||{});}
 function _clps(id,title,inner){
   const open=ccOpen.has(id);
   return '<div class="cc-sec"><div class="cc-sech" style="cursor:pointer" onclick="ccSecToggle(&#39;'+id+'&#39;)">'+(open?'&#9660;':'&#9654;')+' '+title+'</div>'+(open?inner:'')+'</div>';
 }
 function docRefresh(){delete bcData[ctlSerial];delete dgData[ctlSerial];bcFetch(ctlSerial);dgFetch(ctlSerial);renderControl(ctlCache[ctlSerial]||{});}
-function bodyDoc(){
-  const bc=bcData[ctlSerial],dg=dgData[ctlSerial];
-  const pills=[];
+function docPills(){
+  const bc=bcData[ctlSerial],dg=dgData[ctlSerial],pills=[];
   if(dg&&dg.ok){
     if(dg.suspend)pills.push(dg.suspend.success>0?'sleeps &#10003;':'<span class="err">never suspends</span>');
     if((dg.emmc_life||[]).length)pills.push('flash '+esc(dg.emmc_life[0]));
@@ -1359,12 +1361,26 @@ function bodyDoc(){
     pills.push(nf?'<span class="err">'+nf+' failed unit'+(nf>1?'s':'')+'</span>':'units &#10003;');
   }
   if(bc&&bc.ok&&bc.finish_s)pills.push('boot '+bc.finish_s.toFixed(1)+'s');
-  let h='<div class="cc-sec"><div class="cc-sech">Doctor <a href="#" class="dim" style="float:right;text-decoration:none" onclick="docRefresh();return false" title="re-read all diagnostics">refresh</a></div>'+
+  return pills;
+}
+function bodyDiagTab(){
+  const dg=dgData[ctlSerial],pills=docPills();
+  let h='<div class="cc-sec"><div class="cc-sech">Diagnostics <a href="#" class="dim" style="float:right;text-decoration:none" onclick="docRefresh();return false" title="re-read all diagnostics">refresh</a></div>'+
     '<div style="margin:2px 0 6px">'+(pills.length?pills.join(' <span class="dim">&middot;</span> '):'<span class="dim">reading&hellip;</span>')+'</div></div>';
-  h+=_clps('doc-diag','Diagnostics',(dg===undefined||dg===false)?'<span class="dim">reading&hellip;</span>':(dg.ok?dgHtml(dg):'<span class="dim">'+esc(dg.error||'unavailable')+'</span>'));
-  h+=_clps('doc-boot','Boot analysis',(bc===undefined||bc===false)?'<span class="dim">reading&hellip;</span>':(bc.ok?bcHtml(bc):'<span class="dim">'+esc(bc.error||'unavailable')+'</span>'));
+  if(dg===undefined||dg===false)h+='<div class="cc-sec"><span class="dim">reading&hellip;</span></div>';
+  else if(!dg.ok)h+='<div class="cc-sec"><span class="dim">'+esc(dg.error||'unavailable')+'</span></div>';
+  else h+=dgHtml(dg);
   return h;
 }
+function bodyAna(){
+  const bc=bcData[ctlSerial];
+  let h='<div class="cc-sec"><div class="cc-sech">Boot analysis <a href="#" class="dim" style="float:right;text-decoration:none" onclick="delete bcData[ctlSerial];bcFetch(ctlSerial);renderControl(ctlCache[ctlSerial]||{});return false" title="re-read after a fresh boot">refresh</a></div></div>';
+  if(bc===undefined||bc===false)h+='<div class="cc-sec"><span class="dim">reading boot accounting&hellip;</span></div>';
+  else if(!bc.ok)h+='<div class="cc-sec"><span class="dim">'+esc(bc.error||'unavailable')+'</span></div>';
+  else h+='<div class="cc-sec">'+bcHtml(bc)+'</div>';
+  return h;
+}
+
 function bcHtml(d){
   // Aligned with systemd-analyze plot's grammar (checked against the real
   // SVG): axis BOUNDED to the boot window, a kernel band first, per unit an
@@ -1667,25 +1683,70 @@ function bodyClock(d){
       `<button class="cc-act mini" id="cc-time" onclick="ccSyncTime()" title="reset the watch clock + timezone to the host">Sync from host</button>`+
     `</div></div>`;
 }
-function bodySet(d){return bodyClock(d)+bodyAV()+bodyQuickpanel((ctlSettings[ctlSerial]||{}).quickpanel)+bodySetGroups()+bodyWeather();}
-function bodyAV(){
-  const av=avData[ctlSerial]; if(!av)return '';
-  const snap=(v,d)=>v!=null?Math.round(v/10)*10:d;   // to the nearest 10 (the slider step)
+// Settings: every sub-topic collapsible (all may be open at once), only the
+// Clock open by default (mo). .clps-inner CSS suppresses the wrapped
+// builders' own headers so the collapsible header is the only one.
+function _wrapInner(h){return '<div class="clps-inner">'+h+'</div>';}
+function setGroup(name){
+  const st=ctlSettings[ctlSerial];
+  if(!st)return '<span class="dim">loading&hellip;</span>';
+  if(!st.ok)return '<span class="err">'+esc(st.error||'unreachable')+'</span>';
+  const rows=(st.settings||[]).filter(r=>r.group===name);
+  const items=rows.map(r=>{
+    if(r.type==='bool'){
+      const on=!!r.value, def=r.is_set?'':' <span class="dim">(default)</span>';
+      return `<div class="cc-k">${esc(r.label)}${def}</div><div class="cc-v">`+
+        `<button class="cc-tgl set-tgl${on?' on':''}${ctlPending.has('set:'+r.key)?' cmd-pending':''}" onclick="settingsWrite('${r.key}',${on?0:1})">${on?'ON':'OFF'}</button></div>`;
+    }
+    const v=r.value?String(r.value):'', base=v?v.split('/').pop():'\u2014';
+    return `<div class="cc-k">${esc(r.label)}</div><div class="cc-v"><span title="${esc(v)}">${esc(base)}</span></div>`;
+  }).join('');
+  return items?'<div class="cc-grid">'+items+'</div>':'<span class="dim">nothing here</span>';
+}
+function avRows(kind){
+  const av=avData[ctlSerial]; if(!av)return '<span class="dim">loading&hellip;</span>';
+  const snap=(v,d)=>v!=null?Math.round(v/10)*10:d;
   const slider=(val,min,fn)=>`<input type="range" class="av-range" min="${min}" max="100" step="10" value="${val}" `+
     `oninput="this.nextElementSibling.textContent=this.value+'%'" onchange="${fn}(this.value)">`+
     `<span class="av-val">${val}%</span>`;
-  let items=`<div class="cc-k">Brightness</div><div class="cc-v av-sl">${slider(snap(av.brightness,50),10,'avBright')}</div>`;
-  if(av.has_speaker){
-    items+=`<div class="cc-k">Volume</div><div class="cc-v av-sl">${slider(snap(av.volume,50),0,'avVol')}</div>`;
-    const m=!!av.muted;
-    items+=`<div class="cc-k">Mute</div><div class="cc-v">`+
-      `<button class="cc-tgl set-tgl${m?' on':''}${ctlPending.has('av:mute')?' cmd-pending':''}" onclick="avMute(${m?0:1})">${m?'ON':'OFF'}</button></div>`;
+  let items='';
+  if(kind==='display'){
+    items=`<div class="cc-k">Brightness</div><div class="cc-v av-sl">${slider(snap(av.brightness,50),10,'avBright')}</div>`;
+  }else{
+    if(av.has_speaker){
+      items+=`<div class="cc-k">Volume</div><div class="cc-v av-sl">${slider(snap(av.volume,50),0,'avVol')}</div>`;
+      const m=!!av.muted;
+      items+=`<div class="cc-k">Mute</div><div class="cc-v">`+
+        `<button class="cc-tgl set-tgl${m?' on':''}${ctlPending.has('av:mute')?' cmd-pending':''}" onclick="avMute(${m?0:1})">${m?'ON':'OFF'}</button></div>`;
+    }
+    if(av.has_mic){
+      items+=`<div class="cc-k">Microphone</div><div class="cc-v av-mic" id="av-mic">`+
+        `<button class="cc-act mini" onclick="avRecord()" title="record 5s of mic audio, then play it back / download">Record 5s</button></div>`;
+    }
+    if(!items)items='<div class="cc-k dim">no speaker or mic</div><div class="cc-v"></div>';
   }
-  if(av.has_mic){
-    items+=`<div class="cc-k">Microphone</div><div class="cc-v av-mic" id="av-mic">`+
-      `<button class="cc-act mini" onclick="avRecord()" title="record 5s of mic audio, then play it back / download">Record 5s</button></div>`;
-  }
-  return `<div class="cc-sec"><div class="cc-sech">Display &amp; Sound</div><div class="cc-grid">${items}</div></div>`;
+  return '<div class="cc-grid">'+items+'</div>';
+}
+function usbModeRows(d){
+  // Doubled from Radios (mo): users coming from the on-watch settings app may
+  // expect the USB mode here. Same switch, same handlers.
+  const mode=ctlMode||(d&&d.transport)||'adb', isSsh=mode==='ssh';
+  const btn=isSsh
+    ? `<button class="cc-tgl" onclick="switchAdb('${esc((d&&d.serial)||ctlSerial)}')" title="switch this watch's USB gadget back to ADB">USB &#8594; ADB</button>`
+    : `<button class="cc-tgl" onclick="switchSsh('${esc((d&&d.serial)||ctlSerial)}')" title="switch this watch's USB gadget to SSH/developer mode">USB &#8594; SSH</button>`;
+  return '<div class="cc-grid"><div class="cc-k">Mode</div><div class="cc-v">'+(isSsh?'SSH (developer)':'ADB')+'</div>'+
+         '<div class="cc-k">Switch</div><div class="cc-v">'+btn+'</div></div>';
+}
+function bodySet(d){
+  return _clps('set-clock','Clock',_wrapInner(bodyClock(d)))
+    +_clps('set-sound','Sound',avRows('sound'))
+    +_clps('set-display','Display',avRows('display')+setGroup('Display'))
+    +_clps('set-nightstand','Nightstand',setGroup('Nightstand'))
+    +_clps('set-time','Time &amp; units',setGroup('Time & units'))
+    +_clps('set-appearance','Appearance',setGroup('Appearance'))
+    +_clps('set-quickpanel','Quick panel',_wrapInner(bodyQuickpanel((ctlSettings[ctlSerial]||{}).quickpanel)))
+    +_clps('set-usb','USB mode',usbModeRows(d))
+    +_clps('set-weather','Weather',_wrapInner(bodyWeather()));
 }
 function avRecord(){
   const box=document.getElementById('av-mic'), s=ctlSerial; if(!box)return;
@@ -1715,25 +1776,6 @@ function avMute(on){
   _avPost('mute/'+(on?'on':'off'),d=>{ctlPending.delete('av:mute');
     if(d&&d.ok&&avData[ctlSerial])avData[ctlSerial].muted=!!on; else toast('mute failed');
     renderControl(ctlCache[ctlSerial]||{});});
-}
-function bodySetGroups(){
-  const st=ctlSettings[ctlSerial];
-  if(!st)return `<div class="cc-sec"><span class="dim">loading&hellip;</span></div>`;
-  if(!st.ok)return `<div class="cc-sec"><span class="err">${esc(st.error||'unreachable')}</span></div>`;
-  const rows=st.settings||[], order=[], byGroup={};
-  rows.forEach(r=>{if(!(r.group in byGroup)){byGroup[r.group]=[];order.push(r.group);}byGroup[r.group].push(r);});
-  return order.map(g=>{
-    const items=byGroup[g].map(r=>{
-      if(r.type==='bool'){
-        const on=!!r.value, def=r.is_set?'':' <span class="dim">(default)</span>';
-        return `<div class="cc-k">${esc(r.label)}${def}</div><div class="cc-v">`+
-          `<button class="cc-tgl set-tgl${on?' on':''}${ctlPending.has('set:'+r.key)?' cmd-pending':''}" onclick="settingsWrite('${r.key}',${on?0:1})">${on?'ON':'OFF'}</button></div>`;
-      }
-      const v=r.value?String(r.value):'', base=v?v.split('/').pop():'\\u2014';
-      return `<div class="cc-k">${esc(r.label)}</div><div class="cc-v"><span title="${esc(v)}">${esc(base)}</span></div>`;
-    }).join('');
-    return `<div class="cc-sec"><div class="cc-sech">${esc(g)}</div><div class="cc-grid">${items}</div></div>`;
-  }).join('');
 }
 function closeControl(){const cc=document.getElementById('cc');cc.style.display='none';ctlSerial=null;if(ctlPoll){clearTimeout(ctlPoll);ctlPoll=null;}}
 // ── Row action floating menus ───────────────────────────────────────────────

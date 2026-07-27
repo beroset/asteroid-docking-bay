@@ -1146,7 +1146,7 @@ def test_settings_tab_renders_toggles_and_readonly_paths(tmp_path):
     h = tmp_path / "settings.js"
     h.write_text(_DOM_CAPTURE + JS +
                  "\nglobal.fetch=()=>new Promise(()=>{});"
-                 "ctlSerial='S9';ctlName='sk';ctlTab='set';"
+                 "ctlSerial='S9';ctlName='sk';ctlTab='set';ccOpen=new Set(['set-clock','set-sound','set-display','set-nightstand','set-time','set-appearance','set-quickpanel','set-usb','set-weather']);"
                  "ctlSettings['S9']={ok:true,settings:["
                  "{group:'Time & units',key:'/org/asteroidos/settings/use-12h-format',"
                  "label:'12-hour clock',type:'bool',value:true,is_set:true},"
@@ -1195,7 +1195,7 @@ def test_settings_clock_spinners_and_persistence(tmp_path):
     h = tmp_path / "clock.js"
     h.write_text(_DOM_CAPTURE + JS +
                  "\nglobal.fetch=()=>new Promise(()=>{});"
-                 "ctlSerial='S9';ctlName='sk';ctlTab='set';"
+                 "ctlSerial='S9';ctlName='sk';ctlTab='set';ccOpen=new Set(['set-clock','set-sound','set-display','set-nightstand','set-time','set-appearance','set-quickpanel','set-usb','set-weather']);"
                  "ctlDate={y:2026,mo:7,d:22,h:10,mi:5};ctlDateTouched=true;"
                  "ctlSettings['S9']={ok:true,settings:[]};"
                  "renderControl({});const first=global.__els['cc'].innerHTML;"
@@ -1226,7 +1226,7 @@ def test_settings_quickpanel_icons_reflect_enable_state(tmp_path):
     h = tmp_path / "qp.js"
     h.write_text(_DOM_CAPTURE + JS +
                  "\nglobal.fetch=()=>new Promise(()=>{});"
-                 "ctlSerial='S9';ctlName='sk';ctlTab='set';"
+                 "ctlSerial='S9';ctlName='sk';ctlTab='set';ccOpen=new Set(['set-clock','set-sound','set-display','set-nightstand','set-time','set-appearance','set-quickpanel','set-usb','set-weather']);"
                  "ctlSettings['S9']={ok:true,settings:[],quickpanel:["
                  "{id:'wifiToggle',label:'Wifi',enabled:true,is_set:false},"
                  "{id:'musicButton',label:'Music',enabled:false,is_set:true}]};"
@@ -1252,7 +1252,7 @@ def test_clock_tracks_now_until_a_spinner_is_dialed(tmp_path):
     h = tmp_path / "track.js"
     h.write_text(_DOM_CAPTURE + JS +
                  "\nglobal.fetch=()=>new Promise(()=>{});"
-                 "ctlSerial='S9';ctlTab='set';ctlSettings['S9']={ok:true,settings:[]};"
+                 "ctlSerial='S9';ctlTab='set';ccOpen=new Set(['set-clock','set-sound','set-display','set-nightstand','set-time','set-appearance','set-quickpanel','set-usb','set-weather']);ctlSettings['S9']={ok:true,settings:[]};"
                  "ctlDate={y:2000,mo:1,d:1,h:3,mi:3};ctlDateTouched=false;"
                  "renderControl({});"                       # untouched → re-seeds to now
                  "const trackedY=ctlDate.y;"
@@ -1278,7 +1278,7 @@ def test_quickpanel_toggle_pulses_until_confirmed(tmp_path):
     h = tmp_path / "qppulse.js"
     h.write_text(_DOM_CAPTURE + JS +
                  "\nglobal.fetch=()=>new Promise(()=>{});"   # write never resolves → stays pending
-                 "ctlSerial='S9';ctlTab='set';ctlSettings['S9']={ok:true,settings:[],"
+                 "ctlSerial='S9';ctlTab='set';ccOpen=new Set(['set-clock','set-sound','set-display','set-nightstand','set-time','set-appearance','set-quickpanel','set-usb','set-weather']);ctlSettings['S9']={ok:true,settings:[],"
                  "quickpanel:[{id:'wifiToggle',label:'Wifi',enabled:true,is_set:false}]};"
                  "quickpanelSet('wifiToggle',0);"           # pending + re-render
                  "const a=global.__els['cc'].innerHTML;"
@@ -1352,7 +1352,7 @@ def test_control_center_weather_section(tmp_path):
     import json
     h = tmp_path / "wx.js"
     h.write_text(_DOM_CAPTURE + JS +
-                 "\nctlSerial='S9';ctlTab='set';"
+                 "\nctlSerial='S9';ctlTab='set';ccOpen=new Set(['set-clock','set-sound','set-display','set-nightstand','set-time','set-appearance','set-quickpanel','set-usb','set-weather']);"
                  "wxData={ok:true,location:{city:'Berlin, DE'},days:[{id:211,min_c:14,max_c:19}]};"
                  "renderControl({serial:'S9',kernel:'3.18',os:'AsteroidOS'});"
                  "const withWx=global.__els['cc'].innerHTML;"
