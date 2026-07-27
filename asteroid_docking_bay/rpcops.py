@@ -1133,7 +1133,13 @@ def _watch_timeline(args):
               for e in evs
               if e.get("event") in ("check_reading", "drain_reading", "live_reading")
               and e.get("pct") is not None and e.get("ts") is not None]
-    return {"points": points,
+    # Power-off / wear events mark where the record legitimately goes dark —
+    # the history chart draws them as red gap lines (mo: suggest data is
+    # missing rather than silently interpolating across a shelf period).
+    marks = [{"ts": e["ts"], "kind": e.get("event")}
+             for e in evs
+             if e.get("event") in ("power_off", "wear") and e.get("ts")]
+    return {"points": points, "marks": marks,
             "rate": event_log.standby_loss_rate(serial, codename, evs)}
 
 

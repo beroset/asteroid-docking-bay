@@ -676,12 +676,20 @@ function mkstrip(p,wearH){
   if(p.adb!=='device'&&p.last_live_ts)out+=`<span class="lastseen" title="last live ${fmtAge(p.last_live_ts)} ago">${fmtAge(p.last_live_ts)}</span>`;
   return out?`<span class="strip">${out}</span>`:'';
 }
-function sparkSvg(pts){
+function sparkSvg(pts,marks){
   const W=260,H=90,pad=6;
   const ts=pts.map(p=>p.ts),t0=Math.min(...ts),t1=Math.max(...ts),tr=(t1-t0)||1;
   const x=t=>pad+(t-t0)/tr*(W-2*pad),y=v=>pad+(100-v)/100*(H-2*pad);
   const d=pts.map((p,i)=>(i?'L':'M')+x(p.ts).toFixed(1)+' '+y(p.pct).toFixed(1)).join(' ');
-  return `<svg class="spark-svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}"><path d="${d}" fill="none" stroke="#58a6ff" stroke-width="1.5"/></svg>`;
+  // Red verticals where the record goes dark: explicit power-off/wear marks
+  // plus any silent gap over 6h between samples (missing data, not a trend).
+  let vl='';
+  const seen=new Set();
+  const vline=(t,ttl)=>{const xx=x(t).toFixed(1);if(seen.has(xx))return;seen.add(xx);
+    vl+=`<line x1="${xx}" y1="${pad}" x2="${xx}" y2="${H-pad}" stroke="#f85149" stroke-width="1" stroke-dasharray="2,2"><title>${ttl}</title></line>`;};
+  (marks||[]).forEach(m=>{if(m.ts>=t0&&m.ts<=t1)vline(m.ts,m.kind==='wear'?'worn off-rig':'powered off');});
+  for(let i=1;i<pts.length;i++)if(pts[i].ts-pts[i-1].ts>6*3600)vline(pts[i-1].ts,'gap: no data '+((pts[i].ts-pts[i-1].ts)/3600).toFixed(0)+'h');
+  return `<svg class="spark-svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}"><path d="${d}" fill="none" stroke="#58a6ff" stroke-width="1.5"/>${vl}</svg>`;
 }
 // Battery history for the Battery tab: fetched once when the tab opens and
 // stored per serial, so the Battery body can append the chart at its foot.
@@ -1180,7 +1188,7 @@ function openControl(serial,name,ev,tab,sshIp,mode){
   const cc=document.getElementById('cc');
   cc.classList.remove('stale-cc');
   cc.style.display='block';
-  if(ctlTab==='bat')biHistFetch(serial);
+  if(ctlTab==='bat'){biHistFetch(serial);if(drainHistAll===null)drainHistFetch();}
   if(ctlTab==='set'){settingsFetch(serial);if(wxData===null)wxFetch();if(wxOnWatch[serial]===undefined)wxFetchOnWatch(serial);}
   if(ctlTab==='diag'&&dgData[serial]===undefined)dgFetch(serial);
   if(ctlTab==='ana'&&bcData[serial]===undefined)bcFetch(serial);
@@ -1197,7 +1205,7 @@ function openBI(s,n,ev){openControl(s,n,ev,'bat');}
 function ctlTabTo(tab){
   if(!ctlSerial)return;
   ctlTab=tab;                              // no refetch, no graphReset: the poll
-  if(tab==='bat')biHistFetch(ctlSerial);   // keeps every metric filling regardless
+  if(tab==='bat'){biHistFetch(ctlSerial);if(drainHistAll===null)drainHistFetch();}   // keeps every metric filling regardless
   if(tab==='set'){settingsFetch(ctlSerial);if(wxData===null)wxFetch();if(wxOnWatch[ctlSerial]===undefined)wxFetchOnWatch(ctlSerial);}
   if(tab==='diag'&&dgData[ctlSerial]===undefined)dgFetch(ctlSerial);
   if(tab==='ana'&&bcData[ctlSerial]===undefined)bcFetch(ctlSerial);
@@ -1568,12 +1576,35 @@ function bodyBat(d){
     _kv('USB in',uv!=null&&uv>0?(uv/1e6).toFixed(2)+' V':(+d.usb_online?'online':null))+
     _kv('Standby',d.standby_measured!=null?`${d.standby_measured} %/h · ~${fmtDur(85/d.standby_measured)}`:null));
   const hist=biHist[ctlSerial], histPts=(hist&&hist.points)||[];
+  const span=histPts.length>=2?(histPts[histPts.length-1].ts-histPts[0].ts)/86400:0;
   const histSec=histPts.length>=2
-    ? `<div class="cc-sec"><div class="cc-sech">Battery history`
-        +(hist.rate?` <span class="dim">~${(+hist.rate).toFixed(2)}%/h standby</span>`:'')
-        +`</div>${sparkSvg(histPts)}</div>`
+    ? `<div class="cc-sec"><div class="cc-sech">Battery history <span class="dim">${span>=1?span.toFixed(0)+'d':'&lt;1d'} of record</span>`
+        +(hist.rate?` <span class="dim">&middot; ~${(+hist.rate).toFixed(2)}%/h standby</span>`:'')
+        +`</div>${sparkSvg(histPts,hist.marks)}<div class="dim" style="font-size:10px">red lines: powered off / worn / data gaps</div></div>`
     : '';
-  return `<div class="cc-cols"><div class="cc-col">${bat}</div></div>`+histSec;
+  return `<div class="cc-cols"><div class="cc-col">${bat}</div></div>`+histSec+drainHistSec();
+}
+// Drain-test history for THIS watch (mo: it was missing from the Power page).
+let drainHistAll=null;
+function drainHistFetch(){
+  fetch('/api/drain/history').then(r=>r.json()).then(d=>{
+    drainHistAll=d&&d.tests?d.tests:[];
+    if(ctlTab==='bat')renderControl(ctlCache[ctlSerial]||{});
+  }).catch(()=>{drainHistAll=[];});
+}
+function drainHistSec(){
+  if(drainHistAll===null)return '<div class="cc-sec"><div class="cc-sech">Drain tests</div><span class="dim">loading&hellip;</span></div>';
+  const cn=(ctlCache[ctlSerial]&&ctlCache[ctlSerial].geometry&&ctlCache[ctlSerial].geometry.machine)||ctlName;
+  const mine=drainHistAll.filter(t=>t.codename===cn).slice(0,8);
+  if(!mine.length)return '<div class="cc-sec"><div class="cc-sech">Drain tests</div><span class="dim">none recorded for '+esc(cn||'this watch')+'</span></div>';
+  const rows=mine.map(t=>{
+    const when=t.start_ts?new Date(t.start_ts*1000).toISOString().slice(0,10):'?';
+    const est=t.rate?'~'+fmtDur(85/t.rate):'';
+    return '<div class="bc-row"><span class="bc-n">'+when+'</span>'+
+      '<span class="dim" style="flex:1">'+ (t.start_pct!=null?t.start_pct+'% &rarr; '+(t.end_pct!=null?t.end_pct+'%':'?'):'')+
+      (t.stopped?' <span class="warn">stopped</span>':'')+' &middot; '+(t.samples||0)+' samples</span>'+
+      '<span class="bc-t" title="'+esc(est)+'">'+(t.rate!=null?(+t.rate).toFixed(2)+'%/h':'&mdash;')+'</span></div>';});
+  return '<div class="cc-sec"><div class="cc-sech">Drain tests</div>'+rows.join('')+'</div>';
 }
 // ── Settings tab ────────────────────────────────────────────────────────────
 // A mirror of the watch's own settings, limited to what the other tabs don't
