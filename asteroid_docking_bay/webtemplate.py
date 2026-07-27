@@ -61,7 +61,13 @@ _WEB_TEMPLATE = """\
     .cc-tab{flex:1;padding:6px 4px;border:0;background:transparent;color:#8b949e;cursor:pointer;font:inherit;font-size:11px;border-bottom:2px solid transparent}
     .cc-tab:hover{color:#c9d1d9;background:#161b22}
     .cc-tab.on{color:#58a6ff;border-bottom-color:#58a6ff}
-    .cc-grid{display:grid;grid-template-columns:auto 1fr;gap:3px 10px}
+    .cc-grid{display:grid;grid-template-columns:auto 1fr;gap:0 10px}
+    /* Value sits far right of its label, so band every second ROW to tie the
+       two together (mo): odd keeps the panel colour, even goes a shade darker.
+       Children alternate k,v — an even row is the 3rd+4th of each group of 4. */
+    .cc-grid>*{padding:2px 4px}
+    .cc-grid>*:nth-child(4n+3),.cc-grid>*:nth-child(4n+4){background:rgba(0,0,0,.22)}
+    .bc-row:nth-child(even){background:rgba(0,0,0,.22)}
     /* Rows a touch taller to seat the inline live graph beside the value. */
     .cc-grid .cc-v{min-height:15px;display:flex;align-items:center;justify-content:flex-end;gap:7px}
     .spark{flex:0 0 auto;vertical-align:middle}
