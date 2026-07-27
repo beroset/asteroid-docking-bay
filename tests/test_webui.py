@@ -703,7 +703,7 @@ def test_control_center_no_longer_carries_the_network_section(tmp_path):
     import json
     h = tmp_path / "ccnet.js"
     h.write_text(_DOM_CAPTURE + JS +
-                 "\nctlName='skipjack';ctlSerial='S9';ctlTab='sys';"
+                 "\nctlName='skipjack';ctlSerial='S9';ctlTab='vit';"
                  "renderControl({serial:'S9', kernel:'3.18', os:'AsteroidOS', wifi:1});"
                  "console.log(JSON.stringify(global.__els['cc'].innerHTML));"
                  "\nprocess.exit(0);\n")
@@ -760,14 +760,14 @@ def test_control_center_no_longer_carries_the_battery_section(tmp_path):
     import json
     h = tmp_path / "ccbat.js"
     h.write_text(_DOM_CAPTURE + JS +
-                 "\nctlName='skipjack';ctlSerial='S9';ctlTab='sys';"
+                 "\nctlName='skipjack';ctlSerial='S9';ctlTab='vit';"
                  "renderControl({serial:'S9',kernel:'3.18',os:'AsteroidOS',bat_cap:83,bat_cycles:42});"
                  "console.log(JSON.stringify(global.__els['cc'].innerHTML));"
                  "\nprocess.exit(0);\n")
     r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
     assert r.returncode == 0, r.stderr[:400]
     html = json.loads(r.stdout.strip().splitlines()[-1])
-    assert "System" in html, "Control Center lost its System section"
+    assert "Vitals" in html, "Control Center lost its Vitals section"
     assert "Cycles" not in html, "Control Center still carries the moved battery detail"
     assert "ccSyncTime(" not in html, "Sync-from-host should have moved to the Settings tab"
 
@@ -931,7 +931,7 @@ def test_reopening_a_panel_paints_instantly_from_cache(tmp_path):
     r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
     assert r.returncode == 0, r.stderr[:400]
     html = json.loads(r.stdout.strip().splitlines()[-1])
-    assert "System" in html and "3.18" in html, f"did not paint from cache: {html[:200]}"
+    assert "Vitals" in html and "AsteroidOS" in html, f"did not paint from cache: {html[:200]}"
     assert "loading" not in html, "showed a loading flash despite having a cache"
 
 
@@ -1352,7 +1352,7 @@ def test_control_center_weather_section(tmp_path):
     import json
     h = tmp_path / "wx.js"
     h.write_text(_DOM_CAPTURE + JS +
-                 "\nctlSerial='S9';ctlTab='sys';"
+                 "\nctlSerial='S9';ctlTab='set';"
                  "wxData={ok:true,location:{city:'Berlin, DE'},days:[{id:211,min_c:14,max_c:19}]};"
                  "renderControl({serial:'S9',kernel:'3.18',os:'AsteroidOS'});"
                  "const withWx=global.__els['cc'].innerHTML;"
@@ -1467,7 +1467,7 @@ def test_panel_not_rebuilt_while_typing_in_a_field(tmp_path):
     import json
     h = tmp_path / "typing.js"
     h.write_text(_DOM_CAPTURE + JS +
-                 "\nctlSerial='S9';ctlTab='sys';"
+                 "\nctlSerial='S9';ctlTab='vit';"
                  "const ccEl=global.document.getElementById('cc');"
                  "ccEl.innerHTML='TYPING-IN-PROGRESS';ccEl.contains=()=>true;"
                  "global.document.activeElement={tagName:'INPUT'};"   # a focused input in cc
@@ -1481,4 +1481,4 @@ def test_panel_not_rebuilt_while_typing_in_a_field(tmp_path):
     assert r.returncode == 0, r.stderr[:400]
     o = json.loads(r.stdout.strip().splitlines()[-1])
     assert o["held"] == "TYPING-IN-PROGRESS", "panel was rebuilt while an input was focused"
-    assert "System" in o["after"], "panel never re-rendered after the field blurred"
+    assert "Vitals" in o["after"], "panel never re-rendered after the field blurred"

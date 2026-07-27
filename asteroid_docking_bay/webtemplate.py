@@ -1041,11 +1041,11 @@ function render(data){
 // cache, one poll: switching tabs re-renders the cached blob with NO refetch
 // and NO graphReset, so every tab's graph keeps filling across a switch.
 let ctlSerial=null, ctlName=null, ctlAX=0, ctlAY=0;
-let ctlTab='sys', ctlSshIp=null, ctlMode=null;
+let ctlTab='vit', ctlSshIp=null, ctlMode=null;
 let ctlMoved=false, ctlPlaced=false, _drag=null;   // manual pos, placed-once, active drag
 // The tab bar. Order is System → Network → Battery here; Settings and Live join
 // in later steps, landing the final System · Settings · Network · Battery · Live.
-const CTL_TABS=[['sys','System'],['set','Settings'],['net','Network'],['bat','Battery'],['boot','Boot'],['diag','Diag']];
+const CTL_TABS=[['ident','Identity'],['vit','Vitals'],['net','Radios'],['bat','Power'],['doc','Doctor'],['set','Settings']];
 // Last-fetched payload per serial, so re-opening paints instantly from the
 // previous values while the fresh fetch is in flight — and a self-cancelling
 // poll keeps the open window live (important over SSH, where a fetch is slow).
@@ -1169,7 +1169,7 @@ function paintStale(serial,curSerial,cacheHas,renderFn){
 function openControl(serial,name,ev,tab,sshIp,mode){
   ev.stopPropagation(); graphReset();      // fresh graphs for a fresh watch, not per tab
   ctlSerial=serial; ctlName=name; ctlAX=ev.clientX; ctlAY=ev.clientY;
-  ctlTab=tab||'sys'; ctlMoved=false; ctlPlaced=false;   // a new open re-anchors
+  ctlTab=tab||'vit'; ctlMoved=false; ctlPlaced=false;   // a new open re-anchors
   // Reset the click's USB context each open — a codename/battery open carries
   // none, and a stale value from a previous open is exactly what made the
   // Network tab show adb/.2.15 for an SSH watch. bodyNet falls back to the
@@ -1180,9 +1180,8 @@ function openControl(serial,name,ev,tab,sshIp,mode){
   cc.classList.remove('stale-cc');
   cc.style.display='block';
   if(ctlTab==='bat')biHistFetch(serial);
-  if(ctlTab==='set')settingsFetch(serial);
-  if(ctlTab==='sys'&&wxData===null)wxFetch();
-  if(ctlTab==='sys'&&ctlSerial&&wxOnWatch[ctlSerial]===undefined)wxFetchOnWatch(ctlSerial);
+  if(ctlTab==='set'){settingsFetch(serial);if(wxData===null)wxFetch();if(wxOnWatch[serial]===undefined)wxFetchOnWatch(serial);}
+  if(ctlTab==='doc'){if(bcData[serial]===undefined)bcFetch(serial);if(dgData[serial]===undefined)dgFetch(serial);}
   if(ctlCache[serial])renderControl(ctlCache[serial]);   // instant, from the last open
   else{renderControl({});                        // full skeleton, real size, dash values
        paintStale(serial,()=>ctlSerial,()=>!!ctlCache[serial],renderControl);}
@@ -1190,18 +1189,15 @@ function openControl(serial,name,ev,tab,sshIp,mode){
 }
 // The row triggers still open the window on the tab that matches what was
 // clicked — codename→System, battery pill→Battery, network badge→Network.
-function openCC(s,n,ev){openControl(s,n,ev,'sys');}
+function openCC(s,n,ev){openControl(s,n,ev,'vit');}
 function openNC(s,n,ev,sshIp,mode){openControl(s,n,ev,'net',sshIp,mode);}
 function openBI(s,n,ev){openControl(s,n,ev,'bat');}
 function ctlTabTo(tab){
   if(!ctlSerial)return;
   ctlTab=tab;                              // no refetch, no graphReset: the poll
   if(tab==='bat')biHistFetch(ctlSerial);   // keeps every metric filling regardless
-  if(tab==='set')settingsFetch(ctlSerial);
-  if(tab==='sys'&&wxData===null)wxFetch();
-  if(tab==='sys'&&ctlSerial&&wxOnWatch[ctlSerial]===undefined)wxFetchOnWatch(ctlSerial);
-  if(tab==='boot'&&bcData[ctlSerial]===undefined)bcFetch(ctlSerial);
-  if(tab==='diag'&&dgData[ctlSerial]===undefined)dgFetch(ctlSerial);
+  if(tab==='set'){settingsFetch(ctlSerial);if(wxData===null)wxFetch();if(wxOnWatch[ctlSerial]===undefined)wxFetchOnWatch(ctlSerial);}
+  if(tab==='doc'){if(bcData[ctlSerial]===undefined)bcFetch(ctlSerial);if(dgData[ctlSerial]===undefined)dgFetch(ctlSerial);}
   renderControl(ctlCache[ctlSerial]||null);
 }
 function ctlFetch(){
@@ -1238,7 +1234,11 @@ function ctlChrome(d,body){
       (stale?` <span class="warn" title="watch is off the bus — these are the last-known values">stale &middot; last live ${fmtAge(d.last_live_ts)} ago</span>`:'')+
       `<span class="cc-x" onclick="closeControl()">&times;</span></div>`+
     `<div class="cc-tabs">${tabs}</div>`+
-    `<div class="cc-body">${body}</div>`;
+    `<div class="cc-body">${body}</div>`+
+    `<div class="cc-tgls">`+
+      `<button class="cc-tgl" onclick="ccBuzz()" title="vibrate to locate in the dock">Buzz</button>`+
+      `<button class="cc-tgl${d&&d.screen_forced?' scrnon':''}${ctlPending.has('sys:screen')?' cmd-pending':''}" onclick="ccScreen(${d&&d.screen_forced?0:1})" title="${d&&d.screen_forced?'demo mode is ON — the screen is forced on and draining. Click to release.':'force the screen on (mce demo mode — stays on and drains until released!)'}">Screen: ${d&&d.screen_forced?'ON':'OFF'}</button>`+
+      `<button class="cc-tgl" onclick="doScreenshot('${(d&&d.serial)||ctlSerial}')" title="screenshot in a new tab">Shot</button></div>`;
 }
 function renderControl(d){
   const cc=document.getElementById('cc');
@@ -1249,40 +1249,48 @@ function renderControl(d){
   const a=document.activeElement;
   if(a&&a.tagName==='INPUT'&&cc.contains(a))return;
   cc.classList.toggle('stale-cc',!!(d&&d.stale));
-  const body=ctlTab==='set'?bodySet(d):ctlTab==='net'?bodyNet(d):ctlTab==='bat'?bodyBat(d):ctlTab==='boot'?bodyBoot():ctlTab==='diag'?bodyDiag():bodySys(d);
+  const body=ctlTab==='set'?bodySet(d):ctlTab==='net'?bodyNet(d):ctlTab==='bat'?bodyBat(d):ctlTab==='doc'?bodyDoc():ctlTab==='ident'?bodyIdent(d):bodyVit(d);
   cc.innerHTML=ctlChrome(d,body);
   ctlPlace(true);
 }
 // ── System tab ──────────────────────────────────────────────────────────────
-function bodySys(d){
+function bodyIdent(d){
+  // Identity: who this watch IS — static facts, one home for each (mo's
+  // dedupe rule). Wear facts join from the Doctor cache when it has run.
   d=d||{};
-  // Skeleton-first (mo): the full label grid renders at once with dash
-  // values, so the window opens at its real size instead of a stripe that
-  // snaps when data lands. _kv already renders null as a dash.
+  const dg=dgData[ctlSerial],life=(dg&&dg.ok&&(dg.emmc_life||[]).length)?dg.emmc_life.join(' / '):null;
+  const cap=(dg&&dg.ok&&dg.bat_capacity_pct!=null)?dg.bat_capacity_pct+'% of design':null;
+  const ident=_sec('Identity',
+    _kv('Machine (image)',d.geometry&&d.geometry.machine)+
+    _kv('Serial',d.serial)+
+    _kv('Bootloader',d.geometry&&d.geometry.bootloader)+
+    _kv('Resolution',d.resolution)+
+    _kv('OS',d.os)+_kv('Hostname',d.host)+_kv('Timezone',d.tz));
+  const vers=_sec('Versions &amp; wear',
+    _kv('Kernel',d.kernel)+_kv('Qt',d.qt)+_kv('SoC',(d.soc||'').trim())+
+    _kv('Flash wear',life)+_kv('Battery capacity',cap));
+  return `<div class="cc-cols"><div class="cc-col">${ident}</div><div class="cc-col">${vers}</div></div>`;
+}
+function bodyVit(d){
+  // Vitals: how the watch is doing RIGHT NOW — the live-gauge tab and the
+  // default landing view. Skeleton-first: dashes fill as reads arrive.
+  d=d||{};
   const hint=d.kernel?'':`<div class="dim" style="padding:2px 10px">reading&hellip; (dashes fill as values arrive)</div>`;
   const mt=+d.memtotal,mf=+d.memfree,memU=mt?Math.round((mt-mf)/1024):null,memT=mt?Math.round(mt/1024):null;
   const freq=_num(d.cpufreq);
   const dfp=(d.df||'').trim().split(/[ \t]+/);
   const storage=dfp.length>=5?`${dfp[2]} / ${dfp[1]} (${dfp[4]})`:null;
-  const sys=_sec('System',
-    _kv('Kernel',d.kernel)+_kv('Qt',d.qt)+_kv('SoC',(d.soc||'').trim())+
+  const vit=_sec('Vitals',
+    _kvg('Load',d.load,spark('load',0,_ncpu(d),'high'))+
+    _kvg('Memory',memU!=null?`${memU} / ${memT} MB`:null,spark('mem',0,100,'high'))+
     _kv('CPU',freq?(freq/1000).toFixed(0)+' MHz':null)+
-    _kv('Uptime',fmtUp(d.uptime))+_kv('Boot',d.bootreason)+
-    _kvg('Load',d.load,spark('load',0,_ncpu(d),'high'))+_kv('Threads',d.threads)+
-    _kvg('Memory',memU!=null?`${memU} / ${memT} MB`:null,spark('mem',0,100,'high'))+_kv('Storage',storage)+
-    _kv('Resolution',d.resolution)+_kv('Timezone',d.tz)+_kv('Clock',d.datetime)+
-    _kv('Machine (image)',d.geometry&&d.geometry.machine)+
-    // The bootloader version string names the true hardware, which is the only
-    // thing that distinguishes watches sharing an image (rover vs rubyfish).
-    // Worth showing verbatim: it is the field the porting community reads to
-    // identify a device, so a human can check our detection against it.
-    _kv('Bootloader',d.geometry&&d.geometry.bootloader));
-  return hint+`<div class="cc-cols"><div class="cc-col">${sys}</div></div>`+
-    `<div class="cc-tgls">`+
-      `<button class="cc-tgl" onclick="ccBuzz()" title="vibrate to locate in the dock">Buzz</button>`+
-      `<button class="cc-tgl${d.screen_forced?' scrnon':''}${ctlPending.has('sys:screen')?' cmd-pending':''}" onclick="ccScreen(${d.screen_forced?0:1})" title="${d.screen_forced?'demo mode is ON — the screen is forced on and draining. Click to release.':'force the screen on (mce demo mode — stays on and drains until released!)'}">Screen: ${d.screen_forced?'ON':'OFF'}</button>`+
-      `<button class="cc-tgl" onclick="doScreenshot('${d.serial||ctlSerial}')" title="screenshot in a new tab">Shot</button></div>`+
-    bodyWeather();
+    _kv('Threads',d.threads)+
+    _kv('Storage',storage)+
+    _kv('Battery',d.bat_cap!=null&&d.bat_cap!==''?d.bat_cap+'%'+(d.bat_status?' \u00b7 '+d.bat_status:''):null)+
+    _kv('Screen',d.screen_forced==null?null:(d.screen_forced?'FORCED ON':'normal'))+
+    _kv('Uptime',fmtUp(d.uptime))+
+    _kv('Boot reason',d.bootreason));
+  return hint+`<div class="cc-cols"><div class="cc-col">${vit}</div></div>`;
 }
 // Diag tab: the a-d-b-doctor dataset (kernel diagnostics without on-watch
 // tools), fetched once per serial like the Boot tab.
@@ -1291,15 +1299,11 @@ function dgFetch(serial){
   dgData[serial]=false;
   fetch('/api/watch/'+encodeURIComponent(serial)+'/diag').then(r=>r.json()).then(d=>{
     dgData[serial]=d;
-    if(ctlSerial===serial&&ctlTab==='diag')renderControl(ctlCache[serial]||{});
+    if(ctlSerial===serial&&ctlTab==='doc')renderControl(ctlCache[serial]||{});
   }).catch(()=>{dgData[serial]={ok:false,error:'fetch failed'};
-    if(ctlSerial===serial&&ctlTab==='diag')renderControl(ctlCache[serial]||{});});
+    if(ctlSerial===serial&&ctlTab==='doc')renderControl(ctlCache[serial]||{});});
 }
-function dgRefresh(){delete dgData[ctlSerial];dgFetch(ctlSerial);renderControl(ctlCache[ctlSerial]||{});}
-function bodyDiag(){
-  const d=dgData[ctlSerial];
-  if(d===false||d===undefined)return '<div class="cc-sec"><span class="dim">reading diagnostics&hellip;</span></div>';
-  if(!d.ok)return '<div class="cc-sec"><span class="dim">'+esc(d.error||'diagnostics unavailable')+'</span></div>';
+function dgHtml(d){
   const S=(t,inner)=>'<div class="cc-sec"><div class="cc-sech">'+t+'</div>'+inner+'</div>';
   const sus=d.suspend?('suspends: <b class="'+(d.suspend.success>0?'':'err')+'">'+d.suspend.success+'</b> ok / '+d.suspend.fail+' failed this boot'):'suspend stats unreadable';
   let wk='';(d.wakeup_sources||[]).filter(w=>w.total_ms>0||w.prevent_ms>0||w.active_count>0).slice(0,8).forEach(w=>{
@@ -1315,8 +1319,7 @@ function bodyDiag(){
   let fails=(d.failed_units||[]).length?'<div class="err">'+d.failed_units.map(esc).join('<br>')+'</div>':'<span class="dim">none</span>';
   let irq='';(d.top_irqs||[]).forEach(i=>{irq+='<div class="bc-row"><span class="bc-n">irq '+esc(i.irq)+'</span><span class="dim" style="flex:1">'+esc(i.desc)+'</span><span class="bc-t">'+(i.count>1e6?(i.count/1e6).toFixed(1)+'M':i.count)+'</span></div>';});
   let errs=(d.errors||[]).length?'<div class="dim" style="font-size:10px;white-space:pre-wrap;word-break:break-all">'+d.errors.map(esc).join('\\n')+'</div>':'<span class="dim">no errors this boot</span>';
-  return '<div class="cc-sec"><div class="cc-sech">Diagnostics <a href="#" class="dim" style="float:right;text-decoration:none" onclick="dgRefresh();return false">refresh</a></div></div>'+
-    S('Sleep &middot; '+sus,wk||'<span class="dim">no wakeup accounting</span>')+
+  return S('Sleep &middot; '+sus,wk||'<span class="dim">no wakeup accounting</span>')+
     S('CPU residency',fr||'<span class="dim">no cpufreq stats</span>')+
     S('Storage &amp; battery','<div class="cc-grid">'+em+cap+(d.boots?_kv('Boots on record',d.boots):'')+'</div>')+
     S('Failed units',fails)+
@@ -1332,19 +1335,35 @@ function bcFetch(serial){
   bcData[serial]=false;
   fetch('/api/watch/'+encodeURIComponent(serial)+'/bootchart').then(r=>r.json()).then(d=>{
     bcData[serial]=d;
-    if(ctlSerial===serial&&ctlTab==='boot')renderControl(ctlCache[serial]||{});
+    if(ctlSerial===serial&&ctlTab==='doc')renderControl(ctlCache[serial]||{});
   }).catch(()=>{bcData[serial]={ok:false,error:'fetch failed'};
-    if(ctlSerial===serial&&ctlTab==='boot')renderControl(ctlCache[serial]||{});});
+    if(ctlSerial===serial&&ctlTab==='doc')renderControl(ctlCache[serial]||{});});
 }
-function bcRefresh(){delete bcData[ctlSerial];bcFetch(ctlSerial);renderControl(ctlCache[ctlSerial]||{});}
-function bodyBoot(){
-  const d=bcData[ctlSerial];
-  let inner;
-  if(d===false||d===undefined)inner='<span class="dim">reading boot accounting&hellip;</span>';
-  else if(!d.ok)inner='<span class="dim">'+esc(d.error||'boot accounting unavailable')+'</span>';
-  else inner=bcHtml(d);
-  return '<div class="cc-sec"><div class="cc-sech">Boot analysis <a href="#" class="dim" style="float:right;text-decoration:none" onclick="bcRefresh();return false" title="re-read after a fresh boot">refresh</a></div>'+
-    inner+'</div>';
+// Doctor tab: verdict first, instruments behind collapsed sections (the
+// disclosure pattern mo asked to judge — Diag + Boot merged, one question:
+// "why is it slow/draining/broken?").
+let ccOpen=new Set();
+function ccSecToggle(id){if(ccOpen.has(id))ccOpen.delete(id);else ccOpen.add(id);renderControl(ctlCache[ctlSerial]||{});}
+function _clps(id,title,inner){
+  const open=ccOpen.has(id);
+  return '<div class="cc-sec"><div class="cc-sech" style="cursor:pointer" onclick="ccSecToggle(&#39;'+id+'&#39;)">'+(open?'&#9660;':'&#9654;')+' '+title+'</div>'+(open?inner:'')+'</div>';
+}
+function docRefresh(){delete bcData[ctlSerial];delete dgData[ctlSerial];bcFetch(ctlSerial);dgFetch(ctlSerial);renderControl(ctlCache[ctlSerial]||{});}
+function bodyDoc(){
+  const bc=bcData[ctlSerial],dg=dgData[ctlSerial];
+  const pills=[];
+  if(dg&&dg.ok){
+    if(dg.suspend)pills.push(dg.suspend.success>0?'sleeps &#10003;':'<span class="err">never suspends</span>');
+    if((dg.emmc_life||[]).length)pills.push('flash '+esc(dg.emmc_life[0]));
+    const nf=(dg.failed_units||[]).length;
+    pills.push(nf?'<span class="err">'+nf+' failed unit'+(nf>1?'s':'')+'</span>':'units &#10003;');
+  }
+  if(bc&&bc.ok&&bc.finish_s)pills.push('boot '+bc.finish_s.toFixed(1)+'s');
+  let h='<div class="cc-sec"><div class="cc-sech">Doctor <a href="#" class="dim" style="float:right;text-decoration:none" onclick="docRefresh();return false" title="re-read all diagnostics">refresh</a></div>'+
+    '<div style="margin:2px 0 6px">'+(pills.length?pills.join(' <span class="dim">&middot;</span> '):'<span class="dim">reading&hellip;</span>')+'</div></div>';
+  h+=_clps('doc-diag','Diagnostics',(dg===undefined||dg===false)?'<span class="dim">reading&hellip;</span>':(dg.ok?dgHtml(dg):'<span class="dim">'+esc(dg.error||'unavailable')+'</span>'));
+  h+=_clps('doc-boot','Boot analysis',(bc===undefined||bc===false)?'<span class="dim">reading&hellip;</span>':(bc.ok?bcHtml(bc):'<span class="dim">'+esc(bc.error||'unavailable')+'</span>'));
+  return h;
 }
 function bcHtml(d){
   // Aligned with systemd-analyze plot's grammar (checked against the real
@@ -1414,14 +1433,14 @@ let wxData=null, wxOnWatch={};   // wxData = incoming forecast (global); wxOnWat
 function wxFetch(){
   fetch('/api/weather').then(r=>r.json()).then(d=>{
     wxData=d;
-    if(ctlSerial&&ctlTab==='sys')renderControl(ctlCache[ctlSerial]||{});
+    if(ctlSerial&&ctlTab==='set')renderControl(ctlCache[ctlSerial]||{});
   }).catch(()=>{});
 }
 function wxFetchOnWatch(serial){
   wxOnWatch[serial]=null;   // "reading…" until it lands
   fetch('/api/watch/'+encodeURIComponent(serial)+'/weather-on-watch').then(r=>r.json()).then(d=>{
     wxOnWatch[serial]=(d&&d.ok)?d.weather:{};
-    if(ctlSerial===serial&&ctlTab==='sys')renderControl(ctlCache[serial]||{});
+    if(ctlSerial===serial&&ctlTab==='set')renderControl(ctlCache[serial]||{});
   }).catch(()=>{wxOnWatch[serial]={};});
 }
 function wxSetLocation(){
@@ -1648,7 +1667,7 @@ function bodyClock(d){
       `<button class="cc-act mini" id="cc-time" onclick="ccSyncTime()" title="reset the watch clock + timezone to the host">Sync from host</button>`+
     `</div></div>`;
 }
-function bodySet(d){return bodyClock(d)+bodyAV()+bodyQuickpanel((ctlSettings[ctlSerial]||{}).quickpanel)+bodySetGroups();}
+function bodySet(d){return bodyClock(d)+bodyAV()+bodyQuickpanel((ctlSettings[ctlSerial]||{}).quickpanel)+bodySetGroups()+bodyWeather();}
 function bodyAV(){
   const av=avData[ctlSerial]; if(!av)return '';
   const snap=(v,d)=>v!=null?Math.round(v/10)*10:d;   // to the nearest 10 (the slider step)
