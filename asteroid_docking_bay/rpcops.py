@@ -1089,6 +1089,21 @@ _register_lifecycle(WorkbenchOp, "workbench", "no workbench active")
 _register_lifecycle(DrainOp, "drain", "no drain test running")
 
 
+@DISPATCH.op("watch.diag")
+def _watch_diag(args):
+    """One-shot diagnostics read for the Diag tab. Durable fleet facts (eMMC
+    wear, true battery capacity where the gauge exposes it) also land in the
+    registry as latest values."""
+    serial = args["serial"]
+    d = _watch(serial).diag()
+    if not d:
+        return {"ok": False, "error": "diagnostics unreadable — watch offline?"}
+    registry.note(serial, source="diag",
+                  emmc_life="/".join(d.get("emmc_life", [])) or None,
+                  bat_capacity_pct=d.get("bat_capacity_pct"))
+    return {"ok": True, **d}
+
+
 @DISPATCH.op("watch.bootchart")
 def _watch_bootchart(args):
     """systemd's boot accounting for this watch (summary + per-service spans),

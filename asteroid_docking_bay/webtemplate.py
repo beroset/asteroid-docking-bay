@@ -1045,7 +1045,7 @@ let ctlTab='sys', ctlSshIp=null, ctlMode=null;
 let ctlMoved=false, ctlPlaced=false, _drag=null;   // manual pos, placed-once, active drag
 // The tab bar. Order is System → Network → Battery here; Settings and Live join
 // in later steps, landing the final System · Settings · Network · Battery · Live.
-const CTL_TABS=[['sys','System'],['set','Settings'],['net','Network'],['bat','Battery'],['boot','Boot']];
+const CTL_TABS=[['sys','System'],['set','Settings'],['net','Network'],['bat','Battery'],['boot','Boot'],['diag','Diag']];
 // Last-fetched payload per serial, so re-opening paints instantly from the
 // previous values while the fresh fetch is in flight — and a self-cancelling
 // poll keeps the open window live (important over SSH, where a fetch is slow).
@@ -1201,6 +1201,7 @@ function ctlTabTo(tab){
   if(tab==='sys'&&wxData===null)wxFetch();
   if(tab==='sys'&&ctlSerial&&wxOnWatch[ctlSerial]===undefined)wxFetchOnWatch(ctlSerial);
   if(tab==='boot'&&bcData[ctlSerial]===undefined)bcFetch(ctlSerial);
+  if(tab==='diag'&&dgData[ctlSerial]===undefined)dgFetch(ctlSerial);
   renderControl(ctlCache[ctlSerial]||null);
 }
 function ctlFetch(){
@@ -1248,7 +1249,7 @@ function renderControl(d){
   const a=document.activeElement;
   if(a&&a.tagName==='INPUT'&&cc.contains(a))return;
   cc.classList.toggle('stale-cc',!!(d&&d.stale));
-  const body=ctlTab==='set'?bodySet(d):ctlTab==='net'?bodyNet(d):ctlTab==='bat'?bodyBat(d):ctlTab==='boot'?bodyBoot():bodySys(d);
+  const body=ctlTab==='set'?bodySet(d):ctlTab==='net'?bodyNet(d):ctlTab==='bat'?bodyBat(d):ctlTab==='boot'?bodyBoot():ctlTab==='diag'?bodyDiag():bodySys(d);
   cc.innerHTML=ctlChrome(d,body);
   ctlPlace(true);
 }
@@ -1283,6 +1284,47 @@ function bodySys(d){
       `<button class="cc-tgl" onclick="doScreenshot('${d.serial||ctlSerial}')" title="screenshot in a new tab">Shot</button></div>`+
     bodyWeather();
 }
+// Diag tab: the a-d-b-doctor dataset (kernel diagnostics without on-watch
+// tools), fetched once per serial like the Boot tab.
+let dgData={};
+function dgFetch(serial){
+  dgData[serial]=false;
+  fetch('/api/watch/'+encodeURIComponent(serial)+'/diag').then(r=>r.json()).then(d=>{
+    dgData[serial]=d;
+    if(ctlSerial===serial&&ctlTab==='diag')renderControl(ctlCache[serial]||{});
+  }).catch(()=>{dgData[serial]={ok:false,error:'fetch failed'};
+    if(ctlSerial===serial&&ctlTab==='diag')renderControl(ctlCache[serial]||{});});
+}
+function dgRefresh(){delete dgData[ctlSerial];dgFetch(ctlSerial);renderControl(ctlCache[ctlSerial]||{});}
+function bodyDiag(){
+  const d=dgData[ctlSerial];
+  if(d===false||d===undefined)return '<div class="cc-sec"><span class="dim">reading diagnostics&hellip;</span></div>';
+  if(!d.ok)return '<div class="cc-sec"><span class="dim">'+esc(d.error||'diagnostics unavailable')+'</span></div>';
+  const S=(t,inner)=>'<div class="cc-sec"><div class="cc-sech">'+t+'</div>'+inner+'</div>';
+  const sus=d.suspend?('suspends: <b class="'+(d.suspend.success>0?'':'err')+'">'+d.suspend.success+'</b> ok / '+d.suspend.fail+' failed this boot'):'suspend stats unreadable';
+  let wk='';(d.wakeup_sources||[]).filter(w=>w.total_ms>0||w.prevent_ms>0||w.active_count>0).slice(0,8).forEach(w=>{
+    wk+='<div class="bc-row"><span class="bc-n" title="'+esc(w.name)+'">'+esc(w.name)+'</span>'+
+        '<span class="dim" style="flex:1">'+w.active_count+'&times; &middot; '+(w.total_ms/1000).toFixed(1)+'s active</span>'+
+        '<span class="bc-t"'+(w.prevent_ms>0?' style="color:#d29922"':'')+'>'+(w.prevent_ms/1000).toFixed(1)+'s</span></div>';});
+  let fr='';(d.freq_residency||[]).forEach(f=>{
+    fr+='<div class="bc-row"><span class="bc-n">'+f.mhz+' MHz</span>'+
+        '<span class="bc-track"><span class="bc-bar" style="left:0;width:'+Math.max(f.pct,0.5)+'%"></span></span>'+
+        '<span class="bc-t">'+f.pct+'%</span></div>';});
+  const em=(d.emmc_life||[]).length?_kv('Flash wear',d.emmc_life.join(' / '))+_kv('Reserved blocks',d.emmc_pre_eol||null):_kv('Flash wear',null);
+  const cap=d.bat_capacity_pct!=null?_kv('True capacity',d.bat_capacity_pct+'% of design'):'';
+  let fails=(d.failed_units||[]).length?'<div class="err">'+d.failed_units.map(esc).join('<br>')+'</div>':'<span class="dim">none</span>';
+  let irq='';(d.top_irqs||[]).forEach(i=>{irq+='<div class="bc-row"><span class="bc-n">irq '+esc(i.irq)+'</span><span class="dim" style="flex:1">'+esc(i.desc)+'</span><span class="bc-t">'+(i.count>1e6?(i.count/1e6).toFixed(1)+'M':i.count)+'</span></div>';});
+  let errs=(d.errors||[]).length?'<div class="dim" style="font-size:10px;white-space:pre-wrap;word-break:break-all">'+d.errors.map(esc).join('\\n')+'</div>':'<span class="dim">no errors this boot</span>';
+  return '<div class="cc-sec"><div class="cc-sech">Diagnostics <a href="#" class="dim" style="float:right;text-decoration:none" onclick="dgRefresh();return false">refresh</a></div></div>'+
+    S('Sleep &middot; '+sus,wk||'<span class="dim">no wakeup accounting</span>')+
+    S('CPU residency',fr||'<span class="dim">no cpufreq stats</span>')+
+    S('Storage &amp; battery','<div class="cc-grid">'+em+cap+(d.boots?_kv('Boots on record',d.boots):'')+'</div>')+
+    S('Failed units',fails)+
+    S('Top interrupt counters (since boot)',irq||'<span class="dim">unreadable</span>')+
+    (d.psi?S('Pressure stall (PSI)','<div class="dim" style="font-size:10px;white-space:pre-wrap">'+d.psi.map(esc).join('\\n')+'</div>'):'')+
+    S('Error log digest',errs);
+}
+
 // Boot tab: systemd's boot accounting, fetched once per serial (bcData cache
 // survives the 3s re-render; a fresh boot is re-read via the refresh link).
 let bcData={};        // serial -> bootchart payload, false while in flight

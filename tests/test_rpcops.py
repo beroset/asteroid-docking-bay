@@ -90,7 +90,7 @@ def test_registered_ops_are_the_documented_contract():
     here and in docs/CONTAINERS.md — that is the point."""
     assert REGISTERED == {
         "status.get",
-        "watch.cc", "watch.timeline", "watch.bootchart",
+        "watch.cc", "watch.timeline", "watch.bootchart", "watch.diag",
         "watch.settings_read", "watch.settings_write",
         "watch.quickpanel_set",
         "watch.toggle", "watch.settime", "watch.set_datetime", "watch.notify",

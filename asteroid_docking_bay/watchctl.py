@@ -16,6 +16,7 @@ from pathlib import Path
 from .util import _run, log
 from .adb import _adb_state, adb_devices, adb_shell, get_watch_codename
 from .boottime import BOOTCHART_CMD, parse_bootchart
+from .diag import DIAG_SCRIPT, parse_diag
 from .transport import AdbTransport
 from .config import ChargeConfig, find_serial_for_codename, save_config
 from .watch_settings import (QUICKPANEL_KEY, dconf_arg, effective_settings,
@@ -266,6 +267,16 @@ class Watch:
         if rc != 0 or "---UNITS---" not in out:
             return {}
         return parse_bootchart(out)
+
+    def diag(self) -> dict:
+        """The a-d-b-doctor diagnostics (see diag.py): suspend blockers,
+        suspend stats, cpufreq residency, eMMC lifetime, failed units, error
+        digest, IRQ totals — one round-trip, absent sources degrade to
+        missing keys. {} when unreachable."""
+        rc, out, _ = self.t.shell(shlex.quote(DIAG_SCRIPT), timeout=25)
+        if rc != 0 or "---wakeup---" not in out:
+            return {}
+        return parse_diag(out)
 
     def geometry(self) -> dict:
         """Screen shape + resolution, for masking screenshots and showing the
