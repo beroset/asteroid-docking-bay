@@ -158,13 +158,21 @@ worth a phase each because they hit paths nothing else here touches:
    height/normal map of the hull displaced and lit per frame is achievable
    without a mesh pipeline; a raymarched SDF is the prettier, slower option.
 
-Probe first: whether `QtQuick3D` exists on the images (`ls /usr/lib/qml/QtQuick3D`).
-If it does, variant 3 becomes trivial and gains a real 3D phase; if not — the
-likely case — variants 2 and 3 stand on their own.
+**QtQuick3D: absent — checked.** `ls /usr/lib/qml` on catfish (2.2-nightly)
+lists Amber, Connman, Nemo, QML, Qt, Qt5Compat, QtCore, QtFeedback,
+QtMultimedia, QtNetwork, QtQml, QtQuick, QtSensors, QtTest, QtWayland, org —
+no QtQuick3D, and no Qt6 3D libraries. So there is no engine-level 3D path and
+variants 2 and 3 stand on their own. What IS there and unused so far:
+`QtQuick/Particles` (a particle-system phase, if we want one) and
+`QtQuick/Shapes` + `QtQuick/Effects`, which the wireframe and shader variants
+already rely on.
 
-**Licence check before anything ships.** 3DBenchy was long CC BY-ND
-(NoDerivatives — which a wireframe or shader adaptation would arguably
-violate); after the 2025 takedown controversy it was, as recalled, released
-into the public domain. RECALLED, NOT VERIFIED: confirm the current terms at
-the source before publishing any derived artefact, and attribute Creative
-Tools regardless of what the licence strictly requires.
+**Licence: clear — verified 2026-07-28.** 3DBenchy entered the **public
+domain** on 2025-02-14 (NTI Group press release, after the January 2025
+enforcement controversy over the original CC BY-ND terms). Attribution is
+**not required** and derivative works are **explicitly permitted** — remixes
+are encouraged by the current custodians. The earlier NoDerivatives concern is
+resolved; we can decimate, wireframe, shade and ship it. Crediting Creative
+Tools / NTI stays good manners, not an obligation.
+Sources: https://www.3dbenchy.com/3dbenchy-sets-sail-into-the-public-domain/ ,
+https://www.nti-group.com/home/news/3dbenchy/

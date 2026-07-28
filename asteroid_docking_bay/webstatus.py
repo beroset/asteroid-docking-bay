@@ -839,7 +839,8 @@ def _orbit_hub_view(cfg: dict, connected_serials: set) -> dict:
             "added": member.get("added"),
         })
     rows.sort(key=lambda r: (r["codename"] or "").lower())
-    return {"location": "orbit", "description": "Orbit — over the air",
+    return {"location": "orbit",
+            "description": "watches in vicinity of the dock",
             "ports": rows, "virtual": True, "hidden": False}
 
 
