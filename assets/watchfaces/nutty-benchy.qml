@@ -54,7 +54,7 @@ Item {
 
     // ── the scene version. CHANGE THIS whenever the workload changes: results
     // are only comparable within one version (see docs/FPS_BENCH.md).
-    readonly property string sceneVersion: "4"
+    readonly property string sceneVersion: "5"
     // The run holds the screen itself — same mechanism asteroid-flashlight
     // uses to stay lit only while a feature is active (moWerk). Held through
     // the countdown, because that exists so you can reach the rig, and dropped
@@ -609,12 +609,12 @@ Item {
         visible: (root.phase === 9 || root.phase === 10) && root.awake
         onVisibleChanged: if (visible) root.projectBenchy()
 
-        ShapePath { id: bp0; fillColor: "transparent"; strokeColor: "#58a6ff"; strokeWidth: 1; PathPolyline { id: pl0 } }
-        ShapePath { id: bp1; fillColor: "transparent"; strokeColor: "#58a6ff"; strokeWidth: 1; PathPolyline { id: pl1 } }
-        ShapePath { id: bp2; fillColor: "transparent"; strokeColor: "#79c0ff"; strokeWidth: 1; PathPolyline { id: pl2 } }
-        ShapePath { id: bp3; fillColor: "transparent"; strokeColor: "#79c0ff"; strokeWidth: 1; PathPolyline { id: pl3 } }
-        ShapePath { id: bp4; fillColor: "transparent"; strokeColor: "#a5d6ff"; strokeWidth: 1; PathPolyline { id: pl4 } }
-        ShapePath { id: bp5; fillColor: "transparent"; strokeColor: "#a5d6ff"; strokeWidth: 1; PathPolyline { id: pl5 } }
+        ShapePath { id: bp0; fillColor: "#2258a6ff"; fillRule: ShapePath.WindingFill; strokeColor: "#58a6ff"; strokeWidth: 1; PathPolyline { id: pl0 } }
+        ShapePath { id: bp1; fillColor: "#2258a6ff"; fillRule: ShapePath.WindingFill; strokeColor: "#58a6ff"; strokeWidth: 1; PathPolyline { id: pl1 } }
+        ShapePath { id: bp2; fillColor: "#1e79c0ff"; fillRule: ShapePath.WindingFill; strokeColor: "#79c0ff"; strokeWidth: 1; PathPolyline { id: pl2 } }
+        ShapePath { id: bp3; fillColor: "#1e79c0ff"; fillRule: ShapePath.WindingFill; strokeColor: "#79c0ff"; strokeWidth: 1; PathPolyline { id: pl3 } }
+        ShapePath { id: bp4; fillColor: "#1aa5d6ff"; fillRule: ShapePath.WindingFill; strokeColor: "#a5d6ff"; strokeWidth: 1; PathPolyline { id: pl4 } }
+        ShapePath { id: bp5; fillColor: "#1aa5d6ff"; fillRule: ShapePath.WindingFill; strokeColor: "#a5d6ff"; strokeWidth: 1; PathPolyline { id: pl5 } }
 
         NumberAnimation on rotationDriver {
             from: 0
@@ -770,6 +770,23 @@ Item {
             letterSpacing: root.maxSize * 0.012
         }
 
+    }
+
+    // ── phase name ────────────────────────────────────────────────────────
+    // ONE WORD, centred, and the very last thing declared: declaration order
+    // is paint order, so this cannot be covered by any workload, the rotator
+    // or the end screen. It exists so a phase can be named out loud —
+    // "RERASTER dropped to 20" means something; "the fifth one" does not.
+    Text {
+        anchors.centerIn: parent
+        visible: root.running
+        text: root.phaseName
+        color: root.fg
+        opacity: 0.9
+        font.family: "Inter Tight"
+        font.weight: Font.Medium
+        font.pixelSize: root.maxSize * 0.1
+        font.letterSpacing: root.maxSize * 0.008
     }
 
 }
