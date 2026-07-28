@@ -223,6 +223,8 @@ def newest_ipk() -> "str | None":
     """The most recently built benchymark package, or None. Newest by mtime
     rather than by version string: during iteration the version does not
     change, only the build does."""
+    # {APP_NAME}_* only: the build also emits -src, -dev and -dbg siblings,
+    # and installing one of those puts no app on the watch.
     found = sorted(IPK_DIR.rglob(f"{APP_NAME}_*.ipk"),
                    key=lambda p: p.stat().st_mtime, reverse=True)
     return str(found[0]) if found else None
