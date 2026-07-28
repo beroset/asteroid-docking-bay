@@ -28,13 +28,16 @@ import QtQuick.Effects
 import QtQuick.Shapes
 import org.asteroid.controls 1.0
 import "benchy-mesh.js" as Mesh
+import "benchy-mesh-lite.js" as MeshLite
 
 Item {
     id: root
 
     // ── the scene version. CHANGE THIS whenever the workload changes: results
     // are only comparable within one version (see docs/FPS_BENCH.md).
-    readonly property string sceneVersion: "1"
+    readonly property string sceneVersion: "2"
+    // The minute, shared by the centre glyph and the SCALE/RERASTER ring.
+    readonly property string mmStr: Qt.formatDateTime(wallClock.time, "mm")
 
     readonly property real maxSize: Math.min(width, height)
     readonly property real rootRadius: Math.min(width, height) * 0.41
@@ -63,7 +66,8 @@ Item {
         { name: "DRAWCALLS", dur: 8 },   // unbatchable Icons in motion
         { name: "SHAPES",    dur: 8 },   // re-tessellated Shape path
         { name: "CASCADE",   dur: 8 },   // scale on an Item with many children
-        { name: "BENCHY",    dur: 10 }   // the wireframe boat, projected in QML
+        { name: "BENCHYLITE", dur: 8 },  // the boat at 438 vertices / 1545 segments
+        { name: "BENCHY",    dur: 10 }   // the boat at 1118 vertices / 3720 segments
     ]
     property int countdown: 5
     property int phase: -1
@@ -175,6 +179,46 @@ Item {
     readonly property real baseGlyph: maxSize * 0.28
     readonly property real glyphPeak: 1.8
 
+    // Both text phases drive a RING of glyphs as well as the centre one: a
+    // single Text barely troubled any watch (moWerk). The ring uses the same
+    // route as the centre glyph in each phase, so the SCALE:RERASTER ratio
+    // still isolates the glyph-cache path — only the magnitude changed.
+    Repeater {
+        model: 10
+
+        delegate: Text {
+            readonly property real a: index / 10 * 2 * Math.PI
+            readonly property bool ring: root.phase === 1 || root.phase === 2
+
+            visible: ring
+            text: root.mmStr
+            color: root.fg
+            opacity: 0.5
+            renderType: root.phase === 2 ? Text.NativeRendering : Text.QtRendering
+            x: root.width / 2 + root.rootRadius * 0.62 * Math.cos(a) - width / 2
+            y: root.height / 2 + root.rootRadius * 0.62 * Math.sin(a) - height / 2
+            font.family: "Inter Tight"
+            font.weight: Font.Light
+            font.pixelSize: root.maxSize * 0.13
+
+            SequentialAnimation on scale {
+                running: root.phase === 1 && parent.visible
+                loops: Animation.Infinite
+                NumberAnimation { from: 0.7; to: 2.1; duration: 800 + index * 40; easing.type: Easing.InOutSine }
+                NumberAnimation { from: 2.1; to: 0.7; duration: 800 + index * 40; easing.type: Easing.InOutSine }
+            }
+
+            SequentialAnimation on font.pixelSize {
+                running: root.phase === 2 && parent.visible
+                loops: Animation.Infinite
+                NumberAnimation { from: root.maxSize * 0.09; to: root.maxSize * 0.27; duration: 800 + index * 40; easing.type: Easing.InOutSine }
+                NumberAnimation { from: root.maxSize * 0.27; to: root.maxSize * 0.09; duration: 800 + index * 40; easing.type: Easing.InOutSine }
+            }
+
+        }
+
+    }
+
     Text {
         id: centreText
 
@@ -182,12 +226,14 @@ Item {
         readonly property bool rerastering: root.phase === 2
 
         text: root.countdown > 0 ? root.countdown
-                                 : (root.done ? "OK" : Qt.formatDateTime(wallClock.time, "mm"))
+                                 : (root.done ? "OK" : root.mmStr)
         color: root.countdown > 0 ? root.hot : root.fg
         anchors.centerIn: parent
         renderType: rerastering ? Text.NativeRendering : Text.QtRendering
         font.family: "Inter Tight"
-        font.weight: Font.Black
+        // Light, not Black: moWerk wants this beautiful first and expensive
+        // second — Nutty Null's thin elegance survives the benchmark.
+        font.weight: Font.Light
         font.letterSpacing: -root.maxSize * 0.02
         font.pixelSize: root.baseGlyph
 
@@ -224,11 +270,11 @@ Item {
         visible: root.phase === 4
 
         Repeater {
-            model: 7
+            model: 24
 
             delegate: Rectangle {
                 anchors.fill: parent
-                color: index % 2 ? "#3000a0ff" : "#30ff5090"
+                color: index % 2 ? "#2000a0ff" : "#20ff5090"
 
                 SequentialAnimation on opacity {
                     running: root.phase === 4 && parent.visible
@@ -253,14 +299,14 @@ Item {
         visible: root.phase === 5
 
         Repeater {
-            model: 28
+            model: 96
 
             delegate: Icon {
-                readonly property real a: index / 28 * 2 * Math.PI
-                readonly property real rad: root.rootRadius * (0.35 + (index % 4) * 0.2)
+                readonly property real a: index / 96 * 2 * Math.PI * 3
+                readonly property real rad: root.rootRadius * (0.18 + (index % 7) * 0.13)
 
                 name: "ios-flash"
-                width: root.maxSize * 0.11
+                width: root.maxSize * 0.09
                 height: width
                 x: root.width / 2 + rad * Math.cos(a + iconStorm.spin) - width / 2
                 y: root.height / 2 + rad * Math.sin(a + iconStorm.spin) - height / 2
@@ -302,7 +348,7 @@ Item {
         ShapePath {
             fillColor: "transparent"
             strokeColor: "#7ee787"
-            strokeWidth: root.maxSize * 0.012
+            strokeWidth: root.maxSize * 0.02
             capStyle: ShapePath.RoundCap
             startX: root.width / 2
             startY: root.height / 2 - root.rootRadius
@@ -327,6 +373,64 @@ Item {
 
         }
 
+        // Four more lobes at different harmonics — same geometry pipeline,
+        // several times the tessellation per frame.
+        ShapePath {
+            fillColor: "transparent"
+            strokeColor: "#56d364"
+            strokeWidth: root.maxSize * 0.014
+            capStyle: ShapePath.RoundCap
+            startX: root.width / 2
+            startY: root.height / 2 + root.rootRadius
+
+            PathCubic {
+                x: root.width / 2 + root.rootRadius * Math.sin(spiro.t * 1.5)
+                y: root.height / 2 + root.rootRadius * Math.cos(spiro.t * 2.5)
+                control1X: root.width / 2 - root.rootRadius * 1.7 * Math.cos(spiro.t * 4)
+                control1Y: root.height / 2 + root.rootRadius * 1.7 * Math.sin(spiro.t * 2)
+                control2X: root.width / 2 + root.rootRadius * 1.7 * Math.sin(spiro.t * 2)
+                control2Y: root.height / 2 - root.rootRadius * 1.7 * Math.cos(spiro.t * 4)
+            }
+
+            PathCubic {
+                x: root.width / 2
+                y: root.height / 2 + root.rootRadius
+                control1X: root.width / 2 + root.rootRadius * 1.5 * Math.sin(spiro.t * 5)
+                control1Y: root.height / 2 - root.rootRadius * 1.5 * Math.cos(spiro.t * 3)
+                control2X: root.width / 2 - root.rootRadius * 1.5 * Math.cos(spiro.t * 3)
+                control2Y: root.height / 2 + root.rootRadius * 1.5 * Math.sin(spiro.t * 5)
+            }
+
+        }
+
+        ShapePath {
+            fillColor: "transparent"
+            strokeColor: "#3fb950"
+            strokeWidth: root.maxSize * 0.01
+            capStyle: ShapePath.RoundCap
+            startX: root.width / 2 - root.rootRadius
+            startY: root.height / 2
+
+            PathCubic {
+                x: root.width / 2 + root.rootRadius * Math.cos(spiro.t * 3)
+                y: root.height / 2 - root.rootRadius * Math.sin(spiro.t * 1.5)
+                control1X: root.width / 2 + root.rootRadius * 1.9 * Math.sin(spiro.t)
+                control1Y: root.height / 2 + root.rootRadius * 1.9 * Math.cos(spiro.t * 5)
+                control2X: root.width / 2 - root.rootRadius * 1.9 * Math.cos(spiro.t * 5)
+                control2Y: root.height / 2 - root.rootRadius * 1.9 * Math.sin(spiro.t)
+            }
+
+            PathCubic {
+                x: root.width / 2 - root.rootRadius
+                y: root.height / 2
+                control1X: root.width / 2 - root.rootRadius * 1.3 * Math.sin(spiro.t * 4)
+                control1Y: root.height / 2 - root.rootRadius * 1.3 * Math.cos(spiro.t * 2)
+                control2X: root.width / 2 + root.rootRadius * 1.3 * Math.cos(spiro.t * 2)
+                control2Y: root.height / 2 + root.rootRadius * 1.3 * Math.sin(spiro.t * 4)
+            }
+
+        }
+
     }
 
     // ── CASCADE: scale on an Item with many children forces a transform
@@ -339,19 +443,19 @@ Item {
         transformOrigin: Item.Center
 
         Repeater {
-            model: 40
+            model: 160
 
             delegate: Rectangle {
-                readonly property real a: index / 40 * 2 * Math.PI
+                readonly property real a: index / 160 * 2 * Math.PI * 5
 
-                width: root.maxSize * 0.07
+                width: root.maxSize * 0.06
                 height: width
                 radius: width * 0.3
                 antialiasing: true
                 color: index % 3 ? "#58a6ff" : "#d29922"
                 opacity: 0.75
-                x: root.width / 2 + root.rootRadius * 0.75 * Math.cos(a) - width / 2
-                y: root.height / 2 + root.rootRadius * 0.75 * Math.sin(a) - height / 2
+                x: root.width / 2 + root.rootRadius * (0.3 + (index % 5) * 0.16) * Math.cos(a) - width / 2
+                y: root.height / 2 + root.rootRadius * (0.3 + (index % 5) * 0.16) * Math.sin(a) - height / 2
                 rotation: index * 9
             }
 
@@ -384,8 +488,12 @@ Item {
 
     onBenchyAngleChanged: if (benchyShape.visible) root.projectBenchy()
 
+    // BENCHYLITE (phase 8) runs the same boat decimated to 438 vertices /
+    // 1545 segments; BENCHY (phase 9) is the full 1118 / 3720. Same code path,
+    // so the pair measures how frame time scales with segment count.
     function projectBenchy() {
-        var V = Mesh.V, S = Mesh.S;
+        var M = root.phase === 8 ? MeshLite : Mesh;
+        var V = M.V, S = M.S;
         var a = root.benchyAngle * Math.PI / 180;
         var ca = Math.cos(a), sa = Math.sin(a);
         var tilt = 0.42, ct = Math.cos(tilt), st = Math.sin(tilt);
@@ -427,7 +535,7 @@ Item {
         id: benchyShape
 
         anchors.fill: parent
-        visible: root.phase === 8
+        visible: root.phase === 8 || root.phase === 9
         onVisibleChanged: if (visible) root.projectBenchy()
 
         ShapePath { id: bp0; fillColor: "transparent"; strokeColor: "#58a6ff"; strokeWidth: 1; PathPolyline { id: pl0 } }
@@ -440,7 +548,7 @@ Item {
         NumberAnimation on rotationDriver {
             from: 0
             to: 360
-            duration: 6000
+            duration: root.phase === 8 ? 4000 : 6000
             loops: Animation.Infinite
             running: benchyShape.visible
         }
@@ -510,11 +618,23 @@ Item {
         shadowHorizontalOffset: 0
         shadowVerticalOffset: 0
 
+        blurEnabled: true
+        blurMax: 48
+
         SequentialAnimation on shadowBlur {
             running: root.phase === 3
             loops: Animation.Infinite
-            NumberAnimation { from: 0.2; to: 1; duration: 700; easing.type: Easing.InOutSine }
-            NumberAnimation { from: 1; to: 0.2; duration: 700; easing.type: Easing.InOutSine }
+            NumberAnimation { from: 0.3; to: 1; duration: 500; easing.type: Easing.InOutSine }
+            NumberAnimation { from: 1; to: 0.3; duration: 500; easing.type: Easing.InOutSine }
+        }
+
+        // A pulsing blur on top of the shadow: the effect is recomputed over
+        // the whole rotor every frame, which is the point of this phase.
+        SequentialAnimation on blur {
+            running: root.phase === 3
+            loops: Animation.Infinite
+            NumberAnimation { from: 0; to: 0.6; duration: 500; easing.type: Easing.InOutSine }
+            NumberAnimation { from: 0.6; to: 0; duration: 500; easing.type: Easing.InOutSine }
         }
 
     }

@@ -84,6 +84,54 @@ def normalise(verts, scale=1000):
             for x, y, z in verts]
 
 
+def cluster(verts, faces, target):
+    """Vertex-clustering decimation to roughly `target` vertices.
+
+    Bins vertices into a uniform grid and replaces each occupied cell with the
+    average of the vertices in it, then rebuilds the faces on the survivors and
+    drops the ones that collapsed. Crude next to an edge-collapse simplifier,
+    but it is deterministic, dependency-free and preserves the silhouette —
+    all a wireframe benchmark needs. The grid resolution is found by bisection
+    because cell occupancy is not linear in resolution."""
+    if not target or target >= len(verts):
+        return verts, faces
+    xs, ys, zs = zip(*verts)
+    lo = [min(xs), min(ys), min(zs)]
+    span = [max(1e-9, max(a) - min(a)) for a in (xs, ys, zs)]
+
+    def bin_at(res):
+        cells = {}
+        for i, v in enumerate(verts):
+            key = tuple(min(res - 1, int((v[k] - lo[k]) / span[k] * res))
+                        for k in range(3))
+            cells.setdefault(key, []).append(i)
+        return cells
+
+    n_lo, n_hi = 2, 256
+    best = bin_at(n_hi)
+    while n_lo <= n_hi:                       # smallest grid that still fits
+        mid = (n_lo + n_hi) // 2
+        cells = bin_at(mid)
+        if len(cells) > target:
+            n_hi = mid - 1
+        else:
+            best, n_lo = cells, mid + 1
+
+    remap, new_verts = {}, []
+    for members in best.values():
+        idx = len(new_verts)
+        new_verts.append(tuple(sum(verts[m][k] for m in members) / len(members)
+                               for k in range(3)))
+        for m in members:
+            remap[m] = idx
+    new_faces = []
+    for a, b, c in faces:
+        t = (remap[a], remap[b], remap[c])
+        if len(set(t)) == 3:
+            new_faces.append(t)
+    return new_verts, new_faces
+
+
 def edges_of(faces):
     out = set()
     for a, b, c in faces:
@@ -140,10 +188,14 @@ def main():
     ap.add_argument("--strips", type=int, default=6,
                     help="must match the ShapePath count in the watchface")
     ap.add_argument("--scale", type=int, default=1000)
+    ap.add_argument("--target-verts", type=int, default=0,
+                    help="decimate to roughly this many vertices (0 = keep all)")
     args = ap.parse_args()
 
     tris = read_binary_stl(args.stl)
     verts, faces = dedupe(tris)
+    if args.target_verts:
+        verts, faces = cluster(verts, faces, args.target_verts)
     verts = normalise(verts, args.scale)
     edges = edges_of(faces)
     strips = walk_strips(edges, args.strips)

@@ -30,13 +30,13 @@ BENCH_NAME = "nutty-benchy"
 FPS_NODE = "/sys/class/graphics/fb0/measured_fps"
 
 ASSET_DIR = Path(__file__).resolve().parent.parent / "assets" / "watchfaces"
-ASSETS = (f"{BENCH_NAME}.qml", "benchy-mesh.js")
+ASSETS = (f"{BENCH_NAME}.qml", "benchy-mesh.js", "benchy-mesh-lite.js")
 
 # (name, seconds) — must match nutty-benchy.qml's `phases`, plus its countdown.
 COUNTDOWN_S = 5
 PHASES = [("IDLE", 8), ("SCALE", 8), ("RERASTER", 8), ("ORBIT", 8),
           ("OVERDRAW", 8), ("DRAWCALLS", 8), ("SHAPES", 8), ("CASCADE", 8),
-          ("BENCHY", 10)]
+          ("BENCHYLITE", 8), ("BENCHY", 10)]
 RUN_S = COUNTDOWN_S + sum(d for _, d in PHASES)
 
 
@@ -65,8 +65,8 @@ def push_assets(watch) -> "str | None":
                                   timeout=30)
         if rc != 0:
             return f"push {name} failed: {err.strip()[:80]}"
-    watch.t.shell(f"chmod 644 {WATCHFACE_DIR}/{ASSETS[0]} "
-                  f"{WATCHFACE_DIR}/{ASSETS[1]}", timeout=10)
+    watch.t.shell("chmod 644 " + " ".join(f"{WATCHFACE_DIR}/{a}" for a in ASSETS),
+                  timeout=10)
     # A watchface file that did not exist when the launcher started is invisible
     # to it: pointing the dconf key at one leaves the homescreen blank, with no
     # QML error, because nothing is ever loaded. Proven both ways on catfish
