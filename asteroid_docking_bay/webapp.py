@@ -42,6 +42,8 @@ _JSON_ROUTES = [
     ("GET",  "/api/watch/<serial>/diag",           "watch.diag",      {},             False),
     ("POST", "/api/watch/<serial>/wake/<kind>/<value>", "watch.wake_set", {},         False),
     ("POST", "/api/watch/<serial>/locale/<locale>",    "watch.locale_set", {},        False),
+    ("POST", "/api/watch/<serial>/bench/push",        "bench.push",      {},             False),
+    ("POST", "/api/watch/<serial>/bench/restore",     "bench.restore",   {},             False),
     ("GET",  "/api/watch/<serial>/settings",       "watch.settings_read", {},         False),
     ("GET",  "/api/watch/<serial>/hands",          "watch.hands",     {},             False),
     ("GET",  "/api/weather",                       "weather.get",     {},             False),
@@ -417,6 +419,11 @@ def serve(args, cfg: dict):
         d = _call("onboard.sweep_prepare")
         _bust_status_cache()
         return json.dumps(d)
+
+    @app.get("/api/watch/<serial>/bench/run")
+    def api_bench_run(serial):
+        _event_stream_headers()
+        return _sse("bench.run", {"serial": serial})
 
     @app.get("/api/onboard-sweep/run")
     def api_sweep_run():

@@ -119,6 +119,9 @@ Deliberately mirrors the existing `/api/*` routes and module seams — the
 | `watch.diag` | kernel diagnostics: suspend blockers, freq residency, eMMC wear, failed units |
 | `watch.wake_set` | MCE wake gestures: doubletap policy, wrist/tilt detection |
 | `watch.locale_set` | system locale via localectl, gated on what the watch carries |
+| `bench.push` | install the nutty-benchy benchmark watchface |
+| `bench.run` | streaming: switch to the benchmark, sample FPS, switch back |
+| `bench.restore` | put a watch's own watchface back after an interrupted run |
 
 The dispatch table is an allow-list; unknown ops get `ok:false`. Nothing
 generic (no eval-style "run this shell command" op) — adding a capability

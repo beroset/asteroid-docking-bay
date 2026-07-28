@@ -1428,6 +1428,32 @@ function docPills(){
   if(bc&&bc.ok&&bc.finish_s)pills.push('boot '+bc.finish_s.toFixed(1)+'s');
   return pills;
 }
+let benchLog={};
+function _benchSay(serial,line){
+  var a=benchLog[serial]||[]; a.push(line);
+  benchLog[serial]=a.slice(-14);
+  if(ctlSerial===serial&&ctlTab==='ana')renderControl(ctlCache[serial]||{});
+}
+function benchPush(){
+  const s=ctlSerial;_benchSay(s,'pushing...');
+  fetch('/api/watch/'+encodeURIComponent(s)+'/bench/push',{method:'POST'}).then(r=>r.json())
+    .then(d=>_benchSay(s,d.ok?('pushed scene v'+d.scene+' to '+d.dir):('push failed: '+(d.error||'?'))))
+    .catch(()=>_benchSay(s,'push failed'));
+}
+function benchRestore(){
+  const s=ctlSerial;
+  fetch('/api/watch/'+encodeURIComponent(s)+'/bench/restore',{method:'POST'}).then(r=>r.json())
+    .then(d=>_benchSay(s,d.ok?('restored '+d.restored):('restore failed: '+(d.error||'?'))))
+    .catch(()=>_benchSay(s,'restore failed'));
+}
+function benchRun(){
+  const s=ctlSerial;
+  if(!confirm('Run the FPS benchmark on this watch? It switches the watchface for about 80 seconds, forces the screen on, then restores both.'))return;
+  benchLog[s]=[];
+  const es=new EventSource('/api/watch/'+encodeURIComponent(s)+'/bench/run');
+  es.onmessage=e=>{if(e.data)_benchSay(s,e.data);};
+  es.onerror=()=>{es.close();};
+}
 function bodyDiagTab(){
   const dg=dgData[ctlSerial],pills=docPills();
   let h='<div class="cc-sec"><div class="cc-sech">Diagnostics <a href="#" class="dim" style="float:right;text-decoration:none" onclick="docRefresh();return false" title="re-read all diagnostics">refresh</a></div>'+
@@ -1439,7 +1465,14 @@ function bodyDiagTab(){
 }
 function bodyAna(){
   const bc=bcData[ctlSerial];
-  let h='<div class="cc-sec"><div class="cc-sech">Boot analysis <a href="#" class="dim" style="float:right;text-decoration:none" onclick="delete bcData[ctlSerial];bcFetch(ctlSerial);renderControl(ctlCache[ctlSerial]||{});return false" title="re-read after a fresh boot">refresh</a></div></div>';
+  let h='<div class="cc-sec"><div class="cc-sech">FPS benchmark</div>'+
+    '<div class="dim" style="margin-bottom:4px">nutty-benchy switches this watch&#39;s watchface for ~80s, then puts it back.</div>'+
+    '<div class="cc-tgls" style="padding:0">'+
+      '<button class="cc-tgl" onclick="benchRun()" title="push the benchmark watchface, run all phases, restore the original">Run bench</button>'+
+      '<button class="cc-tgl" onclick="benchPush()" title="only install/refresh the watchface — for iterating on the scene">Push only</button>'+
+      '<button class="cc-tgl" onclick="benchRestore()" title="put the watch&#39;s own watchface back after an interrupted run">Restore face</button>'+
+    '</div><div id="benchlog" class="dim" style="font:11px monospace;margin-top:6px">'+(benchLog[ctlSerial]||[]).map(esc).join('<br>')+'</div></div>'+
+    '<div class="cc-sec"><div class="cc-sech">Boot analysis <a href="#" class="dim" style="float:right;text-decoration:none" onclick="delete bcData[ctlSerial];bcFetch(ctlSerial);renderControl(ctlCache[ctlSerial]||{});return false" title="re-read after a fresh boot">refresh</a></div></div>';
   if(bc===undefined||bc===false)h+='<div class="cc-sec"><span class="dim">reading boot accounting&hellip;</span></div>';
   else if(!bc.ok)h+='<div class="cc-sec"><span class="dim">'+esc(bc.error||'unavailable')+'</span></div>';
   else h+='<div class="cc-sec">'+bcHtml(bc)+'</div>';
