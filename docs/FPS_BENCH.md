@@ -120,6 +120,23 @@ Two consequences for this benchmark:
    memory, and why `bench.restore` exists as a separate op to run once the
    watch is back.
 
+## Settling, and an idea it suggests
+
+Watches enter a phase carrying the previous one's backlog: the frame rate
+starts low and is still falling when a short phase ends, so a number recorded
+over the whole window is a blend of two workloads rather than a measurement of
+one (moWerk, observed on nemo). Two mitigations are in place — a **quiet
+second between phases** where nothing animates and the next phase's name is
+already on screen, and **phases lengthened to 10 s** (12 s for the full boat).
+The host mirrors both: it walks the same gaps, and it drops each phase's first
+two samples.
+
+**Parked idea worth building:** make that settling its own phase. How long a
+watch takes to shed one workload and reach a steady rate under the next is a
+real property of the SoC and the scheduler, it differs between watches, and
+nothing else here measures it. A phase that alternates two known workloads and
+reports the time-to-stabilise would turn today's nuisance into a number.
+
 ## Comparability rules
 
 These are what make a number mean something a week later on another watch:

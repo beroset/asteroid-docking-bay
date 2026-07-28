@@ -54,7 +54,10 @@ Item {
 
     // ── the scene version. CHANGE THIS whenever the workload changes: results
     // are only comparable within one version (see docs/FPS_BENCH.md).
-    readonly property string sceneVersion: "5"
+    // Shown during the countdown so a screenshot or a spoken result can be
+    // tied to an exact scene. Starts at 0.1 and steps by 0.01 per change
+    // (moWerk) — results only compare within one version.
+    readonly property string sceneVersion: "0.1"
     // The run holds the screen itself — same mechanism asteroid-flashlight
     // uses to stay lit only while a feature is active (moWerk). Held through
     // the countdown, because that exists so you can reach the rig, and dropped
@@ -93,18 +96,32 @@ Item {
 
     // ── phase machine ─────────────────────────────────────────────────────
     readonly property var phases: [
-        { name: "IDLE",      dur: 8 },   // the sanity floor: must be flat 60
-        { name: "SCALE",     dur: 8 },   // distance-field text, scale transform
-        { name: "RERASTER",  dur: 8 },   // same visual, animated pixelSize
-        { name: "ORBIT",     dur: 8 },   // rim numeral + pulsing shadow
-        { name: "OVERDRAW",  dur: 8 },   // stacked translucent full-screen fills
-        { name: "DRAWCALLS", dur: 8 },   // unbatchable Icons in motion
-        { name: "SHAPES",    dur: 8 },   // re-tessellated Shape path
-        { name: "CASCADE",   dur: 8 },   // scale on an Item with many children
-        { name: "SHADER",    dur: 8 },   // fragment-bound: 28 noise lookups/pixel
-        { name: "BENCHYLITE", dur: 8 },  // the boat at 438 vertices / 1545 segments
-        { name: "BENCHY",    dur: 10 }   // the boat at 1118 vertices / 3720 segments
+        { name: "IDLE",      dur: 10 },  // the sanity floor: must be flat 60
+        { name: "SCALE",     dur: 10 },  // distance-field text, scale transform
+        { name: "RERASTER",  dur: 10 },  // same visual, animated pixelSize
+        { name: "ORBIT",     dur: 10 },  // rim numeral + pulsing shadow
+        { name: "OVERDRAW",  dur: 10 },  // stacked translucent full-screen fills
+        { name: "DRAWCALLS", dur: 10 },  // unbatchable Icons in motion
+        { name: "SHAPES",    dur: 10 },  // re-tessellated Shape path
+        { name: "CASCADE",   dur: 10 },  // scale on an Item with many children
+        { name: "SHADER",    dur: 10 },  // fragment-bound: 28 noise lookups/pixel
+        { name: "BENCHYLITE", dur: 10 }, // the boat at 438 vertices / 1545 segments
+        { name: "BENCHY",    dur: 12 }   // the boat at 1118 vertices / 3720 segments
     ]
+    // A quiet second between phases: watches enter a phase carrying the
+    // previous one's backlog, and the frame rate is still falling when a short
+    // phase ends, so the number recorded is a blend of two workloads rather
+    // than a measurement of one (moWerk). Nothing animates during the gap; it
+    // shows the NAME of the phase about to start.
+    readonly property int gapSeconds: 1
+    property bool inGap: false
+    property int gapLeft: 0
+    // Workloads compare against THIS, not `phase`: during a gap it matches
+    // nothing, so every animation and every visible item switches off without
+    // needing its own gap condition.
+    readonly property int activePhase: inGap ? -2 : phase
+    readonly property string nextName: (phase + 1) < phases.length
+                                       ? phases[phase + 1].name : "DONE"
     property int countdown: 5
     property int phase: -1                         // -1 = counting down
     property int phaseElapsed: 0
@@ -138,6 +155,16 @@ Item {
         }
         if (!running)
             return;
+        if (inGap) {
+            gapLeft--;
+            if (gapLeft <= 0) {
+                inGap = false;
+                phase++;
+                phaseElapsed = 0;
+                _cur = [];
+            }
+            return;
+        }
         phaseElapsed++;
         if (phaseElapsed >= phases[phase].dur) {
             var s = _cur.slice();
@@ -155,9 +182,8 @@ Item {
                 "samples": s.length
             });
             results = r;
-            _cur = [];
-            phase++;
-            phaseElapsed = 0;
+            inGap = true;              // settle before the next phase starts
+            gapLeft = gapSeconds;
         }
     }
 
@@ -234,13 +260,13 @@ Item {
 
         delegate: Text {
             readonly property real a: index / 10 * 2 * Math.PI
-            readonly property bool ring: root.phase === 1 || root.phase === 2
+            readonly property bool ring: root.activePhase === 1 || root.activePhase === 2
 
             visible: ring
             text: root.mmStr
             color: root.fg
             opacity: 0.5
-            renderType: root.phase === 2 ? Text.NativeRendering : Text.QtRendering
+            renderType: root.activePhase === 2 ? Text.NativeRendering : Text.QtRendering
             x: root.width / 2 + root.rootRadius * 0.62 * Math.cos(a) - width / 2
             y: root.height / 2 + root.rootRadius * 0.62 * Math.sin(a) - height / 2
             font.family: "Inter Tight"
@@ -248,14 +274,14 @@ Item {
             font.pixelSize: root.maxSize * 0.13
 
             SequentialAnimation on scale {
-                running: root.phase === 1 && parent.visible && root.awake
+                running: root.activePhase === 1 && parent.visible && root.awake
                 loops: Animation.Infinite
                 NumberAnimation { from: 0.7; to: 2.1; duration: 800 + index * 40; easing.type: Easing.InOutSine }
                 NumberAnimation { from: 2.1; to: 0.7; duration: 800 + index * 40; easing.type: Easing.InOutSine }
             }
 
             SequentialAnimation on font.pixelSize {
-                running: root.phase === 2 && parent.visible && root.awake
+                running: root.activePhase === 2 && parent.visible && root.awake
                 loops: Animation.Infinite
                 NumberAnimation { from: root.maxSize * 0.09; to: root.maxSize * 0.27; duration: 800 + index * 40; easing.type: Easing.InOutSine }
                 NumberAnimation { from: root.maxSize * 0.27; to: root.maxSize * 0.09; duration: 800 + index * 40; easing.type: Easing.InOutSine }
@@ -268,8 +294,8 @@ Item {
     Text {
         id: centreText
 
-        readonly property bool scaling: root.phase === 1
-        readonly property bool rerastering: root.phase === 2
+        readonly property bool scaling: root.activePhase === 1
+        readonly property bool rerastering: root.activePhase === 2
 
         text: root.countdown > 0 ? root.countdown : root.mmStr
         visible: !root.done
@@ -313,7 +339,7 @@ Item {
     // pixels, which is why results are also reported per megapixel.
     Item {
         anchors.fill: parent
-        visible: root.phase === 4 && root.awake
+        visible: root.activePhase === 4 && root.awake
 
         Repeater {
             model: 24
@@ -323,7 +349,7 @@ Item {
                 color: index % 2 ? "#2000a0ff" : "#20ff5090"
 
                 SequentialAnimation on opacity {
-                    running: root.phase === 4 && parent.visible && root.awake
+                    running: root.activePhase === 4 && parent.visible && root.awake
                     loops: Animation.Infinite
                     NumberAnimation { from: 0.35; to: 0.9; duration: 600 + index * 90 }
                     NumberAnimation { from: 0.9; to: 0.35; duration: 600 + index * 90 }
@@ -342,7 +368,7 @@ Item {
         id: iconStorm
 
         anchors.fill: parent
-        visible: root.phase === 5 && root.awake
+        visible: root.activePhase === 5 && root.awake
 
         Repeater {
             model: 96
@@ -380,7 +406,7 @@ Item {
         property real t: 0
 
         anchors.fill: parent
-        visible: root.phase === 6 && root.awake
+        visible: root.activePhase === 6 && root.awake
         preferredRendererType: Shape.CurveRenderer
 
         NumberAnimation on t {
@@ -485,7 +511,7 @@ Item {
         id: cascade
 
         anchors.fill: parent
-        visible: root.phase === 7 && root.awake
+        visible: root.activePhase === 7 && root.awake
         transformOrigin: Item.Center
 
         Repeater {
@@ -526,7 +552,7 @@ Item {
         id: shaderPhase
 
         anchors.fill: parent
-        visible: root.phase === 8 && root.awake
+        visible: root.activePhase === 8 && root.awake
         fragmentShader: "benchy-shader.frag.qsb"
 
         property real t: 0
@@ -563,7 +589,7 @@ Item {
     // 1545 segments; BENCHY (phase 9) is the full 1118 / 3720. Same code path,
     // so the pair measures how frame time scales with segment count.
     function projectBenchy() {
-        var M = root.phase === 9 ? MeshLite : Mesh;
+        var M = root.activePhase === 9 ? MeshLite : Mesh;
         var V = M.V, S = M.S;
         var a = root.benchyAngle * Math.PI / 180;
         var ca = Math.cos(a), sa = Math.sin(a);
@@ -606,7 +632,7 @@ Item {
         id: benchyShape
 
         anchors.fill: parent
-        visible: (root.phase === 9 || root.phase === 10) && root.awake
+        visible: (root.activePhase === 9 || root.activePhase === 10) && root.awake
         onVisibleChanged: if (visible) root.projectBenchy()
 
         ShapePath { id: bp0; fillColor: "#2258a6ff"; fillRule: ShapePath.WindingFill; strokeColor: "#58a6ff"; strokeWidth: 1; PathPolyline { id: pl0 } }
@@ -619,7 +645,7 @@ Item {
         NumberAnimation on rotationDriver {
             from: 0
             to: 360
-            duration: root.phase === 9 ? 4000 : 6000
+            duration: root.activePhase === 9 ? 4000 : 6000
             loops: Animation.Infinite
             running: benchyShape.visible && root.awake
         }
@@ -644,7 +670,7 @@ Item {
     NumberAnimation on rotorAngle {
         from: 0
         to: 360
-        duration: root.phase === 3 ? 2200 : 6000     // ORBIT sweeps faster
+        duration: root.activePhase === 3 ? 2200 : 6000     // ORBIT sweeps faster
         loops: Animation.Infinite
         running: !displayAmbient
     }
@@ -683,7 +709,7 @@ Item {
     MultiEffect {
         source: rotor
         anchors.fill: rotor
-        visible: root.phase === 3
+        visible: root.activePhase === 3
         shadowEnabled: true
         shadowColor: "#c00090ff"
         shadowHorizontalOffset: 0
@@ -693,7 +719,7 @@ Item {
         blurMax: 48
 
         SequentialAnimation on shadowBlur {
-            running: root.phase === 3 && root.awake
+            running: root.activePhase === 3 && root.awake
             loops: Animation.Infinite
             NumberAnimation { from: 0.3; to: 1; duration: 500; easing.type: Easing.InOutSine }
             NumberAnimation { from: 1; to: 0.3; duration: 500; easing.type: Easing.InOutSine }
@@ -702,7 +728,7 @@ Item {
         // A pulsing blur on top of the shadow: the effect is recomputed over
         // the whole rotor every frame, which is the point of this phase.
         SequentialAnimation on blur {
-            running: root.phase === 3 && root.awake
+            running: root.activePhase === 3 && root.awake
             loops: Animation.Infinite
             NumberAnimation { from: 0; to: 0.6; duration: 500; easing.type: Easing.InOutSine }
             NumberAnimation { from: 0.6; to: 0; duration: 500; easing.type: Easing.InOutSine }
@@ -752,7 +778,7 @@ Item {
 
     // ── whisper line: phase name and progress (Nutty Null's date slot) ─────
     Text {
-        text: root.countdown > 0 ? "GET TO THE RIG"
+        text: root.countdown > 0 ? "GET TO THE RIG \u00b7 v" + root.sceneVersion
                                  : (root.done ? "BENCH COMPLETE · v" + root.sceneVersion
                                               : root.phaseName + " · " + (root.phase + 1) + "/" + root.phases.length)
         color: root.dim
@@ -780,9 +806,11 @@ Item {
     Text {
         anchors.centerIn: parent
         visible: root.running
-        text: root.phaseName
+        // In the settle gap this announces what is ABOUT to run, so the name
+        // is already on screen when the phase starts.
+        text: root.inGap ? root.nextName : root.phaseName
+        opacity: root.inGap ? 0.45 : 0.9
         color: root.fg
-        opacity: 0.9
         font.family: "Inter Tight"
         font.weight: Font.Medium
         font.pixelSize: root.maxSize * 0.1

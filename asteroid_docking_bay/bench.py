@@ -42,10 +42,13 @@ ASSETS = (f"{BENCH_NAME}.qml", "benchy-mesh.js", "benchy-mesh-lite.js",
 
 # (name, seconds) — must match nutty-benchy.qml's `phases`, plus its countdown.
 COUNTDOWN_S = 5
-PHASES = [("IDLE", 8), ("SCALE", 8), ("RERASTER", 8), ("ORBIT", 8),
-          ("OVERDRAW", 8), ("DRAWCALLS", 8), ("SHAPES", 8), ("CASCADE", 8),
-          ("SHADER", 8), ("BENCHYLITE", 8), ("BENCHY", 10)]
-RUN_S = COUNTDOWN_S + sum(d for _, d in PHASES)
+# A quiet second between phases so a watch does not carry one phase's backlog
+# into the next; the host must mirror it or every window after the first drifts.
+GAP_S = 1
+PHASES = [("IDLE", 10), ("SCALE", 10), ("RERASTER", 10), ("ORBIT", 10),
+          ("OVERDRAW", 10), ("DRAWCALLS", 10), ("SHAPES", 10), ("CASCADE", 10),
+          ("SHADER", 10), ("BENCHYLITE", 10), ("BENCHY", 12)]
+RUN_S = COUNTDOWN_S + sum(d for _, d in PHASES) + GAP_S * len(PHASES)
 
 
 def scene_version() -> "str | None":
@@ -186,6 +189,9 @@ def align_phases(samples, t0: float) -> "list[dict]":
     for name, dur in PHASES:
         end = start + dur
         vals = [f for ts, f in samples if start <= ts < end]
+        # Drop the first two samples of a phase: the watch is still shedding
+        # the previous workload's backlog and those readings blend two phases.
+        vals = vals[2:] if len(vals) > 4 else vals
         # Ignore zeros: the node reads 0.0 when the panel is not committing
         # frames at all, which is an absence of data, not a measurement.
         vals = [v for v in vals if v > 0]
@@ -196,5 +202,5 @@ def align_phases(samples, t0: float) -> "list[dict]":
             "max": round(max(vals), 1) if vals else None,
             "samples": len(vals),
         })
-        start = end
+        start = end + GAP_S
     return out

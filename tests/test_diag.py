@@ -61,24 +61,30 @@ def test_parse_diag_degrades_to_empty():
 # ── nutty-benchy driving ────────────────────────────────────────────────────
 
 def test_parse_samples_and_phase_alignment():
-    """Kernel FPS samples are split into the watchface's phase windows. Zeros
-    are dropped: measured_fps reads 0.0 when the panel is not committing at
-    all, which is an absence of data, not a measurement of zero frames.
-    Planted-bug: keep the zeros and IDLE's average collapses."""
-    from asteroid_docking_bay.bench import parse_samples, align_phases, COUNTDOWN_S
+    """Kernel FPS samples are split into the watchface's phase windows, with
+    the settle gap between phases accounted for — without it every window
+    after the first drifts by a second per phase and readings land in the
+    wrong bucket. Zeros are dropped: measured_fps reads 0.0 when the panel is
+    not committing at all, which is an absence of data, not a measurement of
+    zero frames. Planted-bug: drop GAP_S from the walk and RERASTER's sample
+    lands in SCALE."""
+    from asteroid_docking_bay.bench import (parse_samples, align_phases,
+                                            COUNTDOWN_S, GAP_S, PHASES)
+
+    def phase_start(i):
+        return COUNTDOWN_S + sum(PHASES[k][1] + GAP_S for k in range(i))
+
     t0 = 1000.0
     lines = []
-    # inside IDLE (starts at t0+5): three good samples and one zero
-    for i, v in enumerate((60.0, 59.5, 0.0, 60.0)):
-        lines.append(f"{t0 + COUNTDOWN_S + 1 + i} {v}")
-    # inside RERASTER (third phase: starts at t0+5+16)
-    lines.append(f"{t0 + COUNTDOWN_S + 17} 22.5")
+    for i, v in enumerate((60.0, 59.5, 0.0, 60.0)):          # inside IDLE
+        lines.append(f"{t0 + phase_start(0) + 1 + i} {v}")
+    lines.append(f"{t0 + phase_start(2) + 3} 22.5")          # inside RERASTER
     rows = align_phases(parse_samples("\n".join(lines)), t0)
     by = {r["phase"]: r for r in rows}
     assert by["IDLE"]["samples"] == 3 and by["IDLE"]["min"] == 59.5
     assert by["IDLE"]["avg"] == 59.8
     assert by["RERASTER"]["avg"] == 22.5
-    assert by["SCALE"]["avg"] is None          # no samples landed there
+    assert by["SCALE"]["avg"] is None          # the gap kept it out of here
     assert [r["phase"] for r in rows][-1] == "BENCHY"
 
 
