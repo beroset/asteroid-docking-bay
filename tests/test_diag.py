@@ -380,3 +380,82 @@ def test_max_powered_ports_policy_refuses_at_the_cap(monkeypatch):
     monkeypatch.setattr(rpcops, "_powered_port_count", lambda cfg: 6)
     assert rpcops._refuse_if_bus_full({"max_powered_ports": 6})["ok"] is False
     assert rpcops._refuse_if_bus_full({"max_powered_ports": 8}) is None
+
+
+# ── udev event-driven discovery ─────────────────────────────────────────────
+
+def test_parse_event_reads_device_events_and_ignores_interfaces():
+    """One physical plug emits the device plus one event per interface.
+    Interface events must report dev=None so callers can drop the duplicates
+    instead of running a full scan for each. Planted-bug: let the devpath
+    regex match a trailing ':1.0' and every plug refreshes several times."""
+    from asteroid_docking_bay.usbevents import parse_event
+    ev = parse_event("UDEV  [123.4] add      /devices/pci0000:00/usb1/1-3/1-3.2 (usb)")
+    assert ev == {"action": "add", "subsystem": "usb", "dev": "1-3.2",
+                  "devpath": "/devices/pci0000:00/usb1/1-3/1-3.2"}
+    iface = parse_event("UDEV  [123.5] add      /devices/pci0000:00/usb1/1-3/1-3.2/1-3.2:1.0 (usb)")
+    assert iface["dev"] is None
+    assert parse_event("KERNEL[1.0] add /devices/x (usb)") is None   # kernel half
+    assert parse_event("") is None
+    assert parse_event("garbage") is None
+
+
+def test_split_dev_maps_a_device_to_its_hub_port():
+    """A device path names the port it sits on, which is what every a-d-b
+    lookup is keyed by."""
+    from asteroid_docking_bay.usbevents import split_dev
+    assert split_dev("1-3.2") == ("1-3", 2)
+    assert split_dev("1-6.1.4") == ("1-6.1", 4)
+    assert split_dev("1-3") is None            # root device, not on a hub port
+    assert split_dev("1-3.x") is None
+
+
+def test_monitor_collapses_an_event_burst_into_one_refresh(monkeypatch):
+    """A plug emits the device plus one event per interface; refreshing on
+    each would cost several full bus scans for one physical action.
+
+    Drives the REAL reader over a fake udevadm stream rather than poking the
+    debounce flag directly — an earlier version of this test set _pending by
+    hand, never executed _read, and so passed happily against a monitor that
+    called on_change() on every single line.
+
+    Planted-bug: call on_change directly from the reader and this sees 4."""
+    import threading, time
+    from asteroid_docking_bay import usbevents
+    from asteroid_docking_bay.usbevents import UsbEventMonitor
+
+    burst = [
+        "UDEV  [1.0] add      /devices/pci0000:00/usb1/1-3/1-3.2 (usb)\n",
+        "UDEV  [1.1] add      /devices/pci0000:00/usb1/1-3/1-3.2/1-3.2:1.0 (usb)\n",
+        "UDEV  [1.2] bind     /devices/pci0000:00/usb1/1-3/1-3.2 (usb)\n",
+        "UDEV  [1.3] add      /devices/pci0000:00/usb1/1-3/1-3.2/1-3.2:1.1 (usb)\n",
+    ]
+
+    class _FakeProc:
+        stdout = iter(burst)
+
+        def terminate(self):
+            pass
+
+    calls = []
+    mon = UsbEventMonitor(lambda: calls.append(1), debounce_s=0.05)
+    mon._proc = _FakeProc()
+    # never let the unconfigured probe touch real sysfs
+    monkeypatch.setattr(usbevents, "port_device_info", lambda loc, port: None)
+    threading.Thread(target=mon._flush, daemon=True).start()
+    mon._read()
+    time.sleep(0.4)
+    mon.stop()
+    assert len(calls) == 1
+
+
+def test_monitor_start_degrades_when_udevadm_is_missing(monkeypatch):
+    """No udevadm is a degradation, not a failure — polling still covers
+    everything, so the web service must come up regardless."""
+    import subprocess
+    from asteroid_docking_bay.usbevents import UsbEventMonitor
+
+    def _boom(*a, **k):
+        raise FileNotFoundError("udevadm")
+    monkeypatch.setattr(subprocess, "Popen", _boom)
+    assert UsbEventMonitor(lambda: None).start() is False

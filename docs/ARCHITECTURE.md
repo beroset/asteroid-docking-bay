@@ -20,14 +20,21 @@ asteroid_docking_bay/
     config.py      config file I/O + defaults, config lock, lookup helpers
                    (codename <-> serial <-> hub port)
     usb.py         port power: direct sysfs read/write/cycle, PowerCache,
-                   uhubctl discovery/fallback + cross-process lock,
-                   PPPS (true-VBUS) test, sysfs topology scan
+                   sysfs hub discovery (finds non-PPPS hubs uhubctl cannot
+                   see) + uhubctl fallback and cross-process lock,
+                   PPPS (true-VBUS) test, sysfs topology scan,
+                   per-port device identification (serial + link type +
+                   the unconfigured state), xHCI device-slot budget
     fastboot.py    fastboot device polling + cache, nightly download +
                    SHA512 verify, the fastboot flash sequence
     events.py      EventLog: per-watch JSONL timeline, standby-drain rate,
                    adaptive next-due projection, drain-test results/summaries
     tasks.py       in-memory operation registries + TaskStore (atomic JSON
-                   persistence so running ops survive restarts)
+                   persistence so running ops survive restarts), the
+                   onboard lock and task_active() deadline guard
+    usbevents.py   udev-driven bus monitoring: debounced cache invalidation
+                   so a docking watch shows up without waiting for the next
+                   poll, and naming the enumerated-but-unconfigured state
     watchctl.py    Watch: one serial-bound handle for everything done *to*
                    a watch — Control Center data batch, WiFi/BT toggles,
                    clock sync, screenshot, notification, buzz, screen,

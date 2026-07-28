@@ -110,6 +110,13 @@ def serve(args, cfg: dict):
         for up to the cache TTL, showing rows that never matched reality."""
         status_cache["ts"] = 0.0
 
+    # udev tells us about a docking watch in milliseconds; polling can sit a
+    # whole interval behind it. The monitor only busts this cache — it never
+    # drives an operation, so a noisy bus cannot turn into a storm of actions.
+    from .usbevents import UsbEventMonitor
+    _usb_monitor = UsbEventMonitor(_bust_status_cache)
+    _usb_monitor.start()
+
     from .rpc import LocalCaller, RpcClient, RpcError, load_token
     from . import rpcops
     # Split mode (--backend host:port) proxies every op to a remote backend;
