@@ -1446,6 +1446,19 @@ function benchRestore(){
     .then(d=>_benchSay(s,d.ok?('restored '+d.restored):('restore failed: '+(d.error||'?'))))
     .catch(()=>_benchSay(s,'restore failed'));
 }
+function benchApp(action){
+  const s=ctlSerial;
+  if(action==='remove'&&!confirm('Remove benchymark from this watch?'))return;
+  _benchSay(s,action+'...');
+  fetch('/api/watch/'+encodeURIComponent(s)+'/bench/app/'+action,{method:'POST'})
+    .then(r=>r.json()).then(d=>{
+      if(!d.ok){_benchSay(s,action+' failed: '+(d.error||'?'));return;}
+      if(action==='results'){
+        _benchSay(s,'run '+(d.finished||'')+' scene v'+(d.scene||'?')+' @'+(d.resolution||'?'));
+        (d.phases||[]).forEach(p=>_benchSay(s,'  '+p.phase+'  avg '+p.avg+'  min '+p.min));
+      }else _benchSay(s,action+' ok'+(d.installed?': '+d.installed:''));
+    }).catch(()=>_benchSay(s,action+' failed'));
+}
 function benchRun(){
   const s=ctlSerial;
   if(!confirm('Run the FPS benchmark on this watch? It switches the watchface for about 80 seconds, forces the screen on, then restores both.'))return;
@@ -1471,6 +1484,14 @@ function bodyAna(){
       '<button class="cc-tgl" onclick="benchRun()" title="push the benchmark watchface, run all phases, restore the original">Run bench</button>'+
       '<button class="cc-tgl" onclick="benchPush()" title="only install/refresh the watchface — for iterating on the scene">Push only</button>'+
       '<button class="cc-tgl" onclick="benchRestore()" title="put the watch&#39;s own watchface back after an interrupted run">Restore face</button>'+
+    '</div>'+
+    '<div class="dim" style="margin:6px 0 2px">benchymark app &mdash; holds the screen itself and writes its results to the watch, which the watchface cannot do.</div>'+
+    '<div class="cc-tgls" style="padding:0">'+
+      '<button class="cc-tgl" onclick="benchApp(&#39;install&#39;)" title="push the built ipk and opkg-install it (force-reinstall)">Install</button>'+
+      '<button class="cc-tgl" onclick="benchApp(&#39;start&#39;)" title="launch it in the watch session">Start</button>'+
+      '<button class="cc-tgl" onclick="benchApp(&#39;stop&#39;)" title="kill it">Stop</button>'+
+      '<button class="cc-tgl" onclick="benchApp(&#39;results&#39;)" title="read the last completed run back from the watch">Results</button>'+
+      '<button class="cc-tgl" onclick="benchApp(&#39;remove&#39;)" title="opkg-remove it from the watch">Remove</button>'+
     '</div><div id="benchlog" class="dim" style="font:11px monospace;margin-top:6px">'+(benchLog[ctlSerial]||[]).map(esc).join('<br>')+'</div></div>'+
     '<div class="cc-sec"><div class="cc-sech">Boot analysis <a href="#" class="dim" style="float:right;text-decoration:none" onclick="delete bcData[ctlSerial];bcFetch(ctlSerial);renderControl(ctlCache[ctlSerial]||{});return false" title="re-read after a fresh boot">refresh</a></div></div>';
   if(bc===undefined||bc===false)h+='<div class="cc-sec"><span class="dim">reading boot accounting&hellip;</span></div>';

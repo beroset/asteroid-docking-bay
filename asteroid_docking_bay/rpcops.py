@@ -26,6 +26,7 @@ import queue
 import re
 import shlex
 import threading
+from pathlib import Path
 import time
 
 from . import bench
@@ -1127,6 +1128,41 @@ def _bench_clear(serial):
             save_config(cfg)
 
 
+@DISPATCH.op("bench.app")
+def _bench_app(argsd):
+    """Install / start / stop / remove the benchymark app, and read back the
+    last run it wrote. One op with an action rather than five ops: they share
+    the watch lookup and the same failure shape, and the op table is the
+    security boundary — fewer entries is fewer things to audit."""
+    serial, action = argsd["serial"], argsd.get("action")
+    w = _watch(serial)
+    if action == "install":
+        # With no explicit path, take the newest ipk the build produced: the
+        # UI button carries no arguments, and hunting for the file by hand is
+        # exactly the step that goes stale between rebuilds.
+        ipk = argsd.get("ipk") or bench.newest_ipk()
+        if not ipk or not Path(ipk).is_file():
+            return {"ok": False,
+                    "error": f"no benchymark ipk found (looked in {bench.IPK_DIR})"}
+        err = bench.app_install(w, ipk)
+        return {"ok": not err, **({"error": err} if err else {"installed": Path(ipk).name})}
+    if action == "start":
+        err = bench.app_start(w)
+        return {"ok": not err, **({"error": err} if err else {})}
+    if action == "stop":
+        bench.app_stop(w)
+        return {"ok": True}
+    if action == "remove":
+        err = bench.app_remove(w)
+        return {"ok": not err, **({"error": err} if err else {})}
+    if action == "results":
+        d = bench.app_results(w)
+        if not d:
+            return {"ok": False, "error": "no completed run on this watch yet"}
+        return {"ok": True, **d}
+    return {"ok": False, "error": f"unknown action: {action}"}
+
+
 @DISPATCH.op("bench.restore")
 def _bench_restore(args):
     """Put a watch's own watchface back. The safety valve: if a run is
@@ -1185,10 +1221,13 @@ def _bench_run(args):
         bench.write_key(w, bench.WALLPAPER_KEY, bench.FLATMESH)
         yield f"wallpaper forced to FlatMesh for the run (was {saved_wp})"
 
-    # The watchface holds the screen itself for exactly its own run
-    # (Nemo.KeepAlive DisplayBlanking, the mechanism asteroid-flashlight uses),
-    # so the host does not pin the panel awake at all any more: nothing here
-    # can leave a watch lit if this op dies mid-run.
+    # The watchface asks for the screen itself via Nemo.KeepAlive, but that
+    # request is ignored inside the compositor (observed on nemo, 2026-07-28 —
+    # the same declarative DisplayBlanking works in asteroid-flashlight, which
+    # is a client app). So the host holds the panel for the run as well: belt
+    # and braces, released in the finally below, and harmless if the watchface
+    # ever does get its wish.
+    bench.keep_awake(w, True)
     samples_out = {}
 
     def _sampler():
@@ -1214,6 +1253,10 @@ def _bench_run(args):
         th.join(timeout=30)
     finally:
         # Always hand the watch back, whatever happened above.
+        try:
+            bench.keep_awake(w, False)
+        except Exception:
+            pass
         wp = (load_config().get("bench_saved_wallpaper") or {}).get(serial)
         if wp and wp != bench.FLATMESH:
             bench.write_key(w, bench.WALLPAPER_KEY, wp)
