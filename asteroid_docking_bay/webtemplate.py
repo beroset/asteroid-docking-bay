@@ -1434,18 +1434,6 @@ function _benchSay(serial,line){
   benchLog[serial]=a.slice(-14);
   if(ctlSerial===serial&&ctlTab==='ana')renderControl(ctlCache[serial]||{});
 }
-function benchPush(){
-  const s=ctlSerial;_benchSay(s,'pushing...');
-  fetch('/api/watch/'+encodeURIComponent(s)+'/bench/push',{method:'POST'}).then(r=>r.json())
-    .then(d=>_benchSay(s,d.ok?('pushed scene v'+d.scene+' to '+d.dir):('push failed: '+(d.error||'?'))))
-    .catch(()=>_benchSay(s,'push failed'));
-}
-function benchRestore(){
-  const s=ctlSerial;
-  fetch('/api/watch/'+encodeURIComponent(s)+'/bench/restore',{method:'POST'}).then(r=>r.json())
-    .then(d=>_benchSay(s,d.ok?('restored '+d.restored):('restore failed: '+(d.error||'?'))))
-    .catch(()=>_benchSay(s,'restore failed'));
-}
 function benchApp(action){
   const s=ctlSerial;
   if(action==='remove'&&!confirm('Remove benchymark from this watch?'))return;
@@ -1459,14 +1447,6 @@ function benchApp(action){
       }else _benchSay(s,action+' ok'+(d.installed?': '+d.installed:''));
     }).catch(()=>_benchSay(s,action+' failed'));
 }
-function benchRun(){
-  const s=ctlSerial;
-  if(!confirm('Run the FPS benchmark on this watch? It switches the watchface for about 80 seconds, forces the screen on, then restores both.'))return;
-  benchLog[s]=[];
-  const es=new EventSource('/api/watch/'+encodeURIComponent(s)+'/bench/run');
-  es.onmessage=e=>{if(e.data)_benchSay(s,e.data);};
-  es.onerror=()=>{es.close();};
-}
 function bodyDiagTab(){
   const dg=dgData[ctlSerial],pills=docPills();
   let h='<div class="cc-sec"><div class="cc-sech">Diagnostics <a href="#" class="dim" style="float:right;text-decoration:none" onclick="docRefresh();return false" title="re-read all diagnostics">refresh</a></div>'+
@@ -1479,13 +1459,7 @@ function bodyDiagTab(){
 function bodyAna(){
   const bc=bcData[ctlSerial];
   let h='<div class="cc-sec"><div class="cc-sech">FPS benchmark</div>'+
-    '<div class="dim" style="margin-bottom:4px">nutty-benchy switches this watch&#39;s watchface for ~80s, then puts it back.</div>'+
-    '<div class="cc-tgls" style="padding:0">'+
-      '<button class="cc-tgl" onclick="benchRun()" title="push the benchmark watchface, run all phases, restore the original">Run bench</button>'+
-      '<button class="cc-tgl" onclick="benchPush()" title="only install/refresh the watchface — for iterating on the scene">Push only</button>'+
-      '<button class="cc-tgl" onclick="benchRestore()" title="put the watch&#39;s own watchface back after an interrupted run">Restore face</button>'+
-    '</div>'+
-    '<div class="dim" style="margin:6px 0 2px">benchymark app &mdash; holds the screen itself and writes its results to the watch, which the watchface cannot do.</div>'+
+    '<div class="dim" style="margin-bottom:4px">benchymark holds the screen itself, runs its phases and writes its results to the watch. Install it, start it, then read the run back.</div>'+
     '<div class="cc-tgls" style="padding:0">'+
       '<button class="cc-tgl" onclick="benchApp(&#39;install&#39;)" title="push the built ipk and opkg-install it (force-reinstall)">Install</button>'+
       '<button class="cc-tgl" onclick="benchApp(&#39;start&#39;)" title="launch it in the watch session">Start</button>'+

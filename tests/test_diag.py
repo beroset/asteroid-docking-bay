@@ -58,54 +58,38 @@ def test_parse_diag_degrades_to_empty():
     assert d["wakeup_sources"] == [] and d["failed_units"] == []
 
 
-# ── nutty-benchy driving ────────────────────────────────────────────────────
+# ── benchymark driving ──────────────────────────────────────────────────────
 
-def test_parse_samples_and_phase_alignment():
-    """Kernel FPS samples are split into the watchface's phase windows, with
-    the settle gap between phases accounted for — without it every window
-    after the first drifts by a second per phase and readings land in the
-    wrong bucket. Zeros are dropped: measured_fps reads 0.0 when the panel is
-    not committing at all, which is an absence of data, not a measurement of
-    zero frames. Planted-bug: drop GAP_S from the walk and RERASTER's sample
-    lands in SCALE."""
-    from asteroid_docking_bay.bench import (parse_samples, align_phases,
-                                            COUNTDOWN_S, GAP_S, PHASES)
-
-    def phase_start(i):
-        return COUNTDOWN_S + sum(PHASES[k][1] + GAP_S for k in range(i))
-
-    t0 = 1000.0
-    lines = []
-    for i, v in enumerate((60.0, 59.5, 0.0, 60.0)):          # inside IDLE
-        lines.append(f"{t0 + phase_start(0) + 1 + i} {v}")
-    lines.append(f"{t0 + phase_start(2) + 3} 22.5")          # inside RERASTER
-    rows = align_phases(parse_samples("\n".join(lines)), t0)
-    by = {r["phase"]: r for r in rows}
-    assert by["IDLE"]["samples"] == 3 and by["IDLE"]["min"] == 59.5
-    assert by["IDLE"]["avg"] == 59.8
-    assert by["RERASTER"]["avg"] == 22.5
-    assert by["SCALE"]["avg"] is None          # the gap kept it out of here
-    assert [r["phase"] for r in rows][-1] == "BENCHY"
-
-
-def test_bench_phase_table_matches_the_watchface():
-    """The host's phase table only aligns samples correctly while it mirrors
-    the QML. If someone edits the scene's phases, this fails loudly instead of
-    silently attributing frames to the wrong phase."""
-    import re
-    from pathlib import Path
-    from asteroid_docking_bay.bench import PHASES, ASSET_DIR
-    qml = (ASSET_DIR / "nutty-benchy.qml").read_text()
-    names = re.findall(r'\{ name: "(\w+)",\s*dur: (\d+)', qml)
-    assert [(n, int(d)) for n, d in names] == PHASES
-
-
-def test_installer_carries_the_bench_assets():
-    """bench.py resolves its assets relative to the installed package, so
-    install.sh must copy assets/ next to it. Without this the benchmark fails
-    at push time on an installed host while working fine from a checkout —
-    exactly the deploy-gap class of bug. Planted-bug: drop the cp line and
-    this fails."""
+def test_installer_clears_a_stale_assets_tree():
+    """The withdrawn nutty-benchy watchface used to be installed as assets/
+    beside the package. An upgrade must clear it, or an install tree keeps
+    carrying files nothing reads. Planted-bug: drop the rm line and this
+    fails."""
     from pathlib import Path
     sh = (Path(__file__).resolve().parent.parent / "install.sh").read_text()
-    assert 'cp -r assets "${LIB_DIR}/assets"' in sh
+    assert 'rm -rf "${LIB_DIR}/assets"' in sh
+    assert 'cp -r assets' not in sh
+
+
+def test_newest_ipk_ignores_sibling_packages(tmp_path, monkeypatch):
+    """The build emits benchymark-src/-dev/-dbg beside the real package, and
+    installing one of those puts no app on the watch. Planted-bug: widen the
+    glob to benchymark* and this picks -src."""
+    from asteroid_docking_bay import bench
+    d = tmp_path / "armv7vehf-neon"
+    d.mkdir()
+    real = d / "benchymark_1.0-r0_armv7vehf-neon.ipk"
+    real.write_text("real")
+    for sib in ("benchymark-src", "benchymark-dev", "benchymark-dbg"):
+        (d / f"{sib}_1.0-r0_armv7vehf-neon.ipk").write_text("nope")
+    monkeypatch.setattr(bench, "IPK_DIR", tmp_path)
+    assert bench.newest_ipk() == str(real)
+
+
+def test_newest_ipk_returns_none_when_nothing_built(tmp_path, monkeypatch):
+    """A missing build directory must read as 'nothing built' rather than
+    raising — the UI button carries no arguments and the op turns this into a
+    readable error."""
+    from asteroid_docking_bay import bench
+    monkeypatch.setattr(bench, "IPK_DIR", tmp_path / "does-not-exist")
+    assert bench.newest_ipk() is None

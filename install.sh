@@ -87,11 +87,10 @@ rm -rf "${LIB_DIR}/asteroid_docking_bay"
 cp -r asteroid_docking_bay "${LIB_DIR}/asteroid_docking_bay"
 find "${LIB_DIR}/asteroid_docking_bay" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
 
-# Assets the package pushes to watches (the nutty-benchy benchmark watchface
-# and its mesh). The code resolves them relative to the package, so they must
-# travel with it — an install without them fails only at push time.
+# Older versions installed an assets/ tree (the withdrawn nutty-benchy
+# benchmark watchface). Clear it on upgrade so an install tree does not keep
+# carrying files nothing reads any more.
 rm -rf "${LIB_DIR}/assets"
-cp -r assets "${LIB_DIR}/assets"
 
 # Ensure ~/.local/bin is on PATH.
 if [[ ":$PATH:" != *":${HOME}/.local/bin:"* ]]; then

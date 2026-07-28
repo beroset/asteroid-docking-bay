@@ -1,32 +1,46 @@
-# a-d-b-bench — the fleet FPS benchmark watchface (spec)
+# benchymark — the fleet FPS benchmark app (spec)
 
-Status: **spec + the watchface written; never run on hardware.** Drafted
-2026-07-27 by moWerk (concept, visual direction, phase ideas, the Nutty Null
-layout) + Claude (phase design against the RAG, measurement and comparability
-rules, the QML). The face is `assets/watchfaces/nutty-benchy.qml` — it passes
-qmllint, which says nothing about how it renders. Watchface authoring is
-moWerk's domain; he reviews it before it ships anywhere.
+Status: **shipping as an app; installed and run on medaka from the a-d-b web
+UI, results read back** (moWerk, 2026-07-28). Drafted 2026-07-27 by moWerk
+(concept, visual direction, phase ideas, the Nutty Null layout) + Claude (phase
+design against the RAG, measurement and comparability rules, the QML). Source
+lives in `benchymark/`. Watchface and app authoring is moWerk's domain; he
+reviews it before it ships anywhere.
 
 **Qt6 only** (moWerk, standing decision): the migration is near complete, so
 no Qt5 path is written and any Qt5 remainder found on the way is refactored
 out rather than accommodated.
 
-## Why a watchface
+## Why an app, and why it was a watchface first
 
 The watches ship **no standalone QML runtime** — probed on catfish
-(2.2-nightly): no `qml`, no `qmlscene`, only the QML *modules*
-(`/usr/lib/qml/QtQuick`, `org/asteroid/controls`). But the launcher is a QML
-runtime that is already running, and a watchface is just a QML file it loads.
-So the benchmark ships as a watchface: our own fixed scene, injected into the
-renderer that actually matters, on every watch, with no tooling to install.
-Same recipe as a-d-b-analyze — don't ship a tool, use the engine that is there.
+(2.2-nightly): no `qml`, no `qmlscene`, only the QML *modules*. The first
+version therefore shipped as a **watchface** (`nutty-benchy`), on the logic
+that the launcher is a QML runtime already running and a watchface is just a
+file it loads: no tooling to install, same recipe as a-d-b-analyze.
 
-Scrolling the launcher or a list is explicitly **rejected** as the workload:
-each watch has different content, so the numbers would not be comparable, and
-"it scrolled badly" is not a diagnosis. Fixed scene, fixed phases, per-phase
-numbers.
+That failed for two reasons, both structural rather than fixable:
 
-## What it looks like — nutty-benchy
+1. **A watchface cannot hold the screen.** `Nemo.KeepAlive`'s declarative
+   `DisplayBlanking` is ignored inside the compositor — the identical code
+   works in `asteroid-flashlight`, which is a client app (moWerk, 2026-07-28).
+   The panel blanked mid-run, and forcing it on from the host meant `mcetool`
+   fighting mce for the whole run.
+2. **A watchface has nowhere to put results.** Everything had to be read off
+   the screen, or inferred from the host's kernel sampling.
+
+The app fixes both: it holds its own screen, and it writes
+`~/.local/share/benchymark/last-run.json`, which a-d-b reads back. The
+watchface and all its host-side driving machinery were **withdrawn on
+2026-07-28**; the history is in git, and nothing in the running code refers to
+it any more.
+
+Scrolling the launcher or a list stays explicitly **rejected** as the
+workload: each watch has different content, so the numbers would not be
+comparable, and "it scrolled badly" is not a diagnosis. Fixed scene, fixed
+phases, per-phase numbers.
+
+## What it looks like
 
 It wears **Nutty Null**'s layout (moWerk's own watchface, unofficial-watchfaces
 `digital-nutty-null`), which stays fixed: one huge glyph dead-centre, a
@@ -42,26 +56,33 @@ it a benchmark:
   head sweeps on. The trail IS the history display — no separate graph needed;
 - the whisper line names the phase and its position in the run.
 
-It opens with a **5→0 countdown** so there is time to reach the rig and find
-the watch among the others, then runs the phases back to back. Trail numerals
-turn red below 45 fps, so a bad phase is visible from across the room.
+It opens with a **5→0 countdown** carrying the scene version, so there is time
+to reach the rig and find the watch among the others, then runs the phases back
+to back. Trail numerals turn red below 45 fps, so a bad phase is visible from
+across the room.
+
+The FPS rotator is declared **last** in the QML so it paints on top of
+everything (declaration order is paint order — never `z:`).
 
 ## Phases
 
-Fixed order, fixed duration each (proposal: 8 s), deterministic. Each targets
-ONE cost path so a result diagnoses rather than scores. Cost claims cite the
-RAG (`qml_patterns.json`) where they are already confirmed knowledge.
+Fixed order, fixed duration each, deterministic. Each targets ONE cost path so
+a result diagnoses rather than scores. Cost claims cite the RAG
+(`qml_patterns.json`) where they are already confirmed knowledge.
 
 | # | phase | what it stresses | expected on the fastest watch |
 |---|---|---|---|
 | P0 | **Idle clock** — static time, one 16 ms timer, no effects | nothing; the sanity floor | flat 60 |
 | P1 | **Glyph scale** — time scaled 1.0→3.0 via a `scale` transform on a base-size distance-field `Text` | transform only | flat 60 |
 | P2 | **Glyph re-raster** — the *same visual*, animating `font.pixelSize` instead | glyph-cache churn: CPU rasterization + texture upload per new size | **frame drops** |
-| P3 | **Orbit + pulsing shadow** — the FPS number travels the screen border, shadow blur pulsing | per-frame effect re-render, fill rate | drops (version-scoped, see below) |
+| P3 | **Orbit + pulsing shadow** — the FPS number travels the screen border, shadow blur pulsing | per-frame effect re-render, fill rate | drops (version-scoped) |
 | P4 | **Overdraw** — N semi-transparent full-screen layers blending | pure GPU fill rate; scales with panel pixels | drops at high N |
 | P5 | **Draw-call storm** — many `org.asteroid.controls` `Icon`s in motion | batching/draw-call overhead: `Icon` is a `QQuickPaintedItem`, each its own texture, cannot batch | drops at high count |
 | P6 | **Shapes stroke** — an animated Qt Quick `Shape` path (spirograph), re-tessellated each frame | geometry/tessellation path | drops |
 | P7 | **Transform cascade** — `scale` animation on an Item with many children | transform recalculation on every child every frame | drops |
+| P8 | **Shader** — a doubly domain-warped fBm `ShaderEffect` | honestly GPU-bound, scales with PIXELS not scene complexity | drops; the Mpix/s phase |
+| P9 | **Benchy lite** — the 438-vertex wireframe | as below, at a weight most watches can hold | ~14 fps target |
+| P10 | **Benchy** — the full 1118-vertex wireframe, the finale | JS arithmetic + `Shape` re-tessellation at once | the heaviest phase |
 
 **P1 vs P2 is the centrepiece.** The RAG's `text_glyph_cache_cpu_cost` states
 that on Adreno/Mali "text amount and text-size CHANGES dominate UI cost" and
@@ -72,33 +93,26 @@ path directly. That pair alone gives both poles moWerk asked for — a task the
 fastest watch holds at 60, and a task that drops frames on every watch — and
 it is the single most transferable finding for UI authors.
 
-Optional, NOT part of the comparable core score:
-
-- **P8 GC pressure** — `createObject`/`destroy` churn (RAG lists it as
-  expensive). Jittery by nature; run it only when explicitly asked.
-- **P9 Shader** — a `ShaderEffect` pass, if wanted later. Qt6 requires a
-  pre-compiled `.qsb` (inline GLSL crashes), so it needs a build step the
-  other phases do not: `qsb --glsl '100 es,120,150' -o out.frag.qsb in.frag`.
-
 ## Measuring the frames
 
 Version-agnostic and window-free: an infinite `NumberAnimation` drives a dummy
 property, and its change handler counts ticks — an animation ticks once per
 **rendered** frame, so dropped frames simply do not tick. A 1 s `Timer`
-converts that to FPS and pushes it into the rolling graph. Works identically on
-the Qt 5.15 and Qt 6.11 halves of the fleet, with no access to the
-`QQuickWindow`.
+converts that to FPS and pushes it into the rotator. Works with no access to
+the `QQuickWindow`.
 
-In parallel, a-d-b samples **`/sys/class/graphics/fb0/measured_fps`** (the MSM
-MDSS driver's own counter, present on catfish) and `vsync_event` from the host
-while the phases run. Two independent instruments on one run — app-side and
-kernel-side — so a disagreement between them is itself informative.
+The app is the only instrument now. The host used to sample
+`/sys/class/graphics/fb0/measured_fps` in parallel as a second, independent
+reading; that went with the watchface, because the app records its own
+per-phase numbers to disk and no longer needs the screen read for it. The
+kernel counter remains available if a disagreement ever needs investigating.
 
 ## Known side effect: watches dropping off ADB mid-run
 
-Observed repeatedly on beluga (2026-07-28) while the wireframe phases run with
-the screen on: the watch disappears from `adb devices` and returns only after a
-port power cycle. The kernel log puts the origin on the watch side —
+Observed repeatedly on beluga (moWerk, 2026-07-28) while the wireframe phases
+run with the screen on: the watch disappears from `adb devices` and returns
+only after a port power cycle. The kernel log puts the origin on the watch
+side —
 
 ```
 android_work: sent uevent USB_STATE=DISCONNECTED
@@ -111,14 +125,11 @@ not a process dying; the gadget loses its session. What causes that is a
 watch-side question (moWerk's domain); from the host the only correlation
 available is maximum sustained load together with a lit panel.
 
-Two consequences for this benchmark:
-
-1. **The on-screen rotator is authoritative**, not the host's kernel sampling —
-   the sampler simply ends early when the link goes.
-2. **`bench.run` may fail to restore the watchface** while the watch is away.
-   That is why the previous face is persisted to config rather than held in
-   memory, and why `bench.restore` exists as a separate op to run once the
-   watch is back.
+This is much less disruptive now than it was: the app writes its results to
+disk as it goes, so a link that drops mid-run costs the *reading*, not the
+*run*. Reconnect the watch and press Results. Under the old watchface flow the
+same drop could also strand the watch on the benchmark face, which is why a
+separate restore op had to exist — that whole failure mode is gone.
 
 ## Settling, and an idea it suggests
 
@@ -128,8 +139,6 @@ over the whole window is a blend of two workloads rather than a measurement of
 one (moWerk, observed on nemo). Two mitigations are in place — a **quiet
 second between phases** where nothing animates and the next phase's name is
 already on screen, and **phases lengthened to 10 s** (12 s for the full boat).
-The host mirrors both: it walks the same gaps, and it drops each phase's first
-two samples.
 
 **Parked idea worth building:** make that settling its own phase. How long a
 watch takes to shed one workload and reach a steady rate under the next is a
@@ -141,13 +150,14 @@ reports the time-to-stabilise would turn today's nuisance into a number.
 
 These are what make a number mean something a week later on another watch:
 
-1. **Version-stamp everything.** Scene version (a hash of the .qml) shown on
-   screen and stored with every result, plus the watch's OS build. Change the
-   scene → old numbers are void. Same discipline as the feature-matrix audit.
+1. **Version-stamp everything.** Scene version shown on screen during the
+   countdown and stored with every result, plus the watch's OS build. Change
+   the scene → old numbers are void. Version increments in 0.01 steps for
+   every change (moWerk), starting at 0.1.
 2. **Resolution is not fairness.** The fleet spans 320×360 to 476×402. Fill-rate
-   phases (P3, P4) do proportionally more work on a bigger panel — that is real
-   hardware truth, so report **raw FPS and Mpix/s side by side** and state which
-   phases are pixel-normalized.
+   phases (P3, P4, P8) do proportionally more work on a bigger panel — that is
+   real hardware truth, so report **raw FPS and Mpix/s side by side** and state
+   which phases are pixel-normalized.
 3. **One Qt.** Qt6 only, fleet-wide — `MultiEffect`, never
    `Qt5Compat.GraphicalEffects`. This removes what would otherwise have been
    the ugliest comparability caveat: two effect code paths producing numbers
@@ -157,54 +167,44 @@ These are what make a number mean something a week later on another watch:
 5. **Gate every animation** with `running: <phase active> && visible`. Rendering
    is not animation: a hidden item stops rendering but a running animation keeps
    consuming, which would leak one phase's cost into the next.
-6. **Screen forced on** for the whole run (a-d-b already owns that toggle) and
-   released afterwards; AoD/nightstand must not fire mid-run.
+6. **The app holds the screen itself** for the whole run and releases it after;
+   AoD/nightstand must not fire mid-run.
 7. Report **p50 and worst-5% frame times plus the share of frames ≥16.7 ms**, not
    just an average — an average hides exactly the stutter users feel.
 
 ## a-d-b side
 
-- Push the .qml, save the current watchface dconf value, switch to the bench,
-  run, **switch back**. This is the one case where a-d-b writes the watchface
-  key (Settings keeps it display-only).
-- Capture the kernel counters during the run; store per-phase results in the
-  fleet registry keyed by serial + OS build + scene version, next to boot times
-  and flash wear.
-- Present it in Analysis, beside the boot waterfall: same shape of artefact —
-  per-phase bars, worst-case highlighted.
+a-d-b owns the app's lifecycle and nothing else: **install** (pushes the newest
+built ipk and `opkg install --force-reinstall --force-depends`), **start**,
+**stop**, **remove**, and **results** (reads `last-run.json` back). All five sit
+behind one `bench.app` op with an action, in the Control Center's Analysis tab
+beside the boot waterfall.
 
-## Open questions for moWerk
+It no longer writes the watchface dconf key, pushes assets, forces the screen,
+or samples frame counters — the app does all of that itself. Settings keeps the
+watchface key display-only again.
 
-- Phase duration (8 s → ~1 min for the full run) and whether the run should be
-  interruptible from the watch.
-- Whether P8/P9 ship at all, given they cannot join the comparable score.
-- Whether the bench watchface lives in this repo, in unofficial-watchfaces, or
-  ships as an a-d-b asset pushed on demand.
-
-## The Benchy phase — BUILT (P8), the finale
+## The Benchy phase — the finale
 
 3DBenchy, 3D printing's own benchmark, rendered as a rotating wireframe by the
-watchface itself. There is no 3D engine to lean on (QtQuick3D absent, see
-below), so nutty-benchy IS the renderer: every frame it rotates 1118 vertices
-about the model's vertical axis, projects them through a perspective divide,
-and hands six point arrays to six `PathPolyline`s. Deliberately the heaviest
-phase — JS arithmetic and `Shape` re-tessellation at once — and the last one,
-because it is the one worth watching.
+app itself. There is no 3D engine to lean on (QtQuick3D absent, see below), so
+the QML IS the renderer: every frame it rotates 1118 vertices about the model's
+vertical axis, projects them through a perspective divide, and hands six point
+arrays to six `PathPolyline`s. Deliberately the heaviest phase — JS arithmetic
+and `Shape` re-tessellation at once — and the last one, because it is the one
+worth watching.
 
 Pipeline: moWerk decimated the 11.3 MB original to a 2500-vertex variant;
 `tools/stl_to_qml_mesh.py` welds it (STL stores every triangle's corners
 loose, so without welding no edge is shared and nothing can be chained),
 normalises it into a ±1000 cube **without touching orientation**, walks the
-3378 edges into continuous strips, and packs them into exactly six buckets —
-one per `ShapePath`, because a `Shape` cannot hold a `Repeater` of them. Output:
-1118 vertices, 3720 segments, a 30 KB `.js` library beside the watchface.
+edges into continuous strips, and packs them into exactly six buckets — one per
+`ShapePath`, because a `Shape` cannot hold a `Repeater` of them. Output: 1118
+vertices, 3720 segments, plus a 438-vertex / 1545-segment **lite** variant for
+P9.
 
 `benchyStrips` (default 6) is the dial: drawing fewer strips is how to pull the
 phase back from a slideshow to a rotation once hardware says which it is.
-
-Still open from the original idea: the flat PNG/SVG variant (needs an image
-asset), and the shader variant, which remains the only way to fill the GPU-
-shader gap and needs a baked `.qsb`.
 
 ## Findings behind it
 
@@ -212,10 +212,19 @@ shader gap and needs a baked `.qsb`.
 lists Amber, Connman, Nemo, QML, Qt, Qt5Compat, QtCore, QtFeedback,
 QtMultimedia, QtNetwork, QtQml, QtQuick, QtSensors, QtTest, QtWayland, org —
 no QtQuick3D, and no Qt6 3D libraries. So there is no engine-level 3D path and
-variants 2 and 3 stand on their own. What IS there and unused so far:
+the wireframe stands on its own. What IS there and unused so far:
 `QtQuick/Particles` (a particle-system phase, if we want one) and
-`QtQuick/Shapes` + `QtQuick/Effects`, which the wireframe and shader variants
+`QtQuick/Shapes` + `QtQuick/Effects`, which the wireframe and shader phases
 already rely on.
+
+**Shaders need a baked `.qsb`.** Inline GLSL crashes Qt6, so P8 ships the
+compiled artefact and its source side by side, the latter so the phase can be
+rebuilt and audited rather than trusted as a binary blob:
+
+```
+qsb --glsl "100 es,120,150" --hlsl 50 --msl 12 \
+    -o benchy-shader.frag.qsb benchy-shader.frag
+```
 
 **Licence: clear — verified 2026-07-28.** 3DBenchy entered the **public
 domain** on 2025-02-14 (NTI Group press release, after the January 2025
@@ -226,3 +235,7 @@ resolved; we can decimate, wireframe, shade and ship it. Crediting Creative
 Tools / NTI stays good manners, not an obligation.
 Sources: https://www.3dbenchy.com/3dbenchy-sets-sail-into-the-public-domain/ ,
 https://www.nti-group.com/home/news/3dbenchy/
+
+**Build gotchas** for anyone rebuilding the app are in
+`docs/audits/2026-07-28-benchymark-build-upstream-findings.md` — three of them
+are upstream issues, not benchymark's.

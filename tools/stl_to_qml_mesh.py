@@ -3,27 +3,27 @@
 # SPDX-FileCopyrightText: 2026 Timo Könnecke (moWerk) <mo@mowerk.net>
 """Binary STL → a QML-embeddable wireframe.
 
-Written for nutty-benchy's Benchy phase (docs/FPS_BENCH.md). QML has no 3D
-engine on these images (QtQuick3D is absent — checked), so the watchface
+Written for the benchymark app's Benchy phase (docs/FPS_BENCH.md). QML has
+no 3D engine on these images (QtQuick3D is absent — checked), so the app
 projects the model itself: this script does everything that can be done once,
 on the host, so the watch only pays for rotate → project → stroke per frame.
 
 What it emits and why:
 
 * **Deduplicated vertices**, quantised to integers on a ±1000 cube. Integer
-  literals keep the embedded payload small and parse fast, and the watchface
+  literals keep the embedded payload small and parse fast, and the app
   scales them back into screen space anyway.
 * **Edge STRIPS, not an edge list.** Each strip is a chain of vertex indices
-  walked greedily through the mesh's edges, so the watchface can hand one
+  walked greedily through the mesh's edges, so the app can hand one
   strip to one `PathPolyline` instead of stroking thousands of separate
   two-point paths. Segment count is unchanged; draw-call and state overhead
   collapses to the number of strips.
 * A **fixed** number of strips (`--strips`), because a `Shape` cannot hold a
   `Repeater` of `ShapePath`s — they are declared statically in the QML, so the
-  count is part of the contract between this script and the watchface.
+  count is part of the contract between this script and the app's QML.
 
 Usage:
-    tools/stl_to_qml_mesh.py in.stl -o assets/watchfaces/benchy-mesh.js
+    tools/stl_to_qml_mesh.py in.stl -o benchymark/src/benchy-mesh.js
 """
 
 from __future__ import annotations
@@ -74,7 +74,7 @@ def normalise(verts, scale=1000):
     preserving aspect (one divisor for all axes, so the boat is not squashed).
 
     Orientation is left alone: the data stays in the STL's own frame (Z up for
-    a print-bed model) and the watchface decides which axis faces the viewer.
+    a print-bed model) and the app decides which axis faces the viewer.
     Baking a flip in here would silently mirror the model."""
     xs, ys, zs = zip(*verts)
     cx, cy, cz = ((min(a) + max(a)) / 2 for a in (xs, ys, zs))
@@ -186,7 +186,7 @@ def main():
     ap.add_argument("stl")
     ap.add_argument("-o", "--out", required=True)
     ap.add_argument("--strips", type=int, default=6,
-                    help="must match the ShapePath count in the watchface")
+                    help="must match the ShapePath count in the app's QML")
     ap.add_argument("--scale", type=int, default=1000)
     ap.add_argument("--target-verts", type=int, default=0,
                     help="decimate to roughly this many vertices (0 = keep all)")

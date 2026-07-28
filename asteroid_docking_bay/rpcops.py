@@ -24,7 +24,6 @@ import json
 import logging
 import queue
 import re
-import shlex
 import threading
 from pathlib import Path
 import time
@@ -1094,38 +1093,10 @@ _register_lifecycle(WorkbenchOp, "workbench", "no workbench active")
 _register_lifecycle(DrainOp, "drain", "no drain test running")
 
 
-# ── nutty-benchy: the FPS benchmark (docs/FPS_BENCH.md) ─────────────────────
-# The one place a-d-b writes the watchface key. The previous value is saved to
-# CONFIG, not just memory, so a service restart mid-run cannot strand a watch
-# on the benchmark face — bench.restore puts it back from there.
-
-def _bench_saved(cfg, serial):
-    return (cfg.get("bench_saved_watchface") or {}).get(serial)
-
-
-def _bench_save(serial, value):
-    with _config_lock:
-        cfg = load_config()
-        cfg.setdefault("bench_saved_watchface", {})[serial] = value
-        save_config(cfg)
-
-
-def _bench_save_wp(serial, value):
-    if not value:
-        return
-    with _config_lock:
-        cfg = load_config()
-        cfg.setdefault("bench_saved_wallpaper", {})[serial] = value
-        save_config(cfg)
-
-
-def _bench_clear(serial):
-    with _config_lock:
-        cfg = load_config()
-        a = (cfg.get("bench_saved_watchface") or {}).pop(serial, None)
-        b = (cfg.get("bench_saved_wallpaper") or {}).pop(serial, None)
-        if a is not None or b is not None:
-            save_config(cfg)
+# ── benchymark: the FPS benchmark app (docs/FPS_BENCH.md) ───────────────────
+# a-d-b installs and drives the app; the app measures and writes its own
+# results. No watchface is pushed and no dconf key is touched, so there is
+# nothing to save and restore here.
 
 
 @DISPATCH.op("bench.app")
@@ -1161,135 +1132,6 @@ def _bench_app(argsd):
             return {"ok": False, "error": "no completed run on this watch yet"}
         return {"ok": True, **d}
     return {"ok": False, "error": f"unknown action: {action}"}
-
-
-@DISPATCH.op("bench.restore")
-def _bench_restore(args):
-    """Put a watch's own watchface back. The safety valve: if a run is
-    interrupted — service restart, lost link, a browser tab closed mid-stream —
-    the watch keeps showing the benchmark until this runs."""
-    serial = args["serial"]
-    saved = _bench_saved(load_config(), serial)
-    if not saved:
-        return {"ok": False, "error": "no saved watchface for this watch"}
-    w = _watch(serial)
-    wp = (load_config().get("bench_saved_wallpaper") or {}).get(serial)
-    if wp:
-        bench.write_key(w, bench.WALLPAPER_KEY, wp)
-    if not bench.write_watchface(w, saved):
-        return {"ok": False, "error": "restore write failed — watch reachable?"}
-    _bench_clear(serial)
-    return {"ok": True, "restored": saved, "wallpaper": wp}
-
-
-@DISPATCH.op("bench.push")
-def _bench_push(args):
-    """Install (or re-install) the benchmark watchface. Separate from the run
-    so an edited scene can be pushed and eyeballed without a full benchmark."""
-    err = bench.push_assets(_watch(args["serial"]))
-    if err:
-        return {"ok": False, "error": err}
-    return {"ok": True, "dir": bench.WATCHFACE_DIR,
-            "scene": bench.scene_version()}
-
-
-@DISPATCH.stream_op("bench.run")
-def _bench_run(args):
-    """Push, switch, sample, restore. Yields progress; the watch shows the
-    authoritative per-phase numbers on its own screen while the kernel's frame
-    counter is sampled here as the independent second instrument."""
-    serial = args["serial"]
-    w = _watch(serial)
-    scene = bench.scene_version()
-    yield f"nutty-benchy scene v{scene} — pushing to {serial}…"
-    err = bench.push_assets(w)
-    if err:
-        yield f"ERROR: {err}"
-        return
-
-    saved = bench.read_watchface(w)
-    if not saved:
-        yield "ERROR: could not read the current watchface — is the watch on ADB?"
-        return
-    saved_wp = bench.read_key(w, bench.WALLPAPER_KEY)
-    _bench_save(serial, saved)
-    _bench_save_wp(serial, saved_wp)
-    yield f"saved current watchface: {saved}"
-    # FlatMesh is the system default and a shader in its own right, so a watch
-    # wearing something else is measuring a different scene.
-    if saved_wp and saved_wp != bench.FLATMESH:
-        bench.write_key(w, bench.WALLPAPER_KEY, bench.FLATMESH)
-        yield f"wallpaper forced to FlatMesh for the run (was {saved_wp})"
-
-    # The watchface asks for the screen itself via Nemo.KeepAlive, but that
-    # request is ignored inside the compositor (observed on nemo, 2026-07-28 —
-    # the same declarative DisplayBlanking works in asteroid-flashlight, which
-    # is a client app). So the host holds the panel for the run as well: belt
-    # and braces, released in the finally below, and harmless if the watchface
-    # ever does get its wish.
-    bench.keep_awake(w, True)
-    samples_out = {}
-
-    def _sampler():
-        rc, out, _ = w.t.shell(
-            shlex.quote(bench.sample_fps_script(bench.RUN_S + 3)),
-            timeout=bench.RUN_S + 30)
-        samples_out["rc"], samples_out["out"] = rc, out
-
-    try:
-        if not bench.write_watchface(w, bench.bench_value()):
-            yield "ERROR: could not switch the watchface"
-            return
-        t0 = time.time()
-        th = threading.Thread(target=_sampler, daemon=True)
-        th.start()
-        yield (f"running — {bench.COUNTDOWN_S}s countdown, then "
-               f"{len(bench.PHASES)} phases ({bench.RUN_S}s total). Watch the watch.")
-        for name, dur in bench.PHASES:
-            deadline = time.time() + dur
-            while time.time() < deadline:
-                time.sleep(1)
-            yield f"  …{name} done"
-        th.join(timeout=30)
-    finally:
-        # Always hand the watch back, whatever happened above.
-        try:
-            bench.keep_awake(w, False)
-        except Exception:
-            pass
-        wp = (load_config().get("bench_saved_wallpaper") or {}).get(serial)
-        if wp and wp != bench.FLATMESH:
-            bench.write_key(w, bench.WALLPAPER_KEY, wp)
-            yield f"restored wallpaper {wp}"
-        if bench.write_watchface(w, saved):
-            _bench_clear(serial)
-            yield f"restored {saved}"
-        else:
-            yield ("WARNING: could not restore the watchface — use the restore "
-                   "action once the watch is reachable")
-
-    rows = bench.align_phases(bench.parse_samples(samples_out.get("out", "")), t0)
-    got = [r for r in rows if r["avg"] is not None]
-    # A watch that vanishes under load takes the sampler with it — say so
-    # plainly rather than presenting a truncated run as a complete one.
-    if rows and rows[-1]["samples"] == 0 and got:
-        yield ("NOTE: sampling stopped early — the watch dropped off ADB during "
-               "the run (a known side effect of the heavy phases; recover it "
-               "with a port power cycle). The on-screen numbers still stand.")
-    if not got:
-        yield ("no kernel FPS samples — measured_fps may read 0 on this watch; "
-               "the on-screen numbers still stand")
-    for r in rows:
-        yield (f"  {r['phase']:<10} avg {r['avg'] if r['avg'] is not None else '—'}"
-               f"  min {r['min'] if r['min'] is not None else '—'}"
-               f"  ({r['samples']} samples)")
-    if got:
-        worst = min(r["min"] for r in got if r["min"] is not None)
-        registry.note(serial, source="bench",
-                      bench_scene=scene,
-                      bench_worst_fps=worst,
-                      bench_avg_fps=round(sum(r["avg"] for r in got) / len(got), 1))
-    yield "═══ bench done ═══"
 
 
 @DISPATCH.op("watch.locale_set")
