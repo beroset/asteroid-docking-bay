@@ -688,6 +688,85 @@ def _sysfs_serial_at(loc: str, port: int) -> "str | None":
         return None
 
 
+# What a USB interface descriptor says the device is speaking. Keyed on the
+# descriptor rather than idProduct because the fleet is not consistent about
+# product IDs — watches enumerate adb as 18d1:d001 on some images and 18d1:0a03
+# on others, and the ASUS-built ones present a 0afe vendor entirely. The
+# descriptor is the same everywhere.
+_LINK_BY_IFACE = {
+    ("ff", "42", "01"): "adb",
+    ("ff", "42", "03"): "fastboot",
+    ("e0", "01", "03"): "rndis",       # SSH-over-USB (developer mode)
+}
+
+
+def port_device_info(loc: str, port: int) -> "dict | None":
+    """Everything sysfs knows about whatever is enumerated at a hub port, or
+    None if the port is genuinely empty.
+
+    Deliberately independent of the adb server, of fastboot, and of whether we
+    recognise the vendor: a port row built only from `adb devices` shows EMPTY
+    for a watch that is sitting right there in fastboot, in storage mode, or
+    presenting an unfamiliar vendor — which is exactly how a fastboot catfish
+    and the ASUS 0afe presentations stayed invisible for a whole night.
+
+    `configured` is the xHCI-exhaustion tell: a device can enumerate and be
+    given no configuration at all when the controller is out of device slots.
+    It is present on the bus and unusable, which reads identically to "broken
+    watch" unless it is named.
+    """
+    base = Path(f"/sys/bus/usb/devices/{loc}.{port}")
+    if not base.exists():
+        return None
+    # A hub chip is not a device a watch can be on: these are the cascade
+    # ports feeding a sub-hub, and reporting them as devices would put a
+    # phantom entry on every cascade row.
+    if _read_attr(base / "bDeviceClass").lower() == "09":
+        return None
+
+    links = set()
+    for iface in base.glob(f"{loc}.{port}:*"):
+        sig = tuple(_read_attr(iface / f"bInterface{k}").lower()
+                    for k in ("Class", "SubClass", "Protocol"))
+        if sig in _LINK_BY_IFACE:
+            links.add(_LINK_BY_IFACE[sig])
+        elif sig[0] == "08":                      # mass storage
+            links.add("storage")
+
+    # One device can advertise several (adb + storage is common). Report the
+    # one that decides what we can DO with it, most actionable first.
+    for candidate in ("adb", "fastboot", "rndis", "storage"):
+        if candidate in links:
+            link = candidate
+            break
+    else:
+        link = "unknown"
+
+    cfg_val = _read_attr(base / "bConfigurationValue")
+    return {
+        "serial": _read_attr(base / "serial") or None,
+        "vid": _read_attr(base / "idVendor").lower(),
+        "pid": _read_attr(base / "idProduct").lower(),
+        "link": link,
+        # "" or "0" both mean the kernel never configured it.
+        "configured": bool(cfg_val and cfg_val != "0"),
+    }
+
+
+def _read_attr(path: Path) -> str:
+    """A sysfs attribute as text, or "" — never raises. Attribute reads race
+    with device teardown constantly on this rig, and a status refresh must not
+    die because a watch left mid-scan.
+
+    Case is preserved: serials are case-sensitive identifiers and must match
+    what adb reports. Callers comparing hex descriptors lowercase explicitly.
+    """
+    try:
+        return path.read_text().strip()
+    except OSError:
+        return ""
+
+
 def _sysfs_adb_serials() -> set[str]:
     """Serials of watches currently exposing an ADB interface per sysfs — the
     ground truth of what is on the bus in adb mode, independent of the adb

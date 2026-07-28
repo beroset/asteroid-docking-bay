@@ -215,3 +215,94 @@ def test_discover_hubs_survives_uhubctl_being_absent(tmp_path, monkeypatch):
     _fake_hub(tmp_path, "1-3", "0bda")
     hubs = usb.discover_hubs()
     assert len(hubs) == 1 and hubs[0]["ppps"] is False
+
+
+# ── sysfs-first port identification ─────────────────────────────────────────
+
+def _fake_dev(root, loc, port, vid="18d1", pid="d001", serial="ABC123",
+              ifaces=(("ff", "42", "01"),), cls="00", configured=True):
+    dev = root / f"{loc}.{port}"
+    dev.mkdir(parents=True, exist_ok=True)
+    (dev / "idVendor").write_text(vid + "\n")
+    (dev / "idProduct").write_text(pid + "\n")
+    (dev / "bDeviceClass").write_text(cls + "\n")
+    (dev / "bConfigurationValue").write_text(("1" if configured else "0") + "\n")
+    if serial:
+        (dev / "serial").write_text(serial + "\n")
+    for n, (c, sc, pr) in enumerate(ifaces):
+        i = root / f"{loc}.{port}" / f"{loc}.{port}:1.{n}"
+        i.mkdir(parents=True, exist_ok=True)
+        (i / "bInterfaceClass").write_text(c + "\n")
+        (i / "bInterfaceSubClass").write_text(sc + "\n")
+        (i / "bInterfaceProtocol").write_text(pr + "\n")
+
+
+def _patch_sysfs(monkeypatch, root):
+    """port_device_info builds its path from a module-level string, so the
+    whole prefix has to be redirected for a test."""
+    from asteroid_docking_bay import usb
+    real = usb.Path
+
+    class _P(type(real())):
+        pass
+    monkeypatch.setattr(usb, "Path", lambda p: real(str(p).replace(
+        "/sys/bus/usb/devices", str(root))))
+
+
+def test_port_device_info_names_each_link_type(tmp_path, monkeypatch):
+    """A row built only from `adb devices` shows EMPTY for a watch sitting
+    there in fastboot or storage mode. Each descriptor must be named.
+    Planted-bug: drop the fastboot signature from _LINK_BY_IFACE and the
+    fastboot watch reads as 'unknown'."""
+    from asteroid_docking_bay import usb
+    _patch_sysfs(monkeypatch, tmp_path)
+    _fake_dev(tmp_path, "1-3", 1, ifaces=(("ff", "42", "01"),))
+    _fake_dev(tmp_path, "1-3", 2, ifaces=(("ff", "42", "03"),))
+    _fake_dev(tmp_path, "1-3", 3, ifaces=(("e0", "01", "03"),))
+    _fake_dev(tmp_path, "1-3", 4, ifaces=(("08", "06", "50"),))
+    assert usb.port_device_info("1-3", 1)["link"] == "adb"
+    assert usb.port_device_info("1-3", 2)["link"] == "fastboot"
+    assert usb.port_device_info("1-3", 3)["link"] == "rndis"
+    assert usb.port_device_info("1-3", 4)["link"] == "storage"
+
+
+def test_port_device_info_reports_an_unfamiliar_vendor(tmp_path, monkeypatch):
+    """The ASUS builds present vendor 0afe. Identification must not be gated
+    on a vendor allow-list, or those watches stay invisible."""
+    from asteroid_docking_bay import usb
+    _patch_sysfs(monkeypatch, tmp_path)
+    _fake_dev(tmp_path, "1-3", 1, vid="0afe", pid="dead", ifaces=(("ff", "ff", "ff"),))
+    d = usb.port_device_info("1-3", 1)
+    assert d["link"] == "unknown" and d["vid"] == "0afe"
+    assert d["serial"] == "ABC123"
+
+
+def test_port_device_info_flags_the_unconfigured_state(tmp_path, monkeypatch):
+    """xHCI slot exhaustion enumerates a device and never configures it: on
+    the bus and unusable, which reads identically to a broken watch unless it
+    is named. Planted-bug: treat "0" as configured and this fails."""
+    from asteroid_docking_bay import usb
+    _patch_sysfs(monkeypatch, tmp_path)
+    _fake_dev(tmp_path, "1-3", 1, configured=False)
+    _fake_dev(tmp_path, "1-3", 2, configured=True)
+    assert usb.port_device_info("1-3", 1)["configured"] is False
+    assert usb.port_device_info("1-3", 2)["configured"] is True
+
+
+def test_port_device_info_preserves_serial_case(tmp_path, monkeypatch):
+    """Serials are case-sensitive identifiers and must match what adb reports.
+    Planted-bug: lowercase in _read_attr and 720EX8C130737 stops matching."""
+    from asteroid_docking_bay import usb
+    _patch_sysfs(monkeypatch, tmp_path)
+    _fake_dev(tmp_path, "1-3", 1, serial="720EX8C130737")
+    assert usb.port_device_info("1-3", 1)["serial"] == "720EX8C130737"
+
+
+def test_port_device_info_ignores_hub_chips_and_empty_ports(tmp_path, monkeypatch):
+    """A cascade port holds a hub chip, not a watch; reporting it as a device
+    would put a phantom entry on every cascade row."""
+    from asteroid_docking_bay import usb
+    _patch_sysfs(monkeypatch, tmp_path)
+    _fake_dev(tmp_path, "1-3", 1, vid="0bda", pid="5411", cls="09", serial="")
+    assert usb.port_device_info("1-3", 1) is None
+    assert usb.port_device_info("1-3", 9) is None          # nothing there

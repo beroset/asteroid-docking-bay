@@ -927,12 +927,18 @@ function render(data){
           ?`<span class="dim">${esc(p.codename)} <span style="font-size:.8em;opacity:.6">(click Onboard)</span></span>`
           :(p.orbited_codename
             ?`<span class="dim" title="this port's watch left the cradle and is now in Orbit (on WiFi) — the port is free">${esc(p.orbited_codename)} <span class="orbit-hint">&#8599; orbit</span></span>`
-            :(p.fastboot_product?`<span class="warn">${esc(p.fastboot_product)}</span>`:'<span class="dim">&mdash;</span>'));
+            :(p.fastboot_product?`<span class="warn">${esc(p.fastboot_product)}</span>`:(devLabel(p)||'<span class="dim">&mdash;</span>')));
         const onb=onboardStart[slot];
         // Onboarding blinks white in the connection column, exactly like booting/
         // reconnecting, so a port being brought up reads the same everywhere.
-        const adbCell=onb?'<span class="cbadge life booting" title="onboarding — powering on, booting and identifying the watch">onboarding</span>'
+        let adbCell=onb?'<span class="cbadge life booting" title="onboarding — powering on, booting and identifying the watch">onboarding</span>'
           :(p.adb==='fastboot'?`<span class="warn">${fbLabel}</span>`:mkadbrow(p));
+        // A device is on the port but neither adb nor fastboot claims it: say
+        // what sysfs sees rather than leaving the column blank.
+        if(!onb&&!p.adb&&p.dev_link)
+          adbCell=p.dev_unconfigured
+            ?'<span class="cbadge warn" title="enumerated but unconfigured — see the name column">unconfigured</span>'
+            :`<span class="cbadge" title="seen in sysfs only — the adb server does not list it">${esc(p.dev_link)}</span>`;
         const pwrCls=p.power===true?'tgl tgl-on':'tgl tgl-off';
         const pwrLbl=p.power===true?'<span class="dot don"></span>ON':'<span class="dot doff"></span>OFF';
         const pwrFn=`pwrGo(this,'${slot}')`;
@@ -1447,6 +1453,22 @@ function benchApp(action){
       }else _benchSay(s,action+' ok'+(d.installed?': '+d.installed:''));
     }).catch(()=>_benchSay(s,action+' failed'));
 }
+// A device sysfs can see but adb/fastboot cannot name. Without this the row
+// says EMPTY while a watch sits on the port — how a fastboot catfish and the
+// ASUS 0afe presentations stayed invisible for a whole night.
+function devLabel(p){
+  if(!p.dev_link)return '';
+  const who=p.dev_serial?esc(p.dev_serial):(p.dev_id?esc(p.dev_id):'device');
+  if(p.dev_unconfigured)
+    return `<span class="warn" title="Enumerated but the kernel never configured it — classic xHCI device-slot exhaustion: the device is on the bus and unusable. Free a slot (power a port off) and cycle this one.">${who} <b>unconfigured</b></span>`;
+  const t={adb:'ADB interface present on the bus (the adb server may still not list it)',
+           fastboot:'fastboot interface present on the bus',
+           rndis:'RNDIS / SSH-over-USB (developer mode)',
+           storage:'mass-storage only',
+           unknown:'enumerated, but advertising no interface we recognise'}[p.dev_link]||'';
+  return `<span class="dim" title="${t}">${who} <span style="opacity:.7">${esc(p.dev_link)}</span></span>`;
+}
+
 function bodyDiagTab(){
   const dg=dgData[ctlSerial],pills=docPills();
   let h='<div class="cc-sec"><div class="cc-sech">Diagnostics <a href="#" class="dim" style="float:right;text-decoration:none" onclick="docRefresh();return false" title="re-read all diagnostics">refresh</a></div>'+

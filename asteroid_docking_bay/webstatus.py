@@ -18,6 +18,7 @@ from .config import (_config_lock, charge_config, find_codename_for_serial,
                      usb_mode_preference)
 from . import orbit
 from .usb import (_parse_hub_port_path, _port_device_present, _sysfs_hub_scan,
+                  port_device_info,
                   _sysfs_path_to_serial_map, _sysfs_usb_mode, uhubctl_cycle,
                   uhubctl_list)
 from .fastboot import _fastboot_getvar_product, _fastboot_list, ssh_reach_ip
@@ -736,6 +737,14 @@ def _web_status_data(cfg: dict) -> list[dict]:
             adb_codename = find_codename_for_serial(cfg, adb_serial) if adb_serial else None
             empty_slot = f"{loc}:{port_num}"
             remapping = task_active(_remap_tasks, empty_slot)
+            # sysfs-first: a port row must never claim EMPTY while something is
+            # enumerated on it. adb and fastboot between them miss a watch in
+            # storage mode, one presenting an unfamiliar vendor (the ASUS 0afe
+            # builds), and one the controller enumerated but never configured —
+            # which is how a fastboot catfish stayed invisible for a night.
+            dev = port_device_info(loc, port_num)
+            if dev and not dev["serial"] and adb_serial:
+                dev["serial"] = adb_serial
             hub_ports.append({
                 "port": port_num, "codename": adb_codename,
                 "slot_loc": loc,
@@ -754,6 +763,13 @@ def _web_status_data(cfg: dict) -> list[dict]:
                 "unmapped": adb_codename is not None,
                 "socket": sockets.get(str(port_num)),
                 "excluded": excludes.get(str(port_num)),
+                # What sysfs sees regardless of adb/fastboot. `empty` above
+                # stays as-is so nothing downstream changes meaning; the UI
+                # prefers this when present.
+                "dev_serial": dev["serial"] if dev else None,
+                "dev_link": dev["link"] if dev else None,
+                "dev_id": f"{dev['vid']}:{dev['pid']}" if dev else None,
+                "dev_unconfigured": (dev is not None and not dev["configured"]),
             })
 
         # Order rows by physical socket when known, so the UI reads in the
