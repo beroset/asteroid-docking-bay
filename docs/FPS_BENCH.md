@@ -138,25 +138,32 @@ These are what make a number mean something a week later on another watch:
 - Whether the bench watchface lives in this repo, in unofficial-watchfaces, or
   ships as an a-d-b asset pushed on demand.
 
-## Parked idea: the Benchy phases (moWerk, 2026-07-27) — NOT built
+## The Benchy phase — BUILT (P8), the finale
 
-Borrow 3D printing's own benchmark. Three escalating variants, the last two
-worth a phase each because they hit paths nothing else here touches:
+3DBenchy, 3D printing's own benchmark, rendered as a rotating wireframe by the
+watchface itself. There is no 3D engine to lean on (QtQuick3D absent, see
+below), so nutty-benchy IS the renderer: every frame it rotates 1118 vertices
+about the model's vertical axis, projects them through a perspective divide,
+and hands six point arrays to six `PathPolyline`s. Deliberately the heaviest
+phase — JS arithmetic and `Shape` re-tessellation at once — and the last one,
+because it is the one worth watching.
 
-1. **Flat Benchy** — a PNG/SVG of the boat bumping in size and rotating.
-   Cheap to add; tests texture sampling + rotation, and it is instantly
-   readable as "this is a benchmark".
-2. **Wireframe Benchy** — the real thing in motion: decimate the STL
-   host-side to a few hundred edges, embed the vertex/edge list in the QML,
-   and per frame rotate (3×3 matrix in JS) → project → feed a `ShapePath`.
-   The full model is ~225k triangles, so decimation is mandatory; the
-   remaining JS matrix work plus per-frame re-tessellation is exactly the
-   CPU/geometry stress a benchmark wants.
-3. **Shader Benchy** — the missing shader phase. Qt6 needs a baked `.qsb`
-   (inline GLSL crashes it), so this one carries a build step the others do
-   not. `ShaderEffect` supports a `GridMesh` + vertex shader, so a
-   height/normal map of the hull displaced and lit per frame is achievable
-   without a mesh pipeline; a raymarched SDF is the prettier, slower option.
+Pipeline: moWerk decimated the 11.3 MB original to a 2500-vertex variant;
+`tools/stl_to_qml_mesh.py` welds it (STL stores every triangle's corners
+loose, so without welding no edge is shared and nothing can be chained),
+normalises it into a ±1000 cube **without touching orientation**, walks the
+3378 edges into continuous strips, and packs them into exactly six buckets —
+one per `ShapePath`, because a `Shape` cannot hold a `Repeater` of them. Output:
+1118 vertices, 3720 segments, a 30 KB `.js` library beside the watchface.
+
+`benchyStrips` (default 6) is the dial: drawing fewer strips is how to pull the
+phase back from a slideshow to a rotation once hardware says which it is.
+
+Still open from the original idea: the flat PNG/SVG variant (needs an image
+asset), and the shader variant, which remains the only way to fill the GPU-
+shader gap and needs a baked `.qsb`.
+
+## Findings behind it
 
 **QtQuick3D: absent — checked.** `ls /usr/lib/qml` on catfish (2.2-nightly)
 lists Amber, Connman, Nemo, QML, Qt, Qt5Compat, QtCore, QtFeedback,

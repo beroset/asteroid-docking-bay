@@ -27,6 +27,7 @@ import QtQuick
 import QtQuick.Effects
 import QtQuick.Shapes
 import org.asteroid.controls 1.0
+import "benchy-mesh.js" as Mesh
 
 Item {
     id: root
@@ -61,7 +62,8 @@ Item {
         { name: "OVERDRAW",  dur: 8 },   // stacked translucent full-screen fills
         { name: "DRAWCALLS", dur: 8 },   // unbatchable Icons in motion
         { name: "SHAPES",    dur: 8 },   // re-tessellated Shape path
-        { name: "CASCADE",   dur: 8 }    // scale on an Item with many children
+        { name: "CASCADE",   dur: 8 },   // scale on an Item with many children
+        { name: "BENCHY",    dur: 10 }   // the wireframe boat, projected in QML
     ]
     property int countdown: 5
     property int phase: -1                       // -1 = counting down
@@ -410,6 +412,90 @@ Item {
             NumberAnimation { from: 1.25; to: 0.55; duration: 800; easing.type: Easing.InOutSine }
         }
 
+    }
+
+    // ── BENCHY: 3DBenchy as a rotating wireframe, projected in QML ────────
+    // There is no 3D engine on these images (QtQuick3D is absent — checked on
+    // catfish), so the watchface IS the renderer: every frame it rotates 1118
+    // vertices, projects them with a perspective divide, and hands six point
+    // arrays to six PathPolylines. The model arrives pre-welded and chained
+    // into strips by tools/stl_to_qml_mesh.py, so the watch pays only for
+    // rotate → project → stroke. This is deliberately the heaviest phase and
+    // the finale: JS arithmetic and Shape re-tessellation at once.
+    //
+    // 3DBenchy is public domain (NTI Group, 2025-02-14); credit to Creative
+    // Tools / NTI.
+    property real benchyAngle: 0
+    // How many of the six strips to draw — the dial for how brutal this is.
+    // Lower it if the phase is a slideshow rather than a rotation.
+    property int benchyStrips: 6
+
+    onBenchyAngleChanged: if (benchyShape.visible) root.projectBenchy()
+
+    function projectBenchy() {
+        var V = Mesh.V, S = Mesh.S;
+        var a = root.benchyAngle * Math.PI / 180;
+        var ca = Math.cos(a), sa = Math.sin(a);
+        var tilt = 0.42, ct = Math.cos(tilt), st = Math.sin(tilt);
+        var cx = root.width / 2, cy = root.height / 2;
+        var k = root.maxSize * 0.00042;          // the +/-1000 cube to screen
+        var dist = 2800;                          // perspective distance
+        // pl* carry the points; bp* carry the start coordinate. A ShapePath
+        // starts at startX/startY, so without setting it every strip would
+        // trail a stray line back to the top-left corner.
+        var lines = [pl0, pl1, pl2, pl3, pl4, pl5];
+        var paths = [bp0, bp1, bp2, bp3, bp4, bp5];
+        for (var s = 0; s < lines.length; s++) {
+            if (s >= root.benchyStrips || s >= S.length) {
+                lines[s].path = [];
+                continue;
+            }
+            var idx = S[s], pts = [];
+            for (var i = 0; i < idx.length; i++) {
+                var o = idx[i] * 3;
+                var x = V[o], y = V[o + 1], z = V[o + 2];
+                // spin about the model's own vertical axis (Z up, print-bed
+                // frame), then tilt the camera down onto it
+                var rx = x * ca - y * sa;
+                var ry = x * sa + y * ca;
+                var depth = ry * ct - z * st;
+                var up = ry * st + z * ct;
+                var f = dist / (dist + depth);
+                pts.push(Qt.point(cx + rx * k * f, cy - up * k * f));
+            }
+            lines[s].path = pts;
+            if (pts.length) {
+                paths[s].startX = pts[0].x;
+                paths[s].startY = pts[0].y;
+            }
+        }
+    }
+
+    Shape {
+        id: benchyShape
+
+        anchors.fill: parent
+        visible: root.phase === 8
+        onVisibleChanged: if (visible) root.projectBenchy()
+
+        ShapePath { id: bp0; fillColor: "transparent"; strokeColor: "#58a6ff"; strokeWidth: 1; PathPolyline { id: pl0 } }
+        ShapePath { id: bp1; fillColor: "transparent"; strokeColor: "#58a6ff"; strokeWidth: 1; PathPolyline { id: pl1 } }
+        ShapePath { id: bp2; fillColor: "transparent"; strokeColor: "#79c0ff"; strokeWidth: 1; PathPolyline { id: pl2 } }
+        ShapePath { id: bp3; fillColor: "transparent"; strokeColor: "#79c0ff"; strokeWidth: 1; PathPolyline { id: pl3 } }
+        ShapePath { id: bp4; fillColor: "transparent"; strokeColor: "#a5d6ff"; strokeWidth: 1; PathPolyline { id: pl4 } }
+        ShapePath { id: bp5; fillColor: "transparent"; strokeColor: "#a5d6ff"; strokeWidth: 1; PathPolyline { id: pl5 } }
+
+        NumberAnimation on rotationDriver {
+            from: 0
+            to: 360
+            duration: 6000
+            loops: Animation.Infinite
+            running: benchyShape.visible
+        }
+
+        property real rotationDriver: 0
+
+        onRotationDriverChanged: root.benchyAngle = rotationDriver
     }
 
     // ── whisper line: phase name and progress (Nutty Null's date slot) ─────
