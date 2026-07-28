@@ -21,6 +21,22 @@
 // Every phase animation is gated `running: active && visible` — rendering is
 // not animation, and an ungated phase would leak its cost into the next one.
 //
+//
+// KNOWN SIDE EFFECT — some watches drop off ADB during the heavy phases.
+// Observed repeatedly on beluga while the wireframe phases run with the screen
+// on. The host kernel log shows the disconnect originating on the WATCH side:
+//   android_work: sent uevent USB_STATE=DISCONNECTED
+//   msm_otg 78d9000.usb: USB in low power mode
+// with no OOM kill, no adbd crash and no segfault anywhere in the journal —
+// the gadget simply loses its session, and a port power cycle brings it back
+// (phy_reset -> CONNECTED -> CONFIGURED). WHY that happens is a watch-side
+// question and moWerk's call; from the host all that can be said is that it
+// coincides with maximum sustained load plus a lit panel.
+// Consequences: the host's kernel-FPS sampling may end early on such a watch,
+// so the ON-SCREEN rotator is the authoritative reading; and bench.run's
+// restore step may fail while the watch is away, which is why the saved
+// watchface is persisted to config and bench.restore exists.
+//
 // Font: Inter Tight (SIL OFL 1.1)
 
 import QtQuick

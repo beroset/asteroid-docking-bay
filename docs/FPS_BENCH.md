@@ -94,6 +94,32 @@ MDSS driver's own counter, present on catfish) and `vsync_event` from the host
 while the phases run. Two independent instruments on one run — app-side and
 kernel-side — so a disagreement between them is itself informative.
 
+## Known side effect: watches dropping off ADB mid-run
+
+Observed repeatedly on beluga (2026-07-28) while the wireframe phases run with
+the screen on: the watch disappears from `adb devices` and returns only after a
+port power cycle. The kernel log puts the origin on the watch side —
+
+```
+android_work: sent uevent USB_STATE=DISCONNECTED
+msm_otg 78d9000.usb: USB in low power mode
+... phy_reset: success -> USB_STATE=CONNECTED -> CONFIGURED   (the port cycle)
+```
+
+— with **no OOM kill, no adbd crash and no segfault** in the journal, so this is
+not a process dying; the gadget loses its session. What causes that is a
+watch-side question (moWerk's domain); from the host the only correlation
+available is maximum sustained load together with a lit panel.
+
+Two consequences for this benchmark:
+
+1. **The on-screen rotator is authoritative**, not the host's kernel sampling —
+   the sampler simply ends early when the link goes.
+2. **`bench.run` may fail to restore the watchface** while the watch is away.
+   That is why the previous face is persisted to config rather than held in
+   memory, and why `bench.restore` exists as a separate op to run once the
+   watch is back.
+
 ## Comparability rules
 
 These are what make a number mean something a week later on another watch:

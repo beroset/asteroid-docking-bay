@@ -1206,6 +1206,12 @@ def _bench_run(args):
 
     rows = bench.align_phases(bench.parse_samples(samples_out.get("out", "")), t0)
     got = [r for r in rows if r["avg"] is not None]
+    # A watch that vanishes under load takes the sampler with it — say so
+    # plainly rather than presenting a truncated run as a complete one.
+    if rows and rows[-1]["samples"] == 0 and got:
+        yield ("NOTE: sampling stopped early — the watch dropped off ADB during "
+               "the run (a known side effect of the heavy phases; recover it "
+               "with a port power cycle). The on-screen numbers still stand.")
     if not got:
         yield ("no kernel FPS samples — measured_fps may read 0 on this watch; "
                "the on-screen numbers still stand")
