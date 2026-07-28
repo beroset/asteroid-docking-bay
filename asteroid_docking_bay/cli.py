@@ -23,7 +23,7 @@ from .config import (CONFIG_FILE, ChargeConfig, charge_config, flash_config,
                      exact_codename_for_serial, hub_name_for, load_config,
                      save_config, seed_hub_names)
 from .usb import (hub_vendors, test_port_power_switching,
-                  uhubctl_get_power, uhubctl_list, uhubctl_set_power)
+                  discover_hubs, uhubctl_get_power, uhubctl_set_power)
 from .events import event_log
 from .fastboot import _fastboot_devices
 from .ops import _flash_one_watch, charge_to_target
@@ -561,19 +561,33 @@ def cmd_map(args, cfg: dict):
     print("   \u2500\u2500\u2500\u2500\u2500\u2500 hub topology mapping \u2500\u2500\u2500\u2500\u2500\u2500")
     print()
 
-    hubs = uhubctl_list()
-    # Watches are USB 2.0 devices and only enumerate on the 2.x bus; a USB 3.x
-    # companion mirrors the same physical ports, so scanning it would double
-    # every hub. Keep the USB 2.0 side only.
-    hubs = [hub for hub in hubs if ", USB 3." not in hub.get("description", "")]
+    # From sysfs, NOT uhubctl: uhubctl reports only hubs that can switch port
+    # power, so a non-PPPS box (the Sabrent's Genesys chips) was invisible here
+    # and could not be registered at all. discover_hubs() already keeps to the
+    # USB 2.0 side, since watches never enumerate on the 3.x bus.
+    found = discover_hubs()
+    # Chipset-internal hubs carry no sockets; registering them would add rows
+    # no watch can ever appear on. Reported rather than silently dropped.
+    hubs = [hub for hub in found if not hub.get("internal")]
+    skipped = [hub for hub in found if hub.get("internal")]
     if not hubs:
-        print("No USB hubs found by uhubctl.")
+        print("No USB hubs found in sysfs.")
         print("See udev/70-asteroid-docking-bay.rules for permission setup.")
         return
 
-    print(f"Found {len(hubs)} hub(s):")
+    switchable = sum(1 for hub in hubs if hub.get("ppps"))
+    print(f"Found {len(hubs)} hub(s), {switchable} of them power-switchable:")
     for hub in hubs:
-        print(f"  {hub['location']:12}  {hub['description']}  ({len(hub['ports'])} ports)")
+        flag = "ppps" if hub.get("ppps") else "no ppps"
+        print(f"  {hub['location']:12}  {hub['description'] or '(no product string)':44}"
+              f"  ({len(hub['ports'])} ports, {flag})")
+    if switchable < len(hubs):
+        print("\n  Hubs without PPPS are registered so their watches appear and")
+        print("  can be worked with; their power controls stay inert, because")
+        print("  nothing on the host can cut VBUS on them.")
+    for hub in skipped:
+        print(f"\n  Skipped {hub['location']} — chipset-internal hub "
+              f"({len(hub['ports'])} ports, no physical sockets).")
 
     # (Re)register each hub, preserving everything already learned for it — watch
     # mappings, per-port smart verdicts, socket labels, excludes — and refreshing

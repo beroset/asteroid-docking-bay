@@ -174,11 +174,16 @@ def test_cmd_map_registers_topology_and_never_switches_power(monkeypatch):
     import argparse
     from asteroid_docking_bay import cli
 
-    monkeypatch.setattr(cli, "uhubctl_list", lambda: [
+    # discover_hubs() owns finding hubs and classifying them (its own tests
+    # cover the USB3/internal/non-PPPS cases); map's job is what it does with
+    # the result.
+    monkeypatch.setattr(cli, "discover_hubs", lambda: [
         {"location": "1-2", "description": "USB2.1 Hub", "ppps": True,
-         "ports": [1, 2, 3, 4]},
-        {"location": "3-2", "description": "USB2.1 Hub, USB 3.0", "ppps": True,
-         "ports": [1, 2]},                         # USB3 companion — must drop
+         "ports": [1, 2, 3, 4], "internal": False},
+        {"location": "1-6", "description": "Sabrent", "ppps": False,
+         "ports": [1, 2, 3, 4], "internal": False},   # non-PPPS — must register
+        {"location": "2-1", "description": "", "ppps": False,
+         "ports": [1, 2], "internal": True},          # chipset — must not
     ])
     monkeypatch.setattr(cli, "hub_vendors",
                         lambda: [{"location": "1-2", "vendor": "0bda"}])
@@ -195,7 +200,10 @@ def test_cmd_map_registers_topology_and_never_switches_power(monkeypatch):
     cli.cmd_map(argparse.Namespace(), cfg)
 
     hubs = {h["location"]: h for h in saved["cfg"]["hubs"]}
-    assert set(hubs) == {"1-2"}                     # USB3 companion filtered out
+    # The non-PPPS hub registers (its watches must be reachable); the
+    # chipset-internal one does not (it has no sockets).
+    assert set(hubs) == {"1-2", "1-6"}
+    assert hubs["1-6"]["ppps"] is False
     assert hubs["1-2"]["ports"] == {"1": "skipjack"}      # mapping preserved
     assert hubs["1-2"]["port_smart"] == {"1": True}       # verdict preserved
     assert saved["cfg"]["hub_names"] == {"1-2": "A16 #1"}  # auto-seeded

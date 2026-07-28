@@ -228,6 +228,89 @@ def hub_vendors() -> "list[dict]":
     return out
 
 
+def discover_hubs() -> "list[dict]":
+    """Every USB2-side hub under the host, whether or not it can switch power.
+
+    `uhubctl` reports ONLY hubs with per-port power switching, so a hub without
+    it — the Sabrent's Genesys chips, for instance — was invisible to `map` and
+    could not be registered at all, however many watches were sitting on it.
+    So the hub list comes from sysfs (bDeviceClass 09, the same walk
+    hub_vendors() uses) and uhubctl is consulted purely to decide which of
+    those hubs can switch power.
+
+    Returns uhubctl_list()-shaped dicts: location, description, ports, ppps,
+    plus `internal` for chipset hubs that carry no physical socket (Intel's
+    rate-matching hub, for one) — callers skip those rather than growing rows
+    no watch can ever appear on. Flagged rather than dropped here, so a caller
+    can still report what it passed over.
+    No power state — map does not switch power, and reading it here would cost
+    a slow USB query per port.
+
+    Reading `product` is safe HERE and nowhere on the status path: on a wedged
+    hub that read blocks the kernel USB core for a minute or more (88 s
+    measured on the rig), which is why the description is captured once at map
+    time into the config and never re-read per refresh.
+    """
+    # Class-09 devices from these vendors are chipset-internal hubs (Intel's
+    # 8087:8000 Integrated Rate Matching Hub), soldered between the controller
+    # and the real ports. They have no sockets of their own.
+    INTERNAL_VENDORS = {"8087"}
+
+    switchable = {}
+    try:
+        for hub in uhubctl_list():
+            switchable[hub["location"]] = hub
+    except Exception as exc:
+        # No uhubctl, or no permission: every hub then registers as non-PPPS,
+        # which is honest — nothing can switch power without it.
+        log.warning("uhubctl unavailable, registering hubs as non-PPPS: %s", exc)
+
+    out: list[dict] = []
+    for dev in sorted(_SYSFS_USB.glob("*-*")):
+        if ":" in dev.name:                       # interface dir, not a device
+            continue
+        loc = dev.name
+        try:
+            if (dev / "bDeviceClass").read_text().strip() != "09":
+                continue
+            # Watches are USB 2.0 and only enumerate on the 2.x bus; a USB 3.x
+            # companion mirrors the same physical box, so counting it would
+            # double every hub.
+            if int((dev / "speed").read_text().strip().split(".")[0]) >= 5000:
+                continue
+        except OSError:
+            continue
+
+        ports: list[int] = []
+        for iface in _SYSFS_USB.glob(f"{loc}:*"):
+            for pd in iface.glob(f"{loc}-port*"):
+                try:
+                    ports.append(int(pd.name.rsplit("port", 1)[1]))
+                except ValueError:
+                    continue
+        if not ports:
+            continue
+
+        try:
+            vendor = (dev / "idVendor").read_text().strip()
+        except OSError:
+            vendor = ""
+
+        known = switchable.get(loc)
+        if known:
+            desc, ppps = known.get("description", ""), known.get("ppps", False)
+        else:
+            try:
+                desc = (dev / "product").read_text().strip()
+            except OSError:
+                desc = ""
+            ppps = False
+        out.append({"location": loc, "description": desc, "ppps": ppps,
+                    "ports": sorted(set(ports)),
+                    "internal": vendor in INTERNAL_VENDORS})
+    return out
+
+
 def _sysfs_switch_mode(cfg: dict) -> str:
     """Human-readable: is port switching going via direct sysfs (instant) or
     falling back to uhubctl (slow)? Determined by whether a configured hub's

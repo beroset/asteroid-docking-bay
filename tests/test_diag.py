@@ -136,3 +136,82 @@ def test_onboard_does_not_hold_the_adb_lock_across_its_waits():
     # _adb_lock appears only in the two short power-change blocks
     assert src.count("with _adb_lock:") == 2
     assert "uhubctl_set_power" in src and "uhubctl_cycle" in src
+
+
+# ── hub discovery (non-PPPS hubs must register too) ─────────────────────────
+
+def _fake_hub(root, loc, vendor, cls="09", speed="480", ports=4, product=""):
+    dev = root / loc
+    dev.mkdir(parents=True, exist_ok=True)
+    (dev / "bDeviceClass").write_text(cls + "\n")
+    (dev / "speed").write_text(speed + "\n")
+    (dev / "idVendor").write_text(vendor + "\n")
+    if product:
+        (dev / "product").write_text(product + "\n")
+    iface = root / f"{loc}:1.0"
+    iface.mkdir(parents=True, exist_ok=True)
+    for n in range(1, ports + 1):
+        (iface / f"{loc}-port{n}").mkdir(exist_ok=True)
+
+
+def test_discover_hubs_registers_hubs_uhubctl_cannot_see(tmp_path, monkeypatch):
+    """uhubctl reports ONLY power-switchable hubs, so the Sabrent's Genesys
+    chips were invisible to map and could not be registered at all — with
+    watches sitting on them. sysfs must find them and mark them non-PPPS.
+    Planted-bug: build the list from uhubctl_list() again and the Sabrent
+    chips vanish."""
+    from asteroid_docking_bay import usb
+    monkeypatch.setattr(usb, "_SYSFS_USB", tmp_path)
+    _fake_hub(tmp_path, "1-3", "0bda", product="Realtek A16")     # switchable
+    _fake_hub(tmp_path, "1-6", "05e3", product="USB2.1 Hub")      # Sabrent
+    monkeypatch.setattr(usb, "uhubctl_list",
+                        lambda: [{"location": "1-3", "ppps": True,
+                                  "description": "0bda:5411 Generic USB2.1 Hub"}])
+    by = {h["location"]: h for h in usb.discover_hubs()}
+    assert set(by) == {"1-3", "1-6"}
+    assert by["1-3"]["ppps"] is True
+    assert by["1-6"]["ppps"] is False          # honest: nothing can cut its VBUS
+    assert by["1-6"]["ports"] == [1, 2, 3, 4]
+    assert by["1-6"]["description"] == "USB2.1 Hub"     # from sysfs `product`
+
+
+def test_discover_hubs_skips_usb3_companions_and_non_hubs(tmp_path, monkeypatch):
+    """A USB 3.x companion mirrors the same physical box, so counting it would
+    double every hub; a non-hub device is not a hub at all."""
+    from asteroid_docking_bay import usb
+    monkeypatch.setattr(usb, "_SYSFS_USB", tmp_path)
+    monkeypatch.setattr(usb, "uhubctl_list", lambda: [])
+    _fake_hub(tmp_path, "1-3", "0bda")                            # keep
+    _fake_hub(tmp_path, "3-5", "0bda", speed="5000")              # USB3 — skip
+    _fake_hub(tmp_path, "1-4", "0bda", cls="00")                  # not a hub
+    _fake_hub(tmp_path, "1-5", "0bda", ports=0)                   # no ports
+    assert [h["location"] for h in usb.discover_hubs()] == ["1-3"]
+
+
+def test_discover_hubs_flags_chipset_internal_hubs(tmp_path, monkeypatch):
+    """Intel's 8087:8000 rate-matching hub is soldered between the controller
+    and the real ports — it has no sockets, so map must not grow rows for it.
+    Flagged rather than dropped, so map can report what it passed over."""
+    from asteroid_docking_bay import usb
+    monkeypatch.setattr(usb, "_SYSFS_USB", tmp_path)
+    monkeypatch.setattr(usb, "uhubctl_list", lambda: [])
+    _fake_hub(tmp_path, "2-1", "8087", ports=8)
+    _fake_hub(tmp_path, "1-3", "0bda")
+    by = {h["location"]: h for h in usb.discover_hubs()}
+    assert by["2-1"]["internal"] is True
+    assert by["1-3"]["internal"] is False
+
+
+def test_discover_hubs_survives_uhubctl_being_absent(tmp_path, monkeypatch):
+    """No uhubctl, or no permission: every hub registers as non-PPPS, which is
+    honest — nothing can switch power without it. It must not raise, or map
+    dies on a rig where uhubctl is not installed."""
+    from asteroid_docking_bay import usb
+    monkeypatch.setattr(usb, "_SYSFS_USB", tmp_path)
+
+    def _boom():
+        raise RuntimeError("uhubctl not found")
+    monkeypatch.setattr(usb, "uhubctl_list", _boom)
+    _fake_hub(tmp_path, "1-3", "0bda")
+    hubs = usb.discover_hubs()
+    assert len(hubs) == 1 and hubs[0]["ppps"] is False
