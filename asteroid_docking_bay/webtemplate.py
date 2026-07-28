@@ -443,11 +443,18 @@ _WEB_TEMPLATE = """\
       .wr .cbadge,.wr .scrn{font-size:14px;padding:3px 9px}
       .lr td{padding:0}
     }
+    /* xHCI slot gauge: the resource that actually limits this rig. Quiet
+       while there is room, amber approaching the wall, red at it — the last
+       state is not a warning but an explanation for devices that enumerate
+       and then refuse to configure. */
+    #slots{margin-left:10px;opacity:.55;font-size:.92em}
+    #slots.warn{opacity:1;color:#d29922}
+    #slots.full{opacity:1;color:#f85149;font-weight:600}
   </style>
 </head>
 <body>
   <div id="stars"></div>
-  <div class="topbar"><span id="ts">loading&hellip;</span><span id="ver"></span></div>
+  <div class="topbar"><span id="ts">loading&hellip;</span><span id="slots"></span><span id="ver"></span></div>
   <div id="berr" class="berr"></div>
   <div id="alert" class="alert"></div>
   <div class="hdr">
@@ -1467,6 +1474,20 @@ function devLabel(p){
            storage:'mass-storage only',
            unknown:'enumerated, but advertising no interface we recognise'}[p.dev_link]||'';
   return `<span class="dim" title="${t}">${who} <span style="opacity:.7">${esc(p.dev_link)}</span></span>`;
+}
+
+function renderSlots(s){
+  const el=document.getElementById('slots');
+  if(!el)return;
+  if(!s||!s.max){el.textContent='';el.className='';return;}
+  const free=s.max-s.used;
+  el.className=free<=0?'full':(free<=4?'warn':'');
+  let t=`USB slots ${s.used}/${s.max}`;
+  if(s.max_powered_ports)t+=` \u00b7 powered ${s.powered_ports}/${s.max_powered_ports}`;
+  el.textContent=t;
+  el.title=free<=0
+    ?'Out of xHCI device slots. Every device on the bus takes one, hubs included, so a cascaded hub tree spends a dozen before any watch appears. Past the limit the controller enumerates a device and never configures it — it looks present and broken. Power a port off to free one.'
+    :`${free} device slot(s) left on the USB controller (buses ${(s.buses||[]).join(', ')}). Hubs consume these too, not just watches.`;
 }
 
 function bodyDiagTab(){
@@ -2554,7 +2575,7 @@ function refresh(){
   fetch('/api/status').then(r=>r.json()).then(d=>{
     if(d&&d.error&&!d.hubs){showBackendError(d.error);return;}
     clearBackendError();
-    render(d);document.getElementById('ts').textContent='updated '+new Date().toLocaleTimeString();if(d.version)document.getElementById('ver').textContent='v'+d.version
+    render(d);document.getElementById('ts').textContent='updated '+new Date().toLocaleTimeString();renderSlots(d.slots);if(d.version)document.getElementById('ver').textContent='v'+d.version
   }).catch(()=>{document.getElementById('ts').textContent='connection error'});
 }
 function _api(s){return s.replace(':','/');}

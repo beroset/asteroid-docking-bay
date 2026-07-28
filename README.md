@@ -478,6 +478,8 @@ See `config.example.json` in this repo for a fully-annotated example.
 | `charge_duration_minutes` | `30` | Blind-mode charge duration (battery unreadable) |
 | `charge_max_minutes` | `240` | Hard cap for a charge-to-target cycle |
 | `wearable_min_hours` | `24` | Estimated standby (100→15%) above which a watch counts as wearable |
+| `max_powered_ports` | `null` | Refuse to power on more than this many *switchable* ports at once (off by default). Non-PPPS hubs are never counted — their ports are permanently live and no policy can give them back |
+| `xhci_max_slots` | `null` | Override the USB controller's device-slot count (defaults to 32, the Intel 8-Series figure). Every device on an xHCI bus takes one, hubs included; past the limit devices enumerate but are never configured |
 | `workbench_poll_minutes` | `30` | Workbench rest-phase re-check interval |
 | `workbench_blind_charge_minutes` | `15` | Workbench charge burst per rest period when the battery is unreadable |
 | `adb_wait_seconds` | `15` | Seconds between ADB availability retries |

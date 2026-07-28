@@ -37,7 +37,8 @@ from .config import (_config_lock, _store_smart_verdict, allocate_ssh_ip,
                      flash_config, load_config, save_config,
                      orbit_add, orbit_forget, orbit_members,
                      hands_cal_for, set_hands_cal, set_hub_name)
-from .usb import (_sysfs_path_to_serial_map, _sysfs_serial_at,
+from .usb import (_sysfs_hub_scan, _sysfs_path_to_serial_map,
+                  _sysfs_serial_at, xhci_slots,
                   test_port_power_switching, uhubctl_cycle, uhubctl_set_power)
 from .watchctl import DIAG_ROOT, Watch
 from .ops import ChargeOp, DrainOp, WorkbenchOp, _flash_one_watch
@@ -103,6 +104,12 @@ def _status_get(args):
         "drain_floor": _DRAIN_FLOOR_PCT,
         "wearable_min_hours": cfg.get("wearable_min_hours", 24),
         "usb_mode_preference": usb_mode_preference(cfg),
+        # The resource that actually limits this rig — see the xHCI audit. Sent
+        # every refresh so the header can show it filling up BEFORE devices
+        # start failing to configure.
+        "slots": {**xhci_slots(cfg.get("xhci_max_slots")),
+                  "powered_ports": _powered_port_count(cfg),
+                  "max_powered_ports": cfg.get("max_powered_ports")},
         # The version of the process running the ops — in split mode the
         # backend's, which is what an upgrade check cares about.
         "version": __version__,
@@ -750,11 +757,66 @@ def _refuse_if_busy(loc, port) -> "dict | None":
                      f"otherwise its readings are silently corrupted"}
 
 
+def _powered_port_count(cfg: dict) -> int:
+    """How many SWITCHABLE ports currently read as powered.
+
+    Only PPPS hubs count. A non-PPPS hub's ports are permanently live and
+    cannot be switched off, so counting them would charge the budget for
+    something no policy can ever give back — on this rig the Sabrent alone
+    would sit above any sane cap before a single switchable port came on.
+    Same source the UI shows, so the governor and the display cannot disagree.
+    """
+    switchable = {hub["location"] for hub in cfg.get("hubs", [])
+                  if hub.get("ppps")}
+    n = 0
+    for hub in _sysfs_hub_scan(cfg):
+        if hub["location"] not in switchable:
+            continue
+        for on in (hub.get("power") or {}).values():
+            if on is True:
+                n += 1
+    return n
+
+
+def _refuse_if_bus_full(cfg: dict) -> "dict | None":
+    """Guard a power-on against the two ways this rig runs out of room.
+
+    The xHCI slot pool is the hard one: every device on the bus takes a slot,
+    hubs included, and past the limit the controller enumerates a device and
+    then refuses to configure it. Powering another port on at that moment
+    cannot work — it produces a watch that looks present and broken. Refusing
+    with the reason beats reproducing the mystery.
+
+    max_powered_ports is the soft one: a user policy, off by default, for
+    keeping the powered set near the handful actually being worked on.
+    """
+    slots = xhci_slots(cfg.get("xhci_max_slots"))
+    if slots["used"] >= slots["max"]:
+        return {"ok": False,
+                "error": (f"USB controller out of device slots "
+                          f"({slots['used']}/{slots['max']}). Another device "
+                          f"cannot be configured until one is freed — power a "
+                          f"port off first.")}
+    cap = cfg.get("max_powered_ports")
+    if cap:
+        powered = _powered_port_count(cfg)
+        if powered >= int(cap):
+            return {"ok": False,
+                    "error": (f"max_powered_ports reached ({powered}/{cap}). "
+                              f"Power a port off, or raise the limit in "
+                              f"config.")}
+    return None
+
+
 @DISPATCH.op("port.set")
 def _port_set(args):
     busy = _refuse_if_busy(args["loc"], args["port"])
     if busy:
         return busy
+    if args["on"]:
+        full = _refuse_if_bus_full(load_config())
+        if full:
+            return full
     try:
         confirmed = uhubctl_set_power(args["loc"], args["port"], bool(args["on"]))
     except RuntimeError as e:

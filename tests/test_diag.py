@@ -306,3 +306,77 @@ def test_port_device_info_ignores_hub_chips_and_empty_ports(tmp_path, monkeypatc
     _fake_dev(tmp_path, "1-3", 1, vid="0bda", pid="5411", cls="09", serial="")
     assert usb.port_device_info("1-3", 1) is None
     assert usb.port_device_info("1-3", 9) is None          # nothing there
+
+
+# ── xHCI slot budget and the powered-port governor ──────────────────────────
+
+def test_xhci_slots_counts_only_xhci_buses(tmp_path, monkeypatch):
+    """EHCI buses draw from a different pool, so counting them would make the
+    budget look tighter than it is. Planted-bug: count every bus and the EHCI
+    device inflates `used`."""
+    from asteroid_docking_bay import usb
+    monkeypatch.setattr(usb, "_SYSFS_USB", tmp_path)
+    monkeypatch.setattr(usb, "xhci_buses", lambda: ["1", "3"])
+    for name in ("1-1", "1-2", "1-2.1", "3-1", "2-1", "2-1.4"):
+        (tmp_path / name).mkdir()
+    (tmp_path / "1-1:1.0").mkdir()                 # interface dir, not a device
+    s = usb.xhci_slots()
+    assert s["used"] == 4                          # the two bus-2 devices excluded
+    assert s["max"] == 32
+
+
+def test_xhci_slots_max_is_overridable(tmp_path, monkeypatch):
+    """The real figure lives in a register readable only as root, so it is a
+    per-controller constant — a different controller must be configurable
+    rather than silently wrong."""
+    from asteroid_docking_bay import usb
+    monkeypatch.setattr(usb, "_SYSFS_USB", tmp_path)
+    monkeypatch.setattr(usb, "xhci_buses", lambda: [])
+    assert usb.xhci_slots(64)["max"] == 64
+    assert usb.xhci_slots(None)["max"] == usb.XHCI_DEFAULT_MAX_SLOTS
+
+
+def test_powered_port_count_ignores_non_ppps_hubs(monkeypatch):
+    """A non-PPPS hub's ports are permanently live and cannot be switched off,
+    so charging them to the budget would put the rig over any sane cap before
+    a single switchable port came on. Planted-bug: drop the ppps filter and
+    the Sabrent's four powered ports get counted."""
+    from asteroid_docking_bay import rpcops
+    cfg = {"hubs": [{"location": "1-3", "ppps": True},
+                    {"location": "1-6", "ppps": False}]}
+    monkeypatch.setattr(rpcops, "_sysfs_hub_scan", lambda c: [
+        {"location": "1-3", "power": {1: True, 2: True, 3: False, 4: None}},
+        {"location": "1-6", "power": {1: True, 2: True, 3: True, 4: True}},
+    ])
+    assert rpcops._powered_port_count(cfg) == 2
+
+
+def test_power_on_refused_when_the_slot_pool_is_exhausted(monkeypatch):
+    """Past the slot limit the controller enumerates a device and never
+    configures it, so powering another port on cannot work — it manufactures a
+    watch that looks present and broken. Refuse with the reason instead."""
+    from asteroid_docking_bay import rpcops
+    monkeypatch.setattr(rpcops, "xhci_slots",
+                        lambda m=None: {"used": 32, "max": 32, "buses": ["1"]})
+    out = rpcops._refuse_if_bus_full({})
+    assert out and out["ok"] is False and "device slots" in out["error"]
+
+
+def test_power_on_allowed_with_slots_free_and_no_cap(monkeypatch):
+    """Default config must not change behaviour: no cap set, slots available,
+    the power-on proceeds."""
+    from asteroid_docking_bay import rpcops
+    monkeypatch.setattr(rpcops, "xhci_slots",
+                        lambda m=None: {"used": 21, "max": 32, "buses": ["1"]})
+    assert rpcops._refuse_if_bus_full({}) is None
+
+
+def test_max_powered_ports_policy_refuses_at_the_cap(monkeypatch):
+    """The soft, opt-in half: a user policy keeping the powered set near the
+    handful actually being worked on."""
+    from asteroid_docking_bay import rpcops
+    monkeypatch.setattr(rpcops, "xhci_slots",
+                        lambda m=None: {"used": 10, "max": 32, "buses": ["1"]})
+    monkeypatch.setattr(rpcops, "_powered_port_count", lambda cfg: 6)
+    assert rpcops._refuse_if_bus_full({"max_powered_ports": 6})["ok"] is False
+    assert rpcops._refuse_if_bus_full({"max_powered_ports": 8}) is None

@@ -767,6 +767,56 @@ def _read_attr(path: Path) -> str:
         return ""
 
 
+# An xHCI controller has a fixed number of DEVICE SLOTS — 32 on the Intel
+# 8-Series in the rig, which is where this default comes from. The exact figure
+# lives in the controller's HCSPARAMS1 register, readable only via debugfs as
+# root, so it is a per-controller constant here rather than a live reading.
+# Override with `xhci_max_slots` in config if a different controller turns up.
+XHCI_DEFAULT_MAX_SLOTS = 32
+
+
+def xhci_buses() -> "list[str]":
+    """The USB bus numbers driven by an xHCI controller.
+
+    EHCI buses do not draw from the same pool, so counting them would make the
+    budget look tighter than it is.
+    """
+    out = []
+    for root in _SYSFS_USB.glob("usb*"):
+        try:
+            # resolve() first: these are symlinks into the real device tree,
+            # and Path.parent is lexical — without it the "parent" is just the
+            # devices directory and no controller is ever found.
+            uevent = (root.resolve().parent / "uevent").read_text()
+        except OSError:
+            continue
+        if "DRIVER=xhci_hcd" in uevent:
+            out.append(root.name.replace("usb", ""))
+    return sorted(out)
+
+
+def xhci_slots(max_slots: "int | None" = None) -> dict:
+    """Device-slot budget for the xHCI controller: {used, max, buses}.
+
+    EVERY device on an xHCI bus takes a slot, hubs included — which is the
+    whole trap: a cascaded hub tree spends a dozen slots before a single watch
+    appears. When the pool runs dry the controller enumerates a device and then
+    refuses to configure it (`error -12`), so watches appear to be present and
+    broken rather than crowded out. This is the number that explains the
+    two-A16 breakdown; see docs/audits/2026-07-25-usb-brittleness-xhci-slots.
+    """
+    buses = xhci_buses()
+    used = 0
+    for dev in _SYSFS_USB.glob("*-*"):
+        if ":" in dev.name:                       # interface dir
+            continue
+        bus = dev.name.split("-", 1)[0]
+        if bus in buses:
+            used += 1
+    return {"used": used, "max": int(max_slots or XHCI_DEFAULT_MAX_SLOTS),
+            "buses": buses}
+
+
 def _sysfs_adb_serials() -> set[str]:
     """Serials of watches currently exposing an ADB interface per sysfs — the
     ground truth of what is on the bus in adb mode, independent of the adb
