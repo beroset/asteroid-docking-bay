@@ -161,11 +161,6 @@ Item {
     }
 
     anchors.fill: parent
-    // One run per wake: when the sequence has finished the screen is released
-    // and dims, and waking it again starts the whole thing over from the
-    // countdown (moWerk) — no looping, no surprise CPU load in a pocket.
-    onAwakeChanged: if (awake && done) root.restartRun()
-
     DisplayBlanking { preventBlanking: root.holding }
 
     MceDisplay { id: mceDisplay }
@@ -275,8 +270,8 @@ Item {
         readonly property bool scaling: root.phase === 1
         readonly property bool rerastering: root.phase === 2
 
-        text: root.countdown > 0 ? root.countdown
-                                 : (root.done ? "OK" : root.mmStr)
+        text: root.countdown > 0 ? root.countdown : root.mmStr
+        visible: !root.done
         color: root.countdown > 0 ? root.hot : root.fg
         anchors.centerIn: parent
         renderType: rerastering ? Text.NativeRendering : Text.QtRendering
@@ -685,6 +680,46 @@ Item {
             loops: Animation.Infinite
             NumberAnimation { from: 0; to: 0.6; duration: 500; easing.type: Easing.InOutSine }
             NumberAnimation { from: 0.6; to: 0; duration: 500; easing.type: Easing.InOutSine }
+        }
+
+    }
+
+    // ── end screen ────────────────────────────────────────────────────────
+    // The run finishes HERE rather than looping: a plain Restart target that
+    // says what it does (moWerk). The MouseArea exists only while the run is
+    // finished, so it can never eat a gesture mid-run, and it takes clicks
+    // only — a drag still reaches the launcher, so the screen can be swiped
+    // away like any other watchface.
+    Item {
+        anchors.fill: parent
+        visible: root.done
+
+        Text {
+            anchors.centerIn: parent
+            text: "\u21BB"                      // ↻
+            color: root.fg
+            font.family: "Inter Tight"
+            font.weight: Font.Light
+            font.pixelSize: root.maxSize * 0.34
+        }
+
+        Text {
+            anchors {
+                horizontalCenter: parent.horizontalCenter
+                top: parent.verticalCenter
+                topMargin: root.maxSize * 0.2
+            }
+            text: "RESTART"
+            color: root.dim
+            font.family: "Inter Tight"
+            font.weight: Font.Light
+            font.pixelSize: root.maxSize * 0.07
+            font.letterSpacing: root.maxSize * 0.016
+        }
+
+        MouseArea {
+            anchors.fill: parent
+            onClicked: root.restartRun()
         }
 
     }
