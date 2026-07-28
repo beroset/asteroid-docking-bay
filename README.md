@@ -366,6 +366,16 @@ Two details have their own panels, reachable straight from the row:
   its foot.
 - **Network Center** — the ADB / SSH badge. WiFi, IP, traffic, Bluetooth, the
   connected companion phone, the watch's **USB IP**, and the **USB-mode switch**.
+  It also carries **set up WiFi to \<SSID\>**, which lends this watch a network
+  another watch already joined: `Backup` stores `/var/lib/connman`, so the
+  moment one watch is on the WiFi the rig holds a working credential for it,
+  and the button copies that credential over instead of you typing a
+  passphrase on a 320px touchscreen once per watch. The credential is
+  **re-keyed on the way in** — connman identifies a saved network by the MAC of
+  the interface that saved it, in both the directory name and the file, so a
+  verbatim copy would be ignored by the receiving watch. The source watch's
+  DHCP lease is dropped with it. The button appears only when a backup
+  actually holds an AP, and never for the network the watch is already on.
 
 **Any wire — ADB or SSH.** Every one of these — the Control Center, the
 toggles, screenshots, time-sync, even a graceful power-off — works whether the

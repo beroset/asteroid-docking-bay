@@ -40,7 +40,8 @@ from .config import (_config_lock, _store_smart_verdict, allocate_ssh_ip,
 from .usb import (_sysfs_hub_scan, _sysfs_path_to_serial_map,
                   _sysfs_serial_at, xhci_slots,
                   test_port_power_switching, uhubctl_cycle, uhubctl_set_power)
-from .watchctl import DIAG_ROOT, Watch
+from . import wifi
+from .watchctl import BACKUP_ROOT, DIAG_ROOT, Watch
 from .ops import ChargeOp, DrainOp, WorkbenchOp, _flash_one_watch
 from .fastboot import (_switch_ssh_to_adb, _usb_moded_switch_failed,
                        _detect_rndis, _fastboot_list, fastboot_getvar_all,
@@ -588,6 +589,34 @@ def _screen_release_all(args):
         if status == "device" and Watch(serial).screen(False):
             released.append(serial)
     return {"ok": True, "released": released}
+
+
+@DISPATCH.op("wifi.aps")
+def _wifi_aps(args):
+    """The WiFi networks the rig can lend out — every credential across all
+    watch backups, deduplicated by SSID. Cheap enough to send with the Control
+    Center, so the button can name the network it will join."""
+    return {"ok": True, "aps": wifi.find_aps(BACKUP_ROOT)}
+
+
+@DISPATCH.op("wifi.provision")
+def _wifi_provision(args):
+    """Lend a saved WiFi credential to this watch.
+
+    The credential comes from whichever watch first joined that network; the
+    service is re-keyed to THIS watch's MAC on the way in, because connman
+    identifies a saved network by the interface that saved it.
+    """
+    serial, ssid = args["serial"], args.get("ssid")
+    aps = wifi.find_aps(BACKUP_ROOT)
+    if not aps:
+        return {"ok": False,
+                "error": "no WiFi credentials on the rig yet — back up a watch "
+                         "that is already on the network first"}
+    ap = next((a for a in aps if a["ssid"] == ssid), None) if ssid else aps[0]
+    if not ap:
+        return {"ok": False, "error": f"no saved credential for {ssid!r}"}
+    return Watch(serial).provision_wifi(ap)
 
 
 @DISPATCH.op("watch.backup")

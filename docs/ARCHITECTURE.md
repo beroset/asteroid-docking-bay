@@ -32,6 +32,8 @@ asteroid_docking_bay/
     tasks.py       in-memory operation registries + TaskStore (atomic JSON
                    persistence so running ops survive restarts), the
                    onboard lock and task_active() deadline guard
+    wifi.py        connman credential adaptation: find the APs across watch
+                   backups, re-key a service to the target watch's own MAC
     usbevents.py   udev-driven bus monitoring: debounced cache invalidation
                    so a docking watch shows up without waiting for the next
                    poll, and naming the enumerated-but-unconfigured state

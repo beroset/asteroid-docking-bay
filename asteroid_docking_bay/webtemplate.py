@@ -1240,6 +1240,7 @@ function openControl(serial,name,ev,tab,sshIp,mode){
   cc.style.display='block';
   if(ctlTab==='bat'){biHistFetch(serial);if(drainHistAll===null)drainHistFetch();}
   if(ctlTab==='set'){settingsFetch(serial);if(wxData===null)wxFetch();if(wxOnWatch[serial]===undefined)wxFetchOnWatch(serial);}
+  if(ctlTab==='net')wifiApsFetch();
   if((ctlTab==='diag'||ctlTab==='vit')&&dgData[serial]===undefined)dgFetch(serial);
   if(ctlTab==='ana'&&bcData[serial]===undefined)bcFetch(serial);
   if(ctlCache[serial])renderControl(ctlCache[serial]);   // instant, from the last open
@@ -1678,8 +1679,38 @@ function bodyNet(d){
   const modeToggle=isSsh
     ? `<button class="cc-tgl" onclick="switchAdb('${esc(d.serial||ctlSerial)}')" title="switch this watch's USB gadget back to ADB">USB &#8594; ADB</button>`
     : `<button class="cc-tgl" onclick="switchSsh('${esc(d.serial||ctlSerial)}')" title="switch this watch's USB gadget to SSH/developer mode">USB &#8594; SSH</button>`;
+  // Lend this watch a network another watch already joined. Offered only when
+  // the rig actually holds a credential, and not for the SSID it is already
+  // on — a button that would be a no-op should not be there at all.
+  let wifiSetup='';
+  const ap=(wifiAps||[])[0];
+  if(ap&&ap.ssid!==d.wifi_ssid)
+    wifiSetup=`<button class="cc-tgl" onclick="wifiProvision(${JSON.stringify(ap.ssid).replace(/"/g,'&quot;')})" title="Copy the saved credential for this network onto the watch, re-keyed to its own WiFi MAC, and reconnect. Taken from ${esc(ap.source)}'s backup.">set up WiFi to ${esc(ap.ssid)}</button>`;
   return `<div class="cc-cols"><div class="cc-col">${btSec}${usbSec}</div><div class="cc-col">${wifiSec}</div></div>`+
-    `<div class="cc-tgls">${tgl('wifi','WiFi',d.wifi)}${tgl('bluetooth','BT',d.bluetooth)}${modeToggle}</div>`;
+    `<div class="cc-tgls">${tgl('wifi','WiFi',d.wifi)}${tgl('bluetooth','BT',d.bluetooth)}${modeToggle}${wifiSetup}</div>`;
+}
+// Fetched once: the set of networks the rig can lend out changes only when a
+// backup is taken.
+let wifiAps=null;
+function wifiApsFetch(){
+  if(wifiAps!==null)return;
+  wifiAps=[];
+  fetch('/api/wifi/aps').then(r=>r.json())
+    .then(d=>{wifiAps=d.aps||[];if(ctlSerial&&ctlTab==='net')renderControl(ctlCache[ctlSerial]||{});})
+    .catch(()=>{});
+}
+function wifiProvision(ssid){
+  const s=ctlSerial;
+  if(!confirm('Set up WiFi to '+ssid+' on this watch? connman is stopped briefly while the credential is written, then restarted.'))return;
+  ctlPending.add('net:wifi'); renderControl(ctlCache[s]||{});
+  fetch('/api/watch/'+encodeURIComponent(s)+'/wifi/provision',
+        {method:'POST',headers:{'Content-Type':'application/json'},
+         body:JSON.stringify({ssid:ssid})})
+    .then(r=>r.json()).then(d=>{
+      ctlPending.delete('net:wifi');
+      if(!d.ok)alert('WiFi setup failed: '+(d.error||'?'));
+      setTimeout(ctlFetch,2500);
+    }).catch(()=>{ctlPending.delete('net:wifi');ctlFetch();});
 }
 function ncToggle(tech,on){
   ctlPending.add('net:'+tech); renderControl(ctlCache[ctlSerial]||{});   // pulse until the read reflects it

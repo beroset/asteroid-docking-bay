@@ -459,3 +459,116 @@ def test_monitor_start_degrades_when_udevadm_is_missing(monkeypatch):
         raise FileNotFoundError("udevadm")
     monkeypatch.setattr(subprocess, "Popen", _boom)
     assert UsbEventMonitor(lambda: None).start() is False
+
+
+# ── WiFi provisioning from a backup ─────────────────────────────────────────
+
+_SETTINGS = """[wifi_9828a6ec99db_667269747a677562697372617468_managed_psk]
+Name=fritzgubisrath
+SSID=667269747a677562697372617468
+Frequency=2437
+Favorite=true
+AutoConnect=true
+Modified=2026-07-13T18:13:50Z
+Passphrase=hunter2
+IPv4.method=dhcp
+IPv4.DHCP.LastAddress=192.168.176.127
+IPv6.method=auto
+"""
+
+
+def test_parse_service_dir_and_ssid_decode():
+    """connman names a service wifi_<mac>_<ssid-hex>_<mode>_<security>. The
+    tail is kept verbatim rather than assumed to be managed_psk — an open
+    network is managed_none."""
+    from asteroid_docking_bay import wifi
+    assert wifi.parse_service_dir(
+        "wifi_9828a6ec99db_667269747a677562697372617468_managed_psk") == (
+        "9828a6ec99db", "667269747a677562697372617468", "managed_psk")
+    assert wifi.parse_service_dir("wifi_aabbccddeeff_6162_managed_none")[2] == "managed_none"
+    assert wifi.parse_service_dir("ethernet_aabb_cable") is None
+    assert wifi.ssid_from_hex("667269747a677562697372617468") == "fritzgubisrath"
+    # An SSID is arbitrary bytes; an undecodable one must stay selectable.
+    assert wifi.ssid_from_hex("ffff") == "ffff"
+
+
+def test_adapt_settings_rekeys_to_the_target_watch():
+    """THE feature. A connman service is keyed on the MAC of the interface
+    that saved it, in the directory name AND the section header. Copied
+    verbatim to another watch, connman never matches it to the scanned
+    network. Planted-bug: keep the original header and this fails."""
+    from asteroid_docking_bay import wifi
+    new_id = wifi.service_id("00:90:4c:11:22:33",
+                             "667269747a677562697372617468", "managed_psk")
+    assert new_id == "wifi_00904c112233_667269747a677562697372617468_managed_psk"
+    out = wifi.adapt_settings(_SETTINGS, new_id)
+    assert out.splitlines()[0] == f"[{new_id}]"
+    assert "9828a6ec99db" not in out              # no trace of the source watch
+    kv = wifi.parse_settings(out)
+    assert kv["Passphrase"] == "hunter2"          # the credential travels
+    assert kv["Name"] == "fritzgubisrath"
+    assert kv["AutoConnect"] == "true" and kv["Favorite"] == "true"
+
+
+def test_adapt_settings_drops_the_source_watchs_dhcp_lease():
+    """LastAddress is another watch's lease. Handing it to a second watch
+    invites a duplicate-address attempt on a network where the first may still
+    be up. Planted-bug: drop the _DROP_KEYS filter and this fails."""
+    from asteroid_docking_bay import wifi
+    out = wifi.adapt_settings(_SETTINGS, "wifi_00904c112233_6162_managed_psk")
+    assert "IPv4.DHCP.LastAddress" not in out
+    assert "192.168.176.127" not in out
+    assert wifi.parse_settings(out)["IPv4.method"] == "dhcp"   # method stays
+
+
+def test_adapt_settings_forces_autoconnect_when_absent():
+    """A provisioned watch should join by itself; Favorite is what makes
+    connman treat it as a known network at all."""
+    from asteroid_docking_bay import wifi
+    kv = wifi.parse_settings(wifi.adapt_settings(
+        "[old]\nName=x\nPassphrase=p\n", "wifi_aa_6162_managed_psk"))
+    assert kv["AutoConnect"] == "true" and kv["Favorite"] == "true"
+
+
+def test_find_aps_skips_service_dirs_without_settings(tmp_path):
+    """The rig's own backup carries a second, locally-administered MAC (the
+    P2P/WiFi-Direct interface) holding only connman's binary cache and no
+    credential. Offering it would produce a button that cannot work.
+
+    Note on validation: removing the explicit `settings.is_file()` guard does
+    NOT fail this — the read below raises OSError and skips the entry anyway,
+    so the two paths are equivalent and the guard is documentation rather than
+    load-bearing. What this test does pin is the OUTCOME: a bare service dir
+    never reaches the UI, whichever path excludes it."""
+    from asteroid_docking_bay import wifi
+    cm = tmp_path / "skipjack" / "connman"
+    good = cm / "wifi_9828a6ec99db_667269747a677562697372617468_managed_psk"
+    good.mkdir(parents=True)
+    (good / "settings").write_text(_SETTINGS)
+    bare = cm / "wifi_9a28a6ec99db_667269747a677562697372617468_managed_psk"
+    bare.mkdir(parents=True)
+    (bare / "data").write_bytes(b"\x00" * 16)
+    aps = wifi.find_aps(tmp_path)
+    assert len(aps) == 1
+    assert aps[0]["ssid"] == "fritzgubisrath" and aps[0]["source"] == "skipjack"
+    assert aps[0]["secured"] is True
+
+
+def test_find_aps_offers_a_network_once_across_watches(tmp_path):
+    """Several watches on one network hold the same credential. The UI should
+    offer the NETWORK once, not one entry per watch that knows it."""
+    from asteroid_docking_bay import wifi
+    for who in ("skipjack", "catfish"):
+        d = (tmp_path / who / "connman"
+             / "wifi_aabbccddeeff_667269747a677562697372617468_managed_psk")
+        d.mkdir(parents=True)
+        (d / "settings").write_text(_SETTINGS)
+    assert len(wifi.find_aps(tmp_path)) == 1
+
+
+def test_find_aps_on_a_rig_with_no_backups(tmp_path):
+    """No backups is the normal state before the first one is taken — it must
+    read as 'nothing to offer', not raise."""
+    from asteroid_docking_bay import wifi
+    assert wifi.find_aps(tmp_path / "nope") == []
+    assert wifi.find_aps(tmp_path) == []

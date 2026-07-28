@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 
 from .util import _run, log
+from . import wifi
 from .adb import _adb_state, adb_devices, adb_shell, get_watch_codename, battery_dir_snippet
 from .boottime import BOOTCHART_CMD, parse_bootchart
 from .diag import DIAG_SCRIPT, parse_diag
@@ -740,6 +741,65 @@ class Watch:
         log.info("%s: restore <- %s (%s)", self.serial, src,
                  "ok" if ok else "partial")
         return {"ok": ok, "path": str(src), "items": items}
+
+    def wlan_mac(self) -> "str | None":
+        """The watch's own WiFi MAC. connman keys every saved network on it,
+        so provisioning cannot be done without it."""
+        rc, out, _ = self.t.shell("cat /sys/class/net/wlan0/address", timeout=12)
+        mac = (out or "").strip()
+        return mac if rc == 0 and ":" in mac else None
+
+    def provision_wifi(self, ap: dict) -> dict:
+        """Install a WiFi credential taken from another watch's backup.
+
+        connman is STOPPED for the write. Its storage is owned by a running
+        daemon that rewrites service files on state changes, so writing
+        underneath it is a race whose loser is silent — the file is there, the
+        watch still never joins. Stop, write, start is the only ordering that
+        reliably takes.
+        """
+        mac = self.wlan_mac()
+        if not mac:
+            return {"ok": False, "error": "could not read the watch's WiFi MAC "
+                                          "(/sys/class/net/wlan0/address)"}
+        local = Path(ap["path"])
+        if not local.is_file():
+            return {"ok": False, "error": f"credential missing: {local}"}
+        new_id = wifi.service_id(mac, ap["ssid_hex"], ap["tail"])
+        try:
+            adapted = wifi.adapt_settings(local.read_text(), new_id)
+        except OSError as exc:
+            return {"ok": False, "error": f"unreadable credential: {exc}"}
+
+        remote_dir = f"/var/lib/connman/{new_id}"
+        tmp = "/tmp/.dockingbay_wifi_settings"
+        staged = BACKUP_ROOT / ".staged_wifi_settings"
+        staged.parent.mkdir(parents=True, exist_ok=True)
+        staged.write_text(adapted)
+
+        self.t.shell("systemctl stop connman", timeout=20)
+        try:
+            rc, _, err = self.t.push(shlex.quote(str(staged)), tmp, timeout=30)
+            if rc != 0:
+                return {"ok": False, "error": f"push failed: {err.strip()[:80]}"}
+            # 0700/0600 and root-owned: connman refuses to read its storage if
+            # it is group- or world-readable, and this file holds a passphrase.
+            rc, _, err = self.t.shell(
+                f"mkdir -p {remote_dir} && mv {tmp} {remote_dir}/settings "
+                f"&& chown -R root:root {remote_dir} "
+                f"&& chmod 700 {remote_dir} && chmod 600 {remote_dir}/settings",
+                timeout=20)
+            if rc != 0:
+                return {"ok": False,
+                        "error": f"install failed: {err.strip()[:120]}"}
+        finally:
+            self.t.shell("systemctl start connman", timeout=20)
+            staged.unlink(missing_ok=True)
+
+        # connman only auto-joins if the WiFi technology is actually powered.
+        self.toggle("wifi", True)
+        log.info("%s: provisioned WiFi %s as %s", self.serial, ap["ssid"], new_id)
+        return {"ok": True, "ssid": ap["ssid"], "service": new_id, "mac": mac}
 
     def collect_diagnostics(self) -> dict:
         """Gather read-only device state (logs, battery, thermal, storage,
