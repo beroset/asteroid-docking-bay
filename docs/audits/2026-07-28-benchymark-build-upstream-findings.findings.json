@@ -1,0 +1,99 @@
+{
+  "audit": "benchymark-build-upstream-findings",
+  "date": "2026-07-28",
+  "branch": "onboard-discovery-rework",
+  "scope": "build-host side only; no claims about watch runtime behaviour",
+  "method": "iterative devtool modify/build cycles in a workspace recipe on the w541 (Arch bare metal, native, no container); sources rsynced from the git-managed clone with no git work in the build tree; failures read from log.do_* files rather than bitbake summaries; each fix verified by re-running the failing task",
+  "findings": [
+    {
+      "id": "F1",
+      "title": "cmake-native picks up the host's libidn2",
+      "confidence": "confirmed",
+      "upstream": true,
+      "component": "openembedded-core / cmake-native (vendored curl)",
+      "mechanism": "vendored curl does an unconditional set(USE_LIBIDN2 ON) then find_package(Libidn2); Yocto hides host includes but not host linker search paths, so the library is found, configure passes, and the compile dies on the missing header",
+      "generalisation": "Yocto host isolation covers include paths more thoroughly than linker search paths; a find_package that probes for a library can succeed against the host while its header is invisible",
+      "evidence": [
+        "compile failure on missing libidn2 headers after a successful configure",
+        "fix verified by rebuild after cleansstate"
+      ],
+      "local_fix": "CMAKE_EXTRACONF:append:pn-cmake-native = \" -DCMAKE_DISABLE_FIND_PACKAGE_Libidn2=ON\"",
+      "gotcha": "must be CMAKE_EXTRACONF, not EXTRA_OECMAKE — cmake-native bootstraps itself and does not read EXTRA_OECMAKE, so setting that looks like a failed fix",
+      "status": "worked around locally; worth reporting"
+    },
+    {
+      "id": "F2",
+      "title": "systemd-systemctl-native picks up the host's PAM",
+      "confidence": "confirmed",
+      "upstream": true,
+      "component": "openembedded-core / systemd-systemctl-native",
+      "mechanism": "meson finds /usr/lib/libpam.so on the host and enables PAM; compile then fails on security/pam_ext.h — same host-contamination family as F1",
+      "local_fix": "EXTRA_OEMESON:append:pn-systemd-systemctl-native = \" -Dpam=disabled\"",
+      "status": "worked around locally; worth reporting"
+    },
+    {
+      "id": "F3",
+      "title": "asteroid-generate-desktop fails opaquely on a missing i18n header",
+      "confidence": "confirmed",
+      "upstream": true,
+      "component": "asteroid-generate-desktop (asteroid-app-cmake tooling)",
+      "mechanism": "the script requires BOTH <src>/<app>.desktop.template and <src>/i18n/<app>.desktop.h (default name as //% \"Name\", read via grep -oP '//% \"\\K[^\"]+(?=\")'), and exit 2s if either is missing",
+      "sub_issues": [
+        "failure surfaces far from the cause: no .desktop is produced and the build dies later in do_install with a bare 'CMake Error at cmake_install.cmake:61 (file): No such file or directory' — no filename, no mention of the generator",
+        "the two-input requirement is undocumented in the app template; an app shipping only a .desktop.template looks complete and is not",
+        "prints 'Couldn't find a corresponding language id, aborting' and exits 0 when the i18n/*.ts glob matches nothing (normal for a new app) — reads as the error when it is harmless"
+      ],
+      "suggested_upstream": "fail loudly at configure time naming the missing path; downgrade the empty-.ts message so it does not read as an abort",
+      "local_fix": "added benchymark/i18n/benchymark.desktop.h",
+      "status": "fixed locally; reported here for upstream"
+    },
+    {
+      "id": "F4",
+      "title": "configure-time generators make a correct fix look wrong",
+      "confidence": "confirmed",
+      "upstream": false,
+      "component": "process / this project",
+      "mechanism": "generate_desktop() runs at CMake configure time via execute_process, so adding the header did nothing until do_configure re-ran; devtool reused the cached configure and the rebuild reproduced the identical error",
+      "occurrences_this_session": 3,
+      "variants": ["stale CMake cache", "silently-ineffective cleansstate", "cached configure"],
+      "tell": "the error cites an unchanged task-log ID — check that before re-deriving the fix",
+      "practices_adopted": [
+        "bitbake -c cleansstate <app> before any rebuild meant to prove a configure-time fix (now in the build script)",
+        "verify a configure-time generator by running it by hand against the staged source before spending a build cycle"
+      ],
+      "status": "practice change, no code fix"
+    },
+    {
+      "id": "F5",
+      "title": "devtool build does not produce an installable package",
+      "confidence": "confirmed",
+      "upstream": true,
+      "component": "devtool",
+      "mechanism": "devtool build stops after do_packagedata, reports full success, and leaves deploy/ipk empty; the ipk requires an explicit bitbake -c package_write_ipk",
+      "impact": "reads as a silent build failure; pairs confusingly with a-d-b's install op reporting 'no ipk found' after a successful build",
+      "severity": "minor",
+      "status": "understood; no fix needed"
+    }
+  ],
+  "outcome": {
+    "package_builds": true,
+    "payload_verified_by": "unpacking the ipk (not inferred)",
+    "payload": [
+      "./usr/bin/benchymark",
+      "./usr/lib/benchymark.so",
+      "./usr/share/applications/benchymark.desktop",
+      "./usr/share/benchymark/benchy-shader.frag",
+      "./usr/share/benchymark/benchy-shader.frag.qsb",
+      "./usr/share/icons/asteroid/benchymark.svg"
+    ],
+    "desktop_entry": {"Name": "Benchymark", "Icon": "benchymark"}
+  },
+  "not_verified": [
+    "installation on nemo — the unit was unreachable on both transports at the end of this arc (no adb device; SSH to 192.168.2.15 timed out)",
+    "the app running, the icon rendering in the launcher, and the results round-trip all remain open"
+  ],
+  "dead_ends": [
+    "chased cmake_install.cmake:61 as a CMake bug before reading the generator script; the line number was accurate and the message useless — reading the generator's preconditions was what solved it",
+    "assumed the first rebuild had disproved the header fix; it had not run the fix at all (F4)"
+  ]
+}
