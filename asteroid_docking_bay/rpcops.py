@@ -1164,9 +1164,10 @@ def _bench_run(args):
     yield f"saved current watchface: {saved}"
 
     # The panel must stay lit for the whole run or there are no frames to
-    # count; mce demo mode is the same lever the Control Center's Screen
-    # button uses, and it is released in the finally below.
-    w.screen(True)
+    # count — via mce's blank-prevent, not demo mode, so mce keeps owning the
+    # policy and a watch on a low battery is not pinned awake if this crashes.
+    # Released in the finally below.
+    bench.keep_awake(w, True)
     samples_out = {}
 
     def _sampler():
@@ -1199,7 +1200,7 @@ def _bench_run(args):
             yield ("WARNING: could not restore the watchface — use the restore "
                    "action once the watch is reachable")
         try:
-            w.screen(False)
+            bench.keep_awake(w, False)
         except Exception:
             pass
 

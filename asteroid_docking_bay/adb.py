@@ -158,17 +158,35 @@ def get_watch_codename(serial: str) -> str | None:
     return None
 
 
-_BATTERY_SYSFS_PATHS = (
-    # Prefer the named hardware fuel gauge over the generic `battery` node.
-    # On some watches (catfish) `battery` is a separate, miscalibrated source
-    # (read 50% while the pack was full); the nanohub gauge — what the watch UI
-    # itself reads — is accurate. Read order = priority (cat … | head -1), so
-    # the gauge wins where present and everyone else falls through to `battery`.
-    "/sys/class/power_supply/nanohub_fuelgauge-*/capacity",
-    "/sys/class/power_supply/battery/capacity",
-    "/sys/class/power_supply/Battery/capacity",
-    "/sys/class/power_supply/max170xx_battery/capacity",
+# Prefer the named hardware fuel gauge over the generic `battery` node.
+# On some watches (catfish) `battery` is a separate, miscalibrated source that
+# freezes — measured 50% while the pack was full, and 50% again while the pack
+# was at 8% and the watch was panicking (2026-07-28) — whereas the nanohub
+# gauge, which the watch's own UI reads, tracks reality and carries the
+# voltage/current/charge fields the generic node lacks entirely.
+#
+# THE ORDER LIVES HERE ONCE. Every battery reader derives from it: the status
+# path below, and the Control Center's on-watch script via
+# battery_dir_snippet(). They were separate before, only one knew the rule,
+# and the Control Center, the fleet registry and the battery history all
+# showed catfish frozen at 50% for weeks because of it.
+BATTERY_DIRS = (
+    "/sys/class/power_supply/nanohub_fuelgauge-*",
+    "/sys/class/power_supply/battery",
+    "/sys/class/power_supply/Battery",
+    "/sys/class/power_supply/max170xx_battery",
 )
+
+_BATTERY_SYSFS_PATHS = tuple(f"{d}/capacity" for d in BATTERY_DIRS)
+
+
+def battery_dir_snippet(var: str = "BATD") -> str:
+    """Shell that resolves the preferred gauge DIRECTORY into `$var`, so a
+    script can read several fields from one consistent source instead of
+    mixing gauges field by field. An unmatched glob stays literal and is
+    filtered by the -d test."""
+    return (f'{var}=""; for d in ' + " ".join(BATTERY_DIRS) +
+            f'; do [ -d "$d" ] && {var}="$d" && break; done')
 
 
 def get_battery_level(serial: str) -> int | None:

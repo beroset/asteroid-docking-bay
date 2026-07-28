@@ -20,9 +20,11 @@ from pathlib import Path
 
 from .util import log
 
-# Where community watchfaces live for the launcher's user. Installing here
-# rather than /usr/share leaves the system image untouched.
-WATCHFACE_DIR = "/home/ceres/.local/share/asteroid-launcher/watchfaces"
+# Upstream's watchface selector reads exactly one directory
+# (`watchface = folderModel.folder + "/" + fileName` over
+# file:///usr/share/asteroid-launcher/watchfaces), so that is where a face has
+# to live to be a first-class citizen. It is writable over adb.
+WATCHFACE_DIR = "/usr/share/asteroid-launcher/watchfaces"
 WATCHFACE_KEY = "/desktop/asteroid/watchface"
 BENCH_NAME = "nutty-benchy"
 FPS_NODE = "/sys/class/graphics/fb0/measured_fps"
@@ -63,11 +65,44 @@ def push_assets(watch) -> "str | None":
                                   timeout=30)
         if rc != 0:
             return f"push {name} failed: {err.strip()[:80]}"
-    # The launcher runs as ceres and must be able to read what root just wrote.
-    watch.t.shell(f"chown -R ceres:ceres {WATCHFACE_DIR}", timeout=10)
-    watch.t.shell(f"chmod 644 {WATCHFACE_DIR}/*.qml {WATCHFACE_DIR}/*.js",
-                  timeout=10)
+    watch.t.shell(f"chmod 644 {WATCHFACE_DIR}/{ASSETS[0]} "
+                  f"{WATCHFACE_DIR}/{ASSETS[1]}", timeout=10)
+    # A watchface file that did not exist when the launcher started is invisible
+    # to it: pointing the dconf key at one leaves the homescreen blank, with no
+    # QML error, because nothing is ever loaded. Proven both ways on catfish
+    # (2026-07-28): a byte-identical copy of a STOCK face under a new name
+    # stayed blank too, and a probe watchface whose Component.onCompleted
+    # writes a dconf beacon only fired after the restart. This is why the
+    # settings app's own store offers "Restart launcher"
+    # (WatchfaceHelper::restartSession: fc-cache -f, then the same restart).
+    return restart_launcher(watch)
+
+
+def restart_launcher(watch) -> "str | None":
+    """Make the launcher notice newly installed faces. Mirrors upstream's
+    WatchfaceHelper::restartSession(). Costs a few seconds of black screen."""
+    watch.user_cmd("fc-cache -f", timeout=30)
+    rc, _, err = watch.user_cmd("systemctl --user restart asteroid-launcher",
+                                timeout=30)
+    if rc != 0:
+        return f"launcher restart failed: {err.strip()[:80]}"
     return None
+
+
+def wake_once(watch) -> None:
+    """Unblank the screen the way a tap does — the normal blank timeout still
+    applies afterwards. Preferred over demo mode for a quick look: demo mode
+    keeps the panel lit indefinitely, which on a watch at 8% is the difference
+    between charging and not (moWerk, 2026-07-28)."""
+    watch.t.shell("mcetool --unblank-screen", timeout=10)
+
+
+def keep_awake(watch, on: bool) -> None:
+    """Hold the screen awake for the length of a run, then hand it back. Uses
+    mce's blank-prevent rather than demo mode, so it is explicitly cancellable
+    and mce still owns the policy."""
+    watch.t.shell("mcetool --blank-prevent" if on
+                  else "mcetool --cancel-blank-prevent", timeout=10)
 
 
 def read_watchface(watch) -> "str | None":

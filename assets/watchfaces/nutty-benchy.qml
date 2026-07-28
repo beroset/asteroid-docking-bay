@@ -66,7 +66,13 @@ Item {
         { name: "BENCHY",    dur: 10 }   // the wireframe boat, projected in QML
     ]
     property int countdown: 5
-    property int phase: -1                       // -1 = counting down
+    property int phase: -1
+    // Runs continuously: after the results are held a few seconds the whole
+    // sequence starts again, so any phase can be watched for as long as it
+    // takes to see what it is doing (moWerk wanted a longer look at the boat).
+    // The host samples only the first pass, so looping does not affect a
+    // recorded run.
+    property int doneHold: 0                       // -1 = counting down
     property int phaseElapsed: 0
     readonly property bool running: phase >= 0 && phase < phases.length
     readonly property bool done: phase >= phases.length
@@ -77,6 +83,16 @@ Item {
     property var _cur: []
 
     function tickSecond() {
+        if (done) {
+            doneHold++;
+            if (doneHold >= 5) {
+                doneHold = 0;
+                results = [];
+                countdown = 3;          // shorter on a rerun; you are already here
+                phase = -1;
+            }
+            return;
+        }
         if (countdown > 0) {
             countdown--;
             return;
@@ -196,70 +212,6 @@ Item {
             loops: Animation.Infinite
             NumberAnimation { from: 1; to: 0.35; duration: 500 }
             NumberAnimation { from: 0.35; to: 1; duration: 500 }
-        }
-
-    }
-
-    // ── FPS rotator: head + following trail ───────────────────────────────
-    // Nutty Null's hour numeral and its fading neighbours, repurposed. The
-    // head shows the live FPS at the leading rim position; each trail numeral
-    // sits BEHIND it holding an older reading, so values push backwards
-    // through the tail as the head sweeps on.
-    property real rotorAngle: 0
-
-    NumberAnimation on rotorAngle {
-        from: 0
-        to: 360
-        duration: root.phase === 3 ? 2200 : 6000     // ORBIT sweeps faster
-        loops: Animation.Infinite
-        running: !displayAmbient
-    }
-
-    Item {
-        id: rotor
-
-        anchors.fill: parent
-
-        Repeater {
-            model: root.trailCount + 1
-
-            delegate: Text {
-                readonly property bool head: index === 0
-                // Trailing numerals lag the head; the gap widens down the tail.
-                readonly property real ang: (root.rotorAngle - index * 13 - 90) * Math.PI / 180
-                readonly property int shown: head ? root.fps
-                                                  : (root.fpsHistory.length > index ? root.fpsHistory[index] : -1)
-
-                text: shown >= 0 ? shown : ""
-                visible: shown >= 0
-                color: shown >= 0 && shown < 45 ? root.hot : root.fg
-                opacity: head ? 1 : Math.max(0.12, 0.62 - (index - 1) * 0.13)
-                x: root.width / 2 + root.rootRadius * Math.cos(ang) - width / 2
-                y: root.height / 2 + root.rootRadius * Math.sin(ang) - height / 2
-                font.family: "Inter Tight"
-                font.weight: head ? Font.Bold : Font.Light
-                font.pixelSize: root.maxSize * (head ? 0.13 : 0.1)
-            }
-
-        }
-
-    }
-
-    // ORBIT's cost: a pulsing shadow recomputed every frame over the rotor.
-    MultiEffect {
-        source: rotor
-        anchors.fill: rotor
-        visible: root.phase === 3
-        shadowEnabled: true
-        shadowColor: "#c00090ff"
-        shadowHorizontalOffset: 0
-        shadowVerticalOffset: 0
-
-        SequentialAnimation on shadowBlur {
-            running: root.phase === 3
-            loops: Animation.Infinite
-            NumberAnimation { from: 0.2; to: 1; duration: 700; easing.type: Easing.InOutSine }
-            NumberAnimation { from: 1; to: 0.2; duration: 700; easing.type: Easing.InOutSine }
         }
 
     }
@@ -496,6 +448,75 @@ Item {
         property real rotationDriver: 0
 
         onRotationDriverChanged: root.benchyAngle = rotationDriver
+    }
+
+    // ── FPS rotator: head + following trail ───────────────────────────
+    // DECLARED LAST of the visuals on purpose (moWerk): declaration order
+    // IS paint order in QML, so this sits above every workload layer —
+    // the readout must stay legible through overdraw, icons and the
+    // wireframe. Never fix this with z: (RAG paint_order rule).
+    // ── head + following trail ───────────────────────────────
+    // Nutty Null's hour numeral and its fading neighbours, repurposed. The
+    // head shows the live FPS at the leading rim position; each trail numeral
+    // sits BEHIND it holding an older reading, so values push backwards
+    // through the tail as the head sweeps on.
+    property real rotorAngle: 0
+
+    NumberAnimation on rotorAngle {
+        from: 0
+        to: 360
+        duration: root.phase === 3 ? 2200 : 6000     // ORBIT sweeps faster
+        loops: Animation.Infinite
+        running: !displayAmbient
+    }
+
+    Item {
+        id: rotor
+
+        anchors.fill: parent
+
+        Repeater {
+            model: root.trailCount + 1
+
+            delegate: Text {
+                readonly property bool head: index === 0
+                // Trailing numerals lag the head; the gap widens down the tail.
+                readonly property real ang: (root.rotorAngle - index * 13 - 90) * Math.PI / 180
+                readonly property int shown: head ? root.fps
+                                                  : (root.fpsHistory.length > index ? root.fpsHistory[index] : -1)
+
+                text: shown >= 0 ? shown : ""
+                visible: shown >= 0
+                color: shown >= 0 && shown < 45 ? root.hot : root.fg
+                opacity: head ? 1 : Math.max(0.12, 0.62 - (index - 1) * 0.13)
+                x: root.width / 2 + root.rootRadius * Math.cos(ang) - width / 2
+                y: root.height / 2 + root.rootRadius * Math.sin(ang) - height / 2
+                font.family: "Inter Tight"
+                font.weight: head ? Font.Bold : Font.Light
+                font.pixelSize: root.maxSize * (head ? 0.13 : 0.1)
+            }
+
+        }
+
+    }
+
+    // ORBIT's cost: a pulsing shadow recomputed every frame over the rotor.
+    MultiEffect {
+        source: rotor
+        anchors.fill: rotor
+        visible: root.phase === 3
+        shadowEnabled: true
+        shadowColor: "#c00090ff"
+        shadowHorizontalOffset: 0
+        shadowVerticalOffset: 0
+
+        SequentialAnimation on shadowBlur {
+            running: root.phase === 3
+            loops: Animation.Infinite
+            NumberAnimation { from: 0.2; to: 1; duration: 700; easing.type: Easing.InOutSine }
+            NumberAnimation { from: 1; to: 0.2; duration: 700; easing.type: Easing.InOutSine }
+        }
+
     }
 
     // ── whisper line: phase name and progress (Nutty Null's date slot) ─────

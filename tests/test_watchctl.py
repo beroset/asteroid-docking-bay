@@ -86,3 +86,22 @@ def test_watch_routes_through_an_injected_ssh_transport(monkeypatch):
 def test_geometry_empty_when_unreachable(monkeypatch):
     monkeypatch.setattr(tp, "_run", lambda *a, **k: (1, "", ""))
     assert wc.Watch("S1").geometry() == {}
+
+
+def test_every_battery_reader_uses_the_preferred_gauge():
+    """Two independent battery readers exist — the status path in adb.py and
+    the Control Center's on-watch script — and BOTH must prefer the named
+    fuel gauge. catfish carries a generic `battery` node frozen at 50% next to
+    a nanohub gauge reading the truth (8% while the watch was panicking,
+    2026-07-28); only adb.py knew, so the Control Center, the fleet registry
+    and the battery history all showed a fabricated 50% for weeks. Planted-bug:
+    hardcode /sys/class/power_supply/battery/capacity back into the script and
+    this fails."""
+    from asteroid_docking_bay.watchctl import _CC_SCRIPT
+    from asteroid_docking_bay.adb import BATTERY_DIRS, _BATTERY_SYSFS_PATHS
+    assert "/sys/class/power_supply/battery/capacity" not in _CC_SCRIPT
+    assert "$BATD/capacity" in _CC_SCRIPT
+    assert "nanohub_fuelgauge" in _CC_SCRIPT      # resolved from BATTERY_DIRS
+    # the two readers derive from one list, so they cannot drift apart
+    assert _BATTERY_SYSFS_PATHS == tuple(f"{d}/capacity" for d in BATTERY_DIRS)
+    assert BATTERY_DIRS[0].endswith("nanohub_fuelgauge-*")

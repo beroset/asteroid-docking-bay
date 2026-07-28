@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 
 from .util import _run, log
-from .adb import _adb_state, adb_devices, adb_shell, get_watch_codename
+from .adb import _adb_state, adb_devices, adb_shell, get_watch_codename, battery_dir_snippet
 from .boottime import BOOTCHART_CMD, parse_bootchart
 from .diag import DIAG_SCRIPT, parse_diag
 from .transport import AdbTransport
@@ -135,14 +135,18 @@ echo "cpufreq=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq 2>/dev
 echo "cores=$(cat /sys/devices/system/cpu/online 2>/dev/null)"
 echo "bootreason=$(tr " " "\n" < /proc/cmdline | grep bootreason | cut -d= -f2)"
 echo "df=$(df -h / 2>/dev/null | tail -1)"
-echo "bat_cap=$(cat /sys/class/power_supply/battery/capacity 2>/dev/null)"
-echo "bat_status=$(cat /sys/class/power_supply/battery/status 2>/dev/null)"
-echo "bat_health=$(cat /sys/class/power_supply/battery/health 2>/dev/null)"
-echo "bat_tech=$(cat /sys/class/power_supply/battery/technology 2>/dev/null)"
-echo "bat_volt=$(cat /sys/class/power_supply/battery/voltage_now 2>/dev/null)"
-echo "bat_curr=$(cat /sys/class/power_supply/battery/current_now 2>/dev/null)"
-echo "bat_temp=$(cat /sys/class/power_supply/battery/temp 2>/dev/null)"
-echo "bat_cycles=$(cat /sys/class/power_supply/battery/cycle_count 2>/dev/null)"
+__BATDIR__
+echo "bat_cap=$(cat $BATD/capacity 2>/dev/null)"
+echo "bat_status=$(cat $BATD/status 2>/dev/null)"
+echo "bat_health=$(cat $BATD/health 2>/dev/null)"
+echo "bat_tech=$(cat $BATD/technology 2>/dev/null)"
+echo "bat_volt=$(cat $BATD/voltage_now 2>/dev/null)"
+echo "bat_curr=$(cat $BATD/current_now 2>/dev/null)"
+echo "bat_temp=$(cat $BATD/temp 2>/dev/null)"
+echo "bat_cycles=$(cat $BATD/cycle_count 2>/dev/null)"
+echo "bat_charge_now=$(cat $BATD/charge_now 2>/dev/null)"
+echo "bat_charge_full=$(cat $BATD/charge_full 2>/dev/null)"
+echo "bat_gauge=$(basename $BATD 2>/dev/null)"
 echo "usb_online=$(cat /sys/class/power_supply/usb/online 2>/dev/null)"
 echo "usb_volt=$(cat /sys/class/power_supply/usb/voltage_now 2>/dev/null)"
 echo "ip=$(ip -o -4 addr show wlan0 2>/dev/null | grep -o "inet [0-9.]*" | cut -d" " -f2)"
@@ -158,6 +162,7 @@ echo "usb_ifip=$(ip -o -4 addr show 2>/dev/null | grep -E "usb0|rndis0" | grep -
 echo "blank_inhibit=$(mcetool 2>/dev/null | grep "^Blank inhibit" | cut -d: -f2 | tr -d " ")"
 echo "--connman--"
 connmanctl technologies 2>/dev/null'''
+_CC_SCRIPT = _CC_SCRIPT.replace("__BATDIR__", battery_dir_snippet())
 
 # UI-session tools (screenshots, notifications) talk to the Wayland compositor
 # and the user's D-Bus session, which live under the `ceres` account — adb shell
