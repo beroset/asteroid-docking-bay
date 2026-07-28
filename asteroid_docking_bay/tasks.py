@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from pathlib import Path
 
 from .util import log
@@ -37,6 +38,32 @@ _remap_tasks: dict[str, dict] = {}
 # Charge, flash, and remap all acquire this before powering a port on
 # and release it only after powering the port back off.
 _adb_lock = threading.Lock()
+
+# Serializes ONBOARDING specifically. Onboarding owns port power for its whole
+# flow — that serialization is a hard rule, since powering several ports at
+# once floods ADB and browns the bus out — but most of that flow is spent
+# WAITING for a watch to cold-boot, which disturbs nothing. Holding _adb_lock
+# across those waits made every other ADB operation on the rig queue behind a
+# two-minute boot window, so one slow onboard made the whole rig look busy.
+# Splitting the two keeps onboards strictly serial while letting a flash or a
+# charge proceed meanwhile.
+_onboard_lock = threading.Lock()
+
+
+def task_active(tasks: dict, slot: str) -> bool:
+    """True while a task is genuinely running.
+
+    A worker that dies without clearing `done` — a hard crash, a thread that
+    never started, an exception escaping the `finally` — would otherwise leave
+    its row dimmed and its slot refusing new work forever. So a record that
+    carries a `deadline` and has outlived it reads as finished: the UI recovers
+    on its own instead of needing a service restart.
+    """
+    t = tasks.get(slot)
+    if not t or t.get("done", True):
+        return False
+    deadline = t.get("deadline")
+    return not (deadline is not None and time.monotonic() > deadline)
 
 
 class TaskStore:

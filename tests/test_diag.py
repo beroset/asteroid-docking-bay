@@ -93,3 +93,46 @@ def test_newest_ipk_returns_none_when_nothing_built(tmp_path, monkeypatch):
     from asteroid_docking_bay import bench
     monkeypatch.setattr(bench, "IPK_DIR", tmp_path / "does-not-exist")
     assert bench.newest_ipk() is None
+
+
+# ── onboard task hygiene ────────────────────────────────────────────────────
+
+def test_task_active_ignores_a_task_past_its_deadline():
+    """A worker that dies without clearing `done` used to dim its row for the
+    life of the service and refuse every later onboard on that port — one
+    stuck onboard made the whole rig look full. A deadline lets the UI recover
+    on its own. Planted-bug: drop the deadline branch from task_active and
+    this fails."""
+    import time
+    from asteroid_docking_bay.tasks import task_active
+    tasks = {"1-2:3": {"done": False, "deadline": time.monotonic() - 1}}
+    assert task_active(tasks, "1-2:3") is False
+
+
+def test_task_active_still_reports_a_live_task():
+    """The deadline must not make a genuinely running task look finished —
+    that would let two onboards power ports at once, which is the flood the
+    serialization exists to prevent."""
+    import time
+    from asteroid_docking_bay.tasks import task_active
+    assert task_active({"s": {"done": False,
+                              "deadline": time.monotonic() + 300}}, "s") is True
+    assert task_active({"s": {"done": False}}, "s") is True      # no deadline
+    assert task_active({"s": {"done": True,
+                              "deadline": time.monotonic() + 300}}, "s") is False
+    assert task_active({}, "s") is False
+
+
+def test_onboard_does_not_hold_the_adb_lock_across_its_waits():
+    """Onboarding must stay serial (it owns port power) without blocking every
+    other ADB operation for the length of a cold-boot window. So the flow is
+    guarded by _onboard_lock, and _adb_lock is taken only around the power
+    changes. Planted-bug: put the whole flow back under _adb_lock and this
+    fails."""
+    import inspect
+    from asteroid_docking_bay import rpcops
+    src = inspect.getsource(rpcops._onboard_stream)
+    assert "with _onboard_lock:" in src
+    # _adb_lock appears only in the two short power-change blocks
+    assert src.count("with _adb_lock:") == 2
+    assert "uhubctl_set_power" in src and "uhubctl_cycle" in src

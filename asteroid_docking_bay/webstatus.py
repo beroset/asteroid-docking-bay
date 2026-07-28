@@ -27,6 +27,7 @@ from .lastseen import last_seen
 from .registry import registry
 from .variants import exact_codename
 from .tasks import (_charge_tasks, _drain_tasks, _flash_tasks, _remap_tasks,
+                    task_active,
                     _workbench_tasks)
 from .watchctl import (GEOMETRY_PROBE_VERSION, Watch, _watch_os,
                        _watch_os_for)
@@ -644,8 +645,10 @@ def _web_status_data(cfg: dict) -> list[dict]:
                 serial and not power and adb_state is None and not op_owns_slot
                 and (last_seen.get(serial) or {}).get("last_conn_state")
                     == "fastboot")
+            # task_active, not a bare done-check: a remap whose worker died
+            # would otherwise dim this row for the life of the service.
             flashing  = ((slot in _flash_tasks and not _flash_tasks[slot].get("done", True))
-                         or (slot in _remap_tasks and not _remap_tasks[slot].get("done", True)))
+                         or task_active(_remap_tasks, slot))
             charging_active = (slot in _charge_tasks
                                 and not _charge_tasks[slot].get("done", True))
             ct = _charge_tasks.get(slot, {})
@@ -732,8 +735,7 @@ def _web_status_data(cfg: dict) -> list[dict]:
                 fb_product = cfg.get("serials", {}).get(fb_serial) or _fastboot_getvar_product(fb_serial)
             adb_codename = find_codename_for_serial(cfg, adb_serial) if adb_serial else None
             empty_slot = f"{loc}:{port_num}"
-            remapping = (empty_slot in _remap_tasks
-                         and not _remap_tasks[empty_slot].get("done", True))
+            remapping = task_active(_remap_tasks, empty_slot)
             hub_ports.append({
                 "port": port_num, "codename": adb_codename,
                 "slot_loc": loc,

@@ -54,8 +54,8 @@ from .registry import registry
 from .events import _DRAIN_FLOOR_PCT, _DRAIN_RESULTS_DIR, event_log
 from .webstatus import _web_status_data
 from .lastseen import last_seen
-from .tasks import (_adb_lock, _charge_tasks, _flash_tasks, _remap_tasks,
-                    active_op_on_slot)
+from .tasks import (_adb_lock, _charge_tasks, _flash_tasks, _onboard_lock,
+                    _remap_tasks, active_op_on_slot, task_active)
 from .rpc import Dispatcher
 from . import __version__
 
@@ -1353,12 +1353,16 @@ def _onboard_stream(loc: str, port: int):
         q.put(msg)
 
     def _run() -> None:
-        _emit("Waiting for ADB bus…")
-        with _adb_lock:
+        # Onboards are strictly serial (they own port power), but the waiting
+        # below disturbs nothing, so _adb_lock is taken only around the power
+        # changes themselves rather than held across the whole boot window.
+        _emit("Waiting for the onboard queue…")
+        with _onboard_lock:
             try:
                 _emit(f"Powering on {loc} p{port}…")
                 try:
-                    uhubctl_set_power(loc, port, True)
+                    with _adb_lock:
+                        uhubctl_set_power(loc, port, True)
                 except RuntimeError as e:
                     _emit(f"WARNING: {e}")
 
@@ -1392,7 +1396,8 @@ def _onboard_stream(loc: str, port: int):
                 if not found_serial:
                     _emit("No ADB yet — power-cycling the port to retry "
                           "enumeration…")
-                    uhubctl_cycle(loc, port)
+                    with _adb_lock:
+                        uhubctl_cycle(loc, port)
                     _emit(f"Waiting again after the cycle (up to {wait_each} s)…")
                     found_serial = _wait_for_watch(wait_each)
 
@@ -1480,7 +1485,11 @@ def _onboard_stream(loc: str, port: int):
                 _remap_tasks[slot]["done"] = True
                 q.put(None)
 
-    _remap_tasks[slot] = {"done": False}
+    # Budget: two full boot windows, the cycle between them, and slack for the
+    # identify/PPPS tail. Past it the task reads as finished even if the worker
+    # never said so — see tasks.task_active for why that matters.
+    budget = 2 * charge_config(load_config()).onboard_wait_seconds + 180
+    _remap_tasks[slot] = {"done": False, "deadline": time.monotonic() + budget}
     threading.Thread(target=_run, daemon=True).start()
 
     while True:
@@ -1498,7 +1507,7 @@ def _onboard_stream(loc: str, port: int):
 def _onboard_start(args):
     loc, port = args["loc"], args["port"]
     slot = f"{loc}:{port}"
-    if slot in _remap_tasks and not _remap_tasks[slot].get("done", True):
+    if task_active(_remap_tasks, slot):
         yield "onboard already in progress"
         return
     yield from _onboard_stream(loc, port)
