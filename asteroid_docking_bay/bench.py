@@ -27,17 +27,24 @@ from .util import log
 # to live to be a first-class citizen. It is writable over adb.
 WATCHFACE_DIR = "/usr/share/asteroid-launcher/watchfaces"
 WATCHFACE_KEY = "/desktop/asteroid/watchface"
+# The wallpaper is part of the measurement, not decoration: FlatMesh is the
+# system default AND a shader in its own right, so a watch wearing a custom
+# photo wallpaper is doing different work and its numbers do not compare
+# (moWerk). The bench forces FlatMesh for the run and puts the old one back.
+WALLPAPER_KEY = "/desktop/asteroid/background-filename"
+FLATMESH = "'file:///usr/share/asteroid-launcher/wallpapers/full/000-flatmesh.qml'"
 BENCH_NAME = "nutty-benchy"
 FPS_NODE = "/sys/class/graphics/fb0/measured_fps"
 
 ASSET_DIR = Path(__file__).resolve().parent.parent / "assets" / "watchfaces"
-ASSETS = (f"{BENCH_NAME}.qml", "benchy-mesh.js", "benchy-mesh-lite.js")
+ASSETS = (f"{BENCH_NAME}.qml", "benchy-mesh.js", "benchy-mesh-lite.js",
+          "benchy-shader.frag.qsb", "benchy-shader.frag")
 
 # (name, seconds) — must match nutty-benchy.qml's `phases`, plus its countdown.
 COUNTDOWN_S = 5
 PHASES = [("IDLE", 8), ("SCALE", 8), ("RERASTER", 8), ("ORBIT", 8),
           ("OVERDRAW", 8), ("DRAWCALLS", 8), ("SHAPES", 8), ("CASCADE", 8),
-          ("BENCHYLITE", 8), ("BENCHY", 10)]
+          ("SHADER", 8), ("BENCHYLITE", 8), ("BENCHY", 10)]
 RUN_S = COUNTDOWN_S + sum(d for _, d in PHASES)
 
 
@@ -113,24 +120,30 @@ def keep_awake(watch, on: bool) -> None:
                   else "mcetool --cancel-blank-prevent", timeout=10)
 
 
-def read_watchface(watch) -> "str | None":
-    """The watchface dconf value as stored (quoted), or None if unreadable."""
-    rc, out, _ = watch.user_cmd(f"HOME=/home/ceres dconf read {WATCHFACE_KEY}",
-                                timeout=12)
+def read_key(watch, key: str) -> "str | None":
+    """A dconf value as stored (quoted), or None if unreadable. Read and write
+    are deliberately symmetric: what dconf hands back is exactly what restores
+    it, with no parsing in between to get wrong."""
+    rc, out, _ = watch.user_cmd(f"HOME=/home/ceres dconf read {key}", timeout=12)
     val = out.strip()
     return val if rc == 0 and val else None
 
 
-def write_watchface(watch, quoted_value: str) -> bool:
-    """Write the watchface key. `quoted_value` must already be a gvariant
-    string literal (dconf read gives one back verbatim, which is exactly what
-    restore needs)."""
+def write_key(watch, key: str, quoted_value: str) -> bool:
     rc, _, err = watch.user_cmd(
-        f"HOME=/home/ceres dconf write {WATCHFACE_KEY} {json.dumps(quoted_value)}",
+        f"HOME=/home/ceres dconf write {key} {json.dumps(quoted_value)}",
         timeout=12)
     if rc != 0:
-        log.warning("watchface write failed: %s", err.strip()[:120])
+        log.warning("dconf write %s failed: %s", key, err.strip()[:120])
     return rc == 0
+
+
+def read_watchface(watch) -> "str | None":
+    return read_key(watch, WATCHFACE_KEY)
+
+
+def write_watchface(watch, quoted_value: str) -> bool:
+    return write_key(watch, WATCHFACE_KEY, quoted_value)
 
 
 def bench_value() -> str:

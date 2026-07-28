@@ -54,7 +54,7 @@ Item {
 
     // ── the scene version. CHANGE THIS whenever the workload changes: results
     // are only comparable within one version (see docs/FPS_BENCH.md).
-    readonly property string sceneVersion: "3"
+    readonly property string sceneVersion: "4"
     // The run holds the screen itself — same mechanism asteroid-flashlight
     // uses to stay lit only while a feature is active (moWerk). Held through
     // the countdown, because that exists so you can reach the rig, and dropped
@@ -101,6 +101,7 @@ Item {
         { name: "DRAWCALLS", dur: 8 },   // unbatchable Icons in motion
         { name: "SHAPES",    dur: 8 },   // re-tessellated Shape path
         { name: "CASCADE",   dur: 8 },   // scale on an Item with many children
+        { name: "SHADER",    dur: 8 },   // fragment-bound: 28 noise lookups/pixel
         { name: "BENCHYLITE", dur: 8 },  // the boat at 438 vertices / 1545 segments
         { name: "BENCHY",    dur: 10 }   // the boat at 1118 vertices / 3720 segments
     ]
@@ -515,6 +516,31 @@ Item {
 
     }
 
+    // ── SHADER: the one phase that is purely fragment-bound ───────────────
+    // Everything else here is CPU, geometry or draw-call work; this is the GPU
+    // doing ~28 noise lookups per pixel per frame, so it scales with PANEL
+    // AREA rather than scene complexity — the phase that most needs Mpix/s
+    // reported beside raw FPS. Qt6 loads the pre-compiled .qsb (inline GLSL
+    // crashes it); the .frag source ships beside it so this can be rebuilt.
+    ShaderEffect {
+        id: shaderPhase
+
+        anchors.fill: parent
+        visible: root.phase === 8 && root.awake
+        fragmentShader: "benchy-shader.frag.qsb"
+
+        property real t: 0
+
+        NumberAnimation on t {
+            from: 0
+            to: 10000
+            duration: 10000000
+            loops: Animation.Infinite
+            running: shaderPhase.visible
+        }
+
+    }
+
     // ── BENCHY: 3DBenchy as a rotating wireframe, projected in QML ────────
     // There is no 3D engine on these images (QtQuick3D is absent — checked on
     // catfish), so the watchface IS the renderer: every frame it rotates 1118
@@ -537,7 +563,7 @@ Item {
     // 1545 segments; BENCHY (phase 9) is the full 1118 / 3720. Same code path,
     // so the pair measures how frame time scales with segment count.
     function projectBenchy() {
-        var M = root.phase === 8 ? MeshLite : Mesh;
+        var M = root.phase === 9 ? MeshLite : Mesh;
         var V = M.V, S = M.S;
         var a = root.benchyAngle * Math.PI / 180;
         var ca = Math.cos(a), sa = Math.sin(a);
@@ -580,7 +606,7 @@ Item {
         id: benchyShape
 
         anchors.fill: parent
-        visible: (root.phase === 8 || root.phase === 9) && root.awake
+        visible: (root.phase === 9 || root.phase === 10) && root.awake
         onVisibleChanged: if (visible) root.projectBenchy()
 
         ShapePath { id: bp0; fillColor: "transparent"; strokeColor: "#58a6ff"; strokeWidth: 1; PathPolyline { id: pl0 } }
@@ -593,7 +619,7 @@ Item {
         NumberAnimation on rotationDriver {
             from: 0
             to: 360
-            duration: root.phase === 8 ? 4000 : 6000
+            duration: root.phase === 9 ? 4000 : 6000
             loops: Animation.Infinite
             running: benchyShape.visible && root.awake
         }

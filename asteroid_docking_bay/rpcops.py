@@ -1109,10 +1109,21 @@ def _bench_save(serial, value):
         save_config(cfg)
 
 
+def _bench_save_wp(serial, value):
+    if not value:
+        return
+    with _config_lock:
+        cfg = load_config()
+        cfg.setdefault("bench_saved_wallpaper", {})[serial] = value
+        save_config(cfg)
+
+
 def _bench_clear(serial):
     with _config_lock:
         cfg = load_config()
-        if (cfg.get("bench_saved_watchface") or {}).pop(serial, None) is not None:
+        a = (cfg.get("bench_saved_watchface") or {}).pop(serial, None)
+        b = (cfg.get("bench_saved_wallpaper") or {}).pop(serial, None)
+        if a is not None or b is not None:
             save_config(cfg)
 
 
@@ -1125,10 +1136,14 @@ def _bench_restore(args):
     saved = _bench_saved(load_config(), serial)
     if not saved:
         return {"ok": False, "error": "no saved watchface for this watch"}
-    if not bench.write_watchface(_watch(serial), saved):
+    w = _watch(serial)
+    wp = (load_config().get("bench_saved_wallpaper") or {}).get(serial)
+    if wp:
+        bench.write_key(w, bench.WALLPAPER_KEY, wp)
+    if not bench.write_watchface(w, saved):
         return {"ok": False, "error": "restore write failed — watch reachable?"}
     _bench_clear(serial)
-    return {"ok": True, "restored": saved}
+    return {"ok": True, "restored": saved, "wallpaper": wp}
 
 
 @DISPATCH.op("bench.push")
@@ -1160,8 +1175,15 @@ def _bench_run(args):
     if not saved:
         yield "ERROR: could not read the current watchface — is the watch on ADB?"
         return
+    saved_wp = bench.read_key(w, bench.WALLPAPER_KEY)
     _bench_save(serial, saved)
+    _bench_save_wp(serial, saved_wp)
     yield f"saved current watchface: {saved}"
+    # FlatMesh is the system default and a shader in its own right, so a watch
+    # wearing something else is measuring a different scene.
+    if saved_wp and saved_wp != bench.FLATMESH:
+        bench.write_key(w, bench.WALLPAPER_KEY, bench.FLATMESH)
+        yield f"wallpaper forced to FlatMesh for the run (was {saved_wp})"
 
     # The watchface holds the screen itself for exactly its own run
     # (Nemo.KeepAlive DisplayBlanking, the mechanism asteroid-flashlight uses),
@@ -1192,6 +1214,10 @@ def _bench_run(args):
         th.join(timeout=30)
     finally:
         # Always hand the watch back, whatever happened above.
+        wp = (load_config().get("bench_saved_wallpaper") or {}).get(serial)
+        if wp and wp != bench.FLATMESH:
+            bench.write_key(w, bench.WALLPAPER_KEY, wp)
+            yield f"restored wallpaper {wp}"
         if bench.write_watchface(w, saved):
             _bench_clear(serial)
             yield f"restored {saved}"
