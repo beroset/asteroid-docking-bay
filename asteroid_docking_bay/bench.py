@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from pathlib import Path
 
 from .util import log
@@ -61,8 +62,15 @@ def push_assets(watch) -> "str | None":
         local = ASSET_DIR / name
         if not local.is_file():
             return f"missing asset {local}"
+        # One retry: some watches drop off the link for a few seconds at a
+        # time (see the ADB-drop note in docs/FPS_BENCH.md), and losing a
+        # multi-file install to a blink that heals by itself is needless.
         rc, _, err = watch.t.push(str(local), f"{WATCHFACE_DIR}/{name}",
                                   timeout=30)
+        if rc != 0:
+            time.sleep(4)
+            rc, _, err = watch.t.push(str(local), f"{WATCHFACE_DIR}/{name}",
+                                      timeout=30)
         if rc != 0:
             return f"push {name} failed: {err.strip()[:80]}"
     watch.t.shell("chmod 644 " + " ".join(f"{WATCHFACE_DIR}/{a}" for a in ASSETS),

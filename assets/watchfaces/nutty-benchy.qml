@@ -45,13 +45,32 @@ import QtQuick.Shapes
 import org.asteroid.controls 1.0
 import "benchy-mesh.js" as Mesh
 import "benchy-mesh-lite.js" as MeshLite
+import Nemo.Configuration
+import Nemo.KeepAlive
+import Nemo.Mce
 
 Item {
     id: root
 
     // ── the scene version. CHANGE THIS whenever the workload changes: results
     // are only comparable within one version (see docs/FPS_BENCH.md).
-    readonly property string sceneVersion: "2"
+    readonly property string sceneVersion: "3"
+    // The run holds the screen itself — same mechanism asteroid-flashlight
+    // uses to stay lit only while a feature is active (moWerk). Held through
+    // the countdown, because that exists so you can reach the rig, and dropped
+    // the moment the last phase ends so the watch dims on its own.
+    readonly property bool holding: countdown > 0 || running
+    // THE gate for every workload. rendering != animation: a blanked panel
+    // stops rendering but a running Animation keeps consuming, and because the
+    // phase CLOCK is gated on the same flag while the workloads were not, a
+    // watch that blanked during the wireframe ground it forever in the dark —
+    // full CPU, no picture, until something gave way (moWerk, 2026-07-28).
+    // Awake means the panel is genuinely on: displayAmbient covers AoD, and
+    // MceDisplay covers a plain blank on watches that never enter ambient.
+    readonly property bool awake: !displayAmbient
+                                 && (!mceDisplay.valid
+                                     || mceDisplay.state === MceDisplay.DisplayOn)
+    property int loopCount: 0
     // The minute, shared by the centre glyph and the SCALE/RERASTER ring.
     readonly property string mmStr: Qt.formatDateTime(wallClock.time, "mm")
 
@@ -86,13 +105,7 @@ Item {
         { name: "BENCHY",    dur: 10 }   // the boat at 1118 vertices / 3720 segments
     ]
     property int countdown: 5
-    property int phase: -1
-    // Runs continuously: after the results are held a few seconds the whole
-    // sequence starts again, so any phase can be watched for as long as it
-    // takes to see what it is doing (moWerk wanted a longer look at the boat).
-    // The host samples only the first pass, so looping does not affect a
-    // recorded run.
-    property int doneHold: 0                       // -1 = counting down
+    property int phase: -1                         // -1 = counting down
     property int phaseElapsed: 0
     readonly property bool running: phase >= 0 && phase < phases.length
     readonly property bool done: phase >= phases.length
@@ -102,17 +115,16 @@ Item {
     property var results: []
     property var _cur: []
 
+    function restartRun() {
+        results = [];
+        loopCount++;
+        countdown = 3;              // shorter on a rerun; you are already here
+        phase = -1;
+    }
+
     function tickSecond() {
-        if (done) {
-            doneHold++;
-            if (doneHold >= 5) {
-                doneHold = 0;
-                results = [];
-                countdown = 3;          // shorter on a rerun; you are already here
-                phase = -1;
-            }
-            return;
-        }
+        if (done)
+            return;                 // parked on the results until the next wake
         if (countdown > 0) {
             countdown--;
             return;
@@ -149,6 +161,28 @@ Item {
     }
 
     anchors.fill: parent
+    // One run per wake: when the sequence has finished the screen is released
+    // and dims, and waking it again starts the whole thing over from the
+    // countdown (moWerk) — no looping, no surprise CPU load in a pocket.
+    onAwakeChanged: if (awake && done) root.restartRun()
+
+    DisplayBlanking { preventBlanking: root.holding }
+
+    MceDisplay { id: mceDisplay }
+
+    onPhaseChanged: phaseBeacon.value = (phase < 0 ? "countdown"
+                                        : (done ? "done" : phases[phase].name))
+                                        + " loop" + loopCount
+
+    // Written on every phase change and left there: when a watch drops off the
+    // link mid-run this is the last thing it recorded, so reading it after
+    // recovery names the phase that was live at the moment it went.
+    ConfigurationValue {
+        id: phaseBeacon
+
+        key: "/desktop/asteroid/benchphase"
+        defaultValue: ""
+    }
 
     // The frame-tick driver. Long duration, infinite loops — the value itself
     // is meaningless, only the per-frame notification matters.
@@ -218,14 +252,14 @@ Item {
             font.pixelSize: root.maxSize * 0.13
 
             SequentialAnimation on scale {
-                running: root.phase === 1 && parent.visible
+                running: root.phase === 1 && parent.visible && root.awake
                 loops: Animation.Infinite
                 NumberAnimation { from: 0.7; to: 2.1; duration: 800 + index * 40; easing.type: Easing.InOutSine }
                 NumberAnimation { from: 2.1; to: 0.7; duration: 800 + index * 40; easing.type: Easing.InOutSine }
             }
 
             SequentialAnimation on font.pixelSize {
-                running: root.phase === 2 && parent.visible
+                running: root.phase === 2 && parent.visible && root.awake
                 loops: Animation.Infinite
                 NumberAnimation { from: root.maxSize * 0.09; to: root.maxSize * 0.27; duration: 800 + index * 40; easing.type: Easing.InOutSine }
                 NumberAnimation { from: root.maxSize * 0.27; to: root.maxSize * 0.09; duration: 800 + index * 40; easing.type: Easing.InOutSine }
@@ -254,7 +288,7 @@ Item {
         font.pixelSize: root.baseGlyph
 
         SequentialAnimation on scale {
-            running: centreText.scaling && centreText.visible
+            running: centreText.scaling && centreText.visible && root.awake
             loops: Animation.Infinite
             alwaysRunToEnd: false
             NumberAnimation { from: 1; to: root.glyphPeak; duration: 900; easing.type: Easing.InOutSine }
@@ -262,7 +296,7 @@ Item {
         }
 
         SequentialAnimation on font.pixelSize {
-            running: centreText.rerastering && centreText.visible
+            running: centreText.rerastering && centreText.visible && root.awake
             loops: Animation.Infinite
             NumberAnimation { from: root.baseGlyph; to: root.baseGlyph * root.glyphPeak; duration: 900; easing.type: Easing.InOutSine }
             NumberAnimation { from: root.baseGlyph * root.glyphPeak; to: root.baseGlyph; duration: 900; easing.type: Easing.InOutSine }
@@ -270,7 +304,7 @@ Item {
 
         // The countdown reads as a pulse so it is obvious across the room.
         SequentialAnimation on opacity {
-            running: root.countdown > 0
+            running: root.countdown > 0 && root.awake
             loops: Animation.Infinite
             NumberAnimation { from: 1; to: 0.35; duration: 500 }
             NumberAnimation { from: 0.35; to: 1; duration: 500 }
@@ -283,7 +317,7 @@ Item {
     // pixels, which is why results are also reported per megapixel.
     Item {
         anchors.fill: parent
-        visible: root.phase === 4
+        visible: root.phase === 4 && root.awake
 
         Repeater {
             model: 24
@@ -293,7 +327,7 @@ Item {
                 color: index % 2 ? "#2000a0ff" : "#20ff5090"
 
                 SequentialAnimation on opacity {
-                    running: root.phase === 4 && parent.visible
+                    running: root.phase === 4 && parent.visible && root.awake
                     loops: Animation.Infinite
                     NumberAnimation { from: 0.35; to: 0.9; duration: 600 + index * 90 }
                     NumberAnimation { from: 0.9; to: 0.35; duration: 600 + index * 90 }
@@ -312,7 +346,7 @@ Item {
         id: iconStorm
 
         anchors.fill: parent
-        visible: root.phase === 5
+        visible: root.phase === 5 && root.awake
 
         Repeater {
             model: 96
@@ -337,7 +371,7 @@ Item {
             to: 2 * Math.PI
             duration: 3000
             loops: Animation.Infinite
-            running: iconStorm.visible
+            running: iconStorm.visible && root.awake
         }
 
     }
@@ -350,7 +384,7 @@ Item {
         property real t: 0
 
         anchors.fill: parent
-        visible: root.phase === 6
+        visible: root.phase === 6 && root.awake
         preferredRendererType: Shape.CurveRenderer
 
         NumberAnimation on t {
@@ -358,7 +392,7 @@ Item {
             to: 2 * Math.PI
             duration: 4000
             loops: Animation.Infinite
-            running: spiro.visible
+            running: spiro.visible && root.awake
         }
 
         ShapePath {
@@ -455,7 +489,7 @@ Item {
         id: cascade
 
         anchors.fill: parent
-        visible: root.phase === 7
+        visible: root.phase === 7 && root.awake
         transformOrigin: Item.Center
 
         Repeater {
@@ -478,7 +512,7 @@ Item {
         }
 
         SequentialAnimation on scale {
-            running: cascade.visible
+            running: cascade.visible && root.awake
             loops: Animation.Infinite
             NumberAnimation { from: 0.55; to: 1.25; duration: 800; easing.type: Easing.InOutSine }
             NumberAnimation { from: 1.25; to: 0.55; duration: 800; easing.type: Easing.InOutSine }
@@ -551,7 +585,7 @@ Item {
         id: benchyShape
 
         anchors.fill: parent
-        visible: root.phase === 8 || root.phase === 9
+        visible: (root.phase === 8 || root.phase === 9) && root.awake
         onVisibleChanged: if (visible) root.projectBenchy()
 
         ShapePath { id: bp0; fillColor: "transparent"; strokeColor: "#58a6ff"; strokeWidth: 1; PathPolyline { id: pl0 } }
@@ -566,7 +600,7 @@ Item {
             to: 360
             duration: root.phase === 8 ? 4000 : 6000
             loops: Animation.Infinite
-            running: benchyShape.visible
+            running: benchyShape.visible && root.awake
         }
 
         property real rotationDriver: 0
@@ -638,7 +672,7 @@ Item {
         blurMax: 48
 
         SequentialAnimation on shadowBlur {
-            running: root.phase === 3
+            running: root.phase === 3 && root.awake
             loops: Animation.Infinite
             NumberAnimation { from: 0.3; to: 1; duration: 500; easing.type: Easing.InOutSine }
             NumberAnimation { from: 1; to: 0.3; duration: 500; easing.type: Easing.InOutSine }
@@ -647,7 +681,7 @@ Item {
         // A pulsing blur on top of the shadow: the effect is recomputed over
         // the whole rotor every frame, which is the point of this phase.
         SequentialAnimation on blur {
-            running: root.phase === 3
+            running: root.phase === 3 && root.awake
             loops: Animation.Infinite
             NumberAnimation { from: 0; to: 0.6; duration: 500; easing.type: Easing.InOutSine }
             NumberAnimation { from: 0.6; to: 0; duration: 500; easing.type: Easing.InOutSine }
