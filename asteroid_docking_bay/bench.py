@@ -20,8 +20,15 @@ import json
 from pathlib import Path
 
 APP_NAME = "benchymark"
-# Where the Yocto build drops packages on this rig. Kept here rather than in
-# the op so the path is one edit away if the build host changes.
+# benchymark lives in its own repo now — https://github.com/moWerk/benchymark
+# — so a-d-b consumes it as a BUILT ARTEFACT rather than carrying its source.
+# Keeping a second copy of the app here would have drifted from upstream the
+# first time either side was touched.
+#
+# Two ways to get an ipk into this directory:
+#   * build it from a checkout of that repo (see its packaging/benchymark.bb),
+#     which drops the package here on this rig; or
+#   * download the ipk attached to a release and drop it in.
 IPK_DIR = Path.home() / "Git/asteroid/build/tmp-qt6/deploy/ipk"
 APP_RESULTS = "/home/ceres/.local/share/benchymark/last-run.json"
 

@@ -111,3 +111,62 @@ def test_no_unused_imports(path):
     assert not unused, (
         f"{path.name} imports but never uses: {unused} — "
         "either a leftover from a refactor or a missing call")
+
+
+def test_compound_shell_commands_are_quoted_whole():
+    """Transport.shell() interpolates its argument into a HOST command line
+    (`adb -s X shell {cmd}` / `ssh root@ip {cmd}`). So a command containing
+    &&, ||, ;, | or a redirect must be quoted as a whole, or the shell splits
+    it: the first command runs on the watch and the REST RUNS ON THE HOST.
+
+    This is not hypothetical. provision_wifi() shipped with an unquoted
+    `mkdir && mv && chown -R root:root ...` chain; the mkdir ran on the watch,
+    the mv ran on the host and failed, and only that failure stopped a
+    `chown -R` from running against the host's filesystem. The tell was an
+    error message in the host's language from a watch that answers in English.
+
+    Planted-bug: drop the shlex.quote() around that chain and this fails.
+    """
+    import ast
+    from pathlib import Path
+
+    pkg = Path(__file__).resolve().parent.parent / "asteroid_docking_bay"
+    metachars = ("&&", "||", ";", "|", ">", "<")
+    offenders = []
+
+    for path in sorted(pkg.glob("*.py")):
+        tree = ast.parse(path.read_text())
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            fn = node.func
+            if not (isinstance(fn, ast.Attribute) and fn.attr == "shell"):
+                continue
+            if not node.args:
+                continue
+            arg = node.args[0]
+            # Already wrapped in shlex.quote(...) — the correct form.
+            if (isinstance(arg, ast.Call) and isinstance(arg.func, ast.Attribute)
+                    and arg.func.attr == "quote"):
+                continue
+            # Reconstruct the literal parts of the command, ignoring the
+            # interpolated values (a filename cannot introduce an operator
+            # that matters here — the operators are written in the source).
+            if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                text = arg.value
+            elif isinstance(arg, ast.JoinedStr):
+                text = "".join(v.value for v in arg.values
+                               if isinstance(v, ast.Constant)
+                               and isinstance(v.value, str))
+            else:
+                continue
+            # A command the author quoted by hand with embedded double quotes
+            # is already safe.
+            if text.startswith('"') and text.rstrip().endswith('"'):
+                continue
+            if any(m in text for m in metachars):
+                offenders.append(f"{path.name}:{node.lineno}: {text[:70]}")
+
+    assert not offenders, (
+        "compound shell command(s) not quoted whole — these would run their "
+        "tail on the HOST:\n  " + "\n  ".join(offenders))

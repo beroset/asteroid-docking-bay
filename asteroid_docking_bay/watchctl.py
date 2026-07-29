@@ -784,10 +784,17 @@ class Watch:
                 return {"ok": False, "error": f"push failed: {err.strip()[:80]}"}
             # 0700/0600 and root-owned: connman refuses to read its storage if
             # it is group- or world-readable, and this file holds a passphrase.
-            rc, _, err = self.t.shell(
+            #
+            # shlex.quote around the WHOLE chain, not the pieces: Transport
+            # .shell() interpolates its argument into a host command line, so
+            # an unquoted `&&` splits the chain — the first command runs on the
+            # watch and the rest on the HOST. That is not theoretical; it is
+            # what this code did before, and the giveaway was an error message
+            # in the host's language from a watch that speaks English.
+            rc, _, err = self.t.shell(shlex.quote(
                 f"mkdir -p {remote_dir} && mv {tmp} {remote_dir}/settings "
                 f"&& chown -R root:root {remote_dir} "
-                f"&& chmod 700 {remote_dir} && chmod 600 {remote_dir}/settings",
+                f"&& chmod 700 {remote_dir} && chmod 600 {remote_dir}/settings"),
                 timeout=20)
             if rc != 0:
                 return {"ok": False,

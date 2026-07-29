@@ -138,7 +138,7 @@ starts low and is still falling when a short phase ends, so a number recorded
 over the whole window is a blend of two workloads rather than a measurement of
 one (moWerk, observed on nemo). Two mitigations are in place — a **quiet
 second between phases** where nothing animates and the next phase's name is
-already on screen, and **phases lengthened to 10 s** (12 s for the full boat).
+already on screen, and **phases at 10 s** each.
 
 **Parked idea worth building:** make that settling its own phase. How long a
 watch takes to shed one workload and reach a steady rate under the next is a
