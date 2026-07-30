@@ -170,3 +170,36 @@ def test_compound_shell_commands_are_quoted_whole():
     assert not offenders, (
         "compound shell command(s) not quoted whole — these would run their "
         "tail on the HOST:\n  " + "\n  ".join(offenders))
+
+
+def test_web_template_has_no_raw_newline_escapes():
+    """webtemplate's page is a NON-RAW Python string, so a `\\n` written for a
+    JS string literal becomes a REAL newline the moment the module is
+    imported. That leaves the JS string unterminated and takes the whole UI
+    down — not just the feature that added it.
+
+    This has now happened twice, both in a confirm() message, and both times it
+    failed ~50 unrelated UI tests instead of pointing at itself.
+
+    The invariant: inside the template there is no single-backslash-n at all.
+    A JS newline must be written `\\\\n` so it survives Python's unescaping.
+    (An earlier version of this test scanned for real line breaks in the
+    SOURCE, where the escape is still two characters — so it passed happily
+    against the very bug it was written to catch.)
+
+    Planted-bug: write a single backslash-n anywhere in the template and this
+    fails.
+    """
+    import re
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parent.parent
+           / "asteroid_docking_bay" / "webtemplate.py").read_text()
+    tpl = src[src.index('_WEB_TEMPLATE = """'):]
+    hits = []
+    for m in re.finditer(r"(?<!\\)\\n", tpl):
+        line = tpl[:m.start()].count("\n") + 1
+        hits.append(f"line {line}: {tpl[max(0, m.start() - 70):m.start() + 12].splitlines()[-1].strip()[:90]}")
+    assert not hits, (
+        "single-backslash-n in the template — this becomes a real newline at "
+        "import and breaks the JS string containing it:\n  " + "\n  ".join(hits))

@@ -1371,8 +1371,28 @@ function bodyVit(d){
         _kv('True capacity',dg.bat_capacity_pct!=null?dg.bat_capacity_pct+'% of design':null)+
         _kv('Boots on record',dg.boots||null))
     : '';
+  // The blunt instrument, parked at the foot of Vitals because that is where
+  // you end up when something on the watch is stale rather than broken: a
+  // freshly installed app the launcher has not noticed, colours it read once
+  // at grid build, a QML module loaded for the life of the session.
+  const sess = '<div class="cc-sec"><div class="cc-sech">Session</div>'+
+    '<div class="dim" style="margin-bottom:4px">Restarts the ceres user session. Use it when a newly installed app does not show, or shows with its old colours \u2014 the launcher reads those once, when it builds its grid.</div>'+
+    '<div class="cc-tgls" style="padding:0">'+
+      `<button class="cc-tgl${ctlPending.has('sess')?' cmd-pending':''}" onclick="sessionRestart()" title="systemctl restart user@1000 \u2014 takes the whole session with it, so anything running on the watch dies">restart ceres session</button>`+
+    '</div></div>';
   return hint+verdict+`<div class="cc-cols"><div class="cc-col">${vit}</div>`+
-         (wear?`<div class="cc-col">${wear}</div>`:'')+`</div>`;
+         (wear?`<div class="cc-col">${wear}</div>`:'')+`</div>`+sess;
+}
+function sessionRestart(){
+  const s=ctlSerial;
+  if(!confirm('Restart the ceres session on this watch? The screen blanks for a few seconds and anything running on the watch is killed.'))return;
+  ctlPending.add('sess'); renderControl(ctlCache[s]||{});
+  fetch('/api/watch/'+encodeURIComponent(s)+'/session/restart',{method:'POST'})
+    .then(r=>r.json()).then(d=>{
+      ctlPending.delete('sess');
+      if(!d.ok)alert('session restart failed: '+(d.error||'?'));
+      setTimeout(ctlFetch,6000);   // it needs a moment to come back
+    }).catch(()=>{ctlPending.delete('sess');ctlFetch();});
 }
 
 // Diag tab: the a-d-b-doctor dataset (kernel diagnostics without on-watch

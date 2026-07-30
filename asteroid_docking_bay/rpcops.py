@@ -619,6 +619,26 @@ def _wifi_provision(args):
     return Watch(serial).provision_wifi(ap)
 
 
+@DISPATCH.op("watch.session_restart")
+def _watch_session_restart(args):
+    """Restart the ceres user session (`systemctl restart user@1000`).
+
+    The blunt instrument, and sometimes the only one that works: the launcher
+    reads an app's declared colours when it builds its grid, and QML modules
+    are loaded once per session, so a freshly installed or changed app can be
+    invisible to a running session however correct the files on disk are.
+
+    Heavier than restarting the launcher alone — it takes the whole session,
+    so anything running in it dies. Run as root over the transport rather than
+    inside the session being killed, or the command dies with its own target.
+    """
+    w = _watch(args["serial"])
+    rc, out, err = w.t.shell("systemctl restart user@1000", timeout=45)
+    if rc != 0:
+        return {"ok": False, "error": (err or out).strip()[:160] or f"rc={rc}"}
+    return {"ok": True}
+
+
 @DISPATCH.op("watch.backup")
 def _watch_backup(args):
     """Back up one port's watch data to the host. Slot-based like flash: the
