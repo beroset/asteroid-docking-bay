@@ -1258,6 +1258,7 @@ function ctlTabTo(tab){
   ctlTab=tab;                              // no refetch, no graphReset: the poll
   if(tab==='bat'){biHistFetch(ctlSerial);if(drainHistAll===null)drainHistFetch();}   // keeps every metric filling regardless
   if(tab==='set'){settingsFetch(ctlSerial);if(wxData===null)wxFetch();if(wxOnWatch[ctlSerial]===undefined)wxFetchOnWatch(ctlSerial);}
+  if(tab==='net')wifiApsFetch();
   if((tab==='diag'||tab==='vit')&&dgData[ctlSerial]===undefined)dgFetch(ctlSerial);
   if(tab==='ana'&&bcData[ctlSerial]===undefined)bcFetch(ctlSerial);
   renderControl(ctlCache[ctlSerial]||null);

@@ -17,6 +17,8 @@ both, which is why none of that machinery survives here.
 from __future__ import annotations
 
 import json
+import shlex
+import time
 from pathlib import Path
 
 APP_NAME = "benchymark"
@@ -31,6 +33,11 @@ APP_NAME = "benchymark"
 #   * download the ipk attached to a release and drop it in.
 IPK_DIR = Path.home() / "Git/asteroid/build/tmp-qt6/deploy/ipk"
 APP_RESULTS = "/home/ceres/.local/share/benchymark/last-run.json"
+# `pgrep -f benchymark` also matches the SHELL RUNNING THE PGREP, because its
+# own command line contains the word — so a liveness check could report the
+# app running when only the check was. The bracket makes the pattern fail to
+# match its own literal text while still matching the process.
+_PGREP = f"pgrep -f [{APP_NAME[0]}]{APP_NAME[1:]}"
 
 
 def newest_ipk() -> "str | None":
@@ -62,17 +69,53 @@ def app_install(watch, ipk_local: str) -> "str | None":
 
 
 def app_start(watch) -> "str | None":
-    """Launch it in the watch's own session. setsid detaches it so it outlives
-    the adb shell that started it — without that the app dies with the command."""
-    rc, out, err = watch.user_cmd(f"setsid {APP_NAME} >/dev/null 2>&1 &",
-                                  timeout=15)
-    return None if rc == 0 else f"launch failed: {(err or out).strip()[:120]}"
+    """Launch it in the watch's own session, and CONFIRM it is running.
+
+    `setsid app &` on its own does not survive: `su` exits the instant the job
+    is backgrounded and takes the child with it, so Start reported success
+    while nothing ran — the worst failure a sweep can inherit, because every
+    later step then measures an app that was never there.
+
+    systemd-run detaches properly and --collect reaps the transient unit when
+    the app exits, so repeated starts cannot collide on a stale unit name. The
+    fallback keeps the shell alive a moment instead, which is enough for the
+    child to detach on images without systemd-run.
+    """
+    rc, out, err = watch.user_cmd(
+        f"systemd-run --user --collect {APP_NAME}", timeout=20)
+    if rc != 0:
+        watch.user_cmd(f"setsid {APP_NAME} >/dev/null 2>&1 & sleep 2",
+                       timeout=20)
+    for _ in range(6):
+        time.sleep(1)
+        if watch.t.shell(shlex.quote(_PGREP), timeout=10)[1].strip():
+            return None
+    return (f"launch did not take: {(err or out).strip()[:100]}"
+            if rc != 0 else "launch reported success but no process is running")
 
 
-def app_stop(watch) -> None:
-    """Kill it. Both names are tried: the wrapper script and the invoker'd
-    library, since the process the launcher ends up with is the latter."""
-    watch.t.shell(f"pkill -f {APP_NAME}", timeout=15)
+def app_stop(watch) -> "str | None":
+    """Kill it, and confirm it died.
+
+    NOT pkill: these images have pgrep but no pkill, so the obvious command
+    failed silently and Stop did nothing while reporting nothing. Feeding
+    pgrep's output to kill works with what BusyBox actually provides.
+    """
+    # quoted whole: the $() and the redirect would otherwise be run by the
+    # HOST shell, which is what test_compound_shell_commands_are_quoted_whole
+    # exists to catch — and duly did.
+    watch.t.shell(shlex.quote(f"kill $({_PGREP}) 2>/dev/null"),
+                  timeout=15)
+    for _ in range(4):
+        time.sleep(1)
+        if not watch.t.shell(shlex.quote(_PGREP), timeout=10)[1].strip():
+            return None
+    watch.t.shell(shlex.quote(f"kill -9 $({_PGREP}) 2>/dev/null"),
+                  timeout=15)
+    time.sleep(1)
+    if watch.t.shell(shlex.quote(_PGREP), timeout=10)[1].strip():
+        return "could not stop benchymark"
+    return None
 
 
 def app_remove(watch) -> "str | None":

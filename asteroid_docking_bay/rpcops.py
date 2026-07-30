@@ -1242,8 +1242,8 @@ def _bench_app(argsd):
         err = bench.app_start(w)
         return {"ok": not err, **({"error": err} if err else {})}
     if action == "stop":
-        bench.app_stop(w)
-        return {"ok": True}
+        err = bench.app_stop(w)
+        return {"ok": not err, **({"error": err} if err else {})}
     if action == "remove":
         err = bench.app_remove(w)
         return {"ok": not err, **({"error": err} if err else {})}

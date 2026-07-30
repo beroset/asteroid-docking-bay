@@ -1504,3 +1504,34 @@ def test_cc_top_covers_the_row_and_bottom_matches_when_tall(tmp_path):
     assert o["fits"] == 300, "header should sit exactly on the row when it fits"
     assert o["tall"] == 700 + 32 - 500, "tall panel should bottom-match the row"
     assert o["clamped"] >= 8, "never place above the viewport top"
+
+
+def test_every_tab_fetches_the_same_way_however_it_is_reached():
+    """A Control Center tab can be reached two ways: opening the panel onto it
+    (openControl) or switching to it (ctlTabTo). Both must kick off the same
+    fetches, or a tab silently works one way and not the other.
+
+    That is exactly how the WiFi provisioning button vanished: the AP fetch was
+    wired into openControl only, so the button appeared when the panel was
+    opened from the ADB badge and never when the Network tab was clicked.
+
+    Planted-bug: drop a tab from either function and this fails.
+    """
+    import re
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parent.parent
+           / "asteroid_docking_bay" / "webtemplate.py").read_text()
+
+    def tabs_of(fn_marker, var):
+        i = src.index(fn_marker)
+        body = src[i:src.index("\nfunction ", i + 10)]
+        return set(re.findall(rf"{var}==='(\w+)'", body))
+
+    on_open = tabs_of("cc.style.display='block';", "ctlTab")
+    on_switch = tabs_of("function ctlTabTo(tab){", "tab")
+    missing = on_open - on_switch
+    extra = on_switch - on_open
+    assert not missing and not extra, (
+        f"tab fetches disagree — only on open: {sorted(missing)}; "
+        f"only on switch: {sorted(extra)}")
