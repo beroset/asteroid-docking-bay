@@ -22,6 +22,23 @@ DIAG_SCRIPT = "; ".join([
     "grep -sE '^(success|fail):' /sys/kernel/debug/suspend_stats 2>/dev/null | head -2",
     _M % "freq",
     "cat /sys/devices/system/cpu/cpu0/cpufreq/stats/time_in_state 2>/dev/null",
+    # The clamp behind the residency above, plus which cores are even up —
+    # underclock offlines all but CPU0, which no other reading here reveals.
+    _M % "cpulimit",
+    "grep -sH . /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor "
+    "/sys/devices/system/cpu/cpu0/cpufreq/scaling_min_freq "
+    "/sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq "
+    "/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_min_freq "
+    "/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq 2>/dev/null",
+    "echo online=$(cat /sys/devices/system/cpu/online 2>/dev/null)",
+    "echo present=$(cat /sys/devices/system/cpu/present 2>/dev/null)",
+    # The GPU half of the same question. Nothing else in a-d-b can see this,
+    # and it is the reading kido's GPU-pinning experiment turns on.
+    _M % "gpu",
+    "for d in /sys/class/devfreq/*; do echo $(basename $d) "
+    "gov=$(cat $d/governor 2>/dev/null) cur=$(cat $d/cur_freq 2>/dev/null) "
+    "min=$(cat $d/min_freq 2>/dev/null) max=$(cat $d/max_freq 2>/dev/null); "
+    "done 2>/dev/null",
     _M % "emmc",
     "cat /sys/class/mmc_host/mmc*/mmc*/life_time 2>/dev/null",
     "cat /sys/class/mmc_host/mmc*/mmc*/pre_eol_info 2>/dev/null",
@@ -101,6 +118,53 @@ def parse_diag(out: str) -> dict:
         d["freq_residency"] = [
             {"mhz": f // 1000, "pct": round(t * 100 / total, 1)}
             for f, t in sorted(freq)]
+
+    # ── what that residency is ALLOWED to reach ──────────────────────────
+    # Sits directly under the residency because it is the other half of the
+    # same question: a flat-topped residency is a symptom, and the clamp is
+    # the cause. These are also exactly the knobs underclock turns.
+    lim = {}
+    for line in sec.get("cpulimit", "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith(("online=", "present=")):
+            k, _, v = line.partition("=")
+            if v:
+                lim[k] = v
+            continue
+        path, _, val = line.partition(":")
+        key, val = path.rsplit("/", 1)[-1], val.strip()
+        if not val:
+            continue
+        if key == "scaling_governor":
+            lim["governor"] = val
+        elif key.endswith("_freq") and val.isdigit():
+            lim[key] = int(val) // 1000          # sysfs is kHz; report MHz
+    if lim:
+        # Pinned when the governor's window is narrower than the hardware's.
+        c = (lim.get("cpuinfo_min_freq"), lim.get("cpuinfo_max_freq"),
+             lim.get("scaling_min_freq"), lim.get("scaling_max_freq"))
+        if None not in c:
+            lim["clamped"] = c[2] > c[0] or c[3] < c[1]
+        d["cpu_limits"] = lim
+
+    # ── the GPU's own governor and clamp ─────────────────────────────────
+    gpus = []
+    for line in sec.get("gpu", "").splitlines():
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        row = {"device": parts[0]}
+        for kv in parts[1:]:
+            k, _, v = kv.partition("=")
+            if not v:
+                continue
+            row[k] = int(v) // 1000000 if k in ("cur", "min", "max") and v.isdigit() else v
+        if len(row) > 1:
+            gpus.append(row)
+    if gpus:
+        d["gpu_devfreq"] = gpus
 
     em = sec.get("emmc", "").split()
     hexes = [int(x, 16) for x in em if x.lower().startswith("0x")]

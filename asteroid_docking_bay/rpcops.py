@@ -1011,13 +1011,22 @@ def _port_poweroff(args):
     return {"ok": True, "adb_shutdown": graceful, "confirmed": confirmed}
 
 
-def _mark_booting(serial):
+def _mark_booting(serial, commanded=False):
     """Stamp when we deliberately (re)boot a known watch, so the connection
     column can show "booting up" through the ~40s window and a hedged "boot
     failed?" past it. Only a real OS sighting (last_live_ts) clears it — see
-    webstatus._boot_state. A None serial (empty/unmapped port) stamps nothing."""
+    webstatus._boot_state. A None serial (empty/unmapped port) stamps nothing.
+
+    `commanded` separates the two things that land here. Restoring VBUS to a
+    port MIGHT be a boot — if the watch was shelved — or might be a mere
+    re-enumeration of a watch that kept running on battery, and only the
+    safe_off marker can tell those apart. A `reboot` we sent over adb is
+    ALWAYS a real boot, whatever the power history says, so it declares itself
+    rather than being inferred.
+    """
     if serial:
-        last_seen.mark(serial, booting_since=time.time())
+        last_seen.mark(serial, booting_since=time.time(),
+                       booting_commanded=bool(commanded))
 
 
 def _watch_action(loc, port, adb_cmd, fb_cmd, fail_msg, boots_os=False):
@@ -1054,7 +1063,8 @@ def _watch_action(loc, port, adb_cmd, fb_cmd, fail_msg, boots_os=False):
     if rc != 0:
         return {"ok": False, "error": err or fail_msg}
     if boots_os:
-        _mark_booting(serial or fb_serial)
+        # We sent the reboot ourselves — no inference needed.
+        _mark_booting(serial or fb_serial, commanded=True)
     return {"ok": True, "via": tool}
 
 

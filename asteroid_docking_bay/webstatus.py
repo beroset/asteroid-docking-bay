@@ -312,7 +312,11 @@ def _boot_state(ls: dict, power: "bool | None") -> "str | None":
     if not bs or llt >= bs:
         return None
     so = ls.get("safe_off_ts") or 0
-    cold = bool(so and so >= llt)   # was shelved/down → a real boot
+    # A reboot we COMMANDED is a real boot however the power history reads.
+    # Inferring coldness from safe_off alone was right for a bare power-on but
+    # wrong for an explicit reboot of a running watch: that showed
+    # "reconnecting" when the watch was genuinely booting (moWerk).
+    cold = bool(ls.get("booting_commanded")) or bool(so and so >= llt)
     dt = time.time() - bs
     if dt < BOOT_WINDOW:
         return "booting" if cold else "reconnecting"

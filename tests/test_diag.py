@@ -572,3 +572,85 @@ def test_find_aps_on_a_rig_with_no_backups(tmp_path):
     from asteroid_docking_bay import wifi
     assert wifi.find_aps(tmp_path / "nope") == []
     assert wifi.find_aps(tmp_path) == []
+
+
+# ── cpu clamp + gpu devfreq ─────────────────────────────────────────────────
+
+_LIMITS = """---cpulimit---
+/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor:ondemand
+/sys/devices/system/cpu/cpu0/cpufreq/scaling_min_freq:800000
+/sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq:998400
+/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_min_freq:800000
+/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq:1094400
+online=0
+present=0-3
+---gpu---
+1c00000.qcom,kgsl-3d0 gov=performance cur=200000000 min=200000000 max=200000000
+mmc0 gov=simple_ondemand cur=50000000 min=50000000 max=177000000
+"""
+
+
+def test_cpu_limits_spot_a_clamp_and_offline_cores():
+    """The residency alone shows a flat top; this shows WHY. kHz in sysfs is
+    reported as MHz, and `clamped` is true when the governor's window is
+    narrower than the hardware's — here 998 MHz against a 1094 MHz part.
+    `online` vs `present` catches underclock offlining all but CPU0, which no
+    other reading here reveals. Planted-bug: compare the scaling pair against
+    itself instead of against cpuinfo and `clamped` goes false."""
+    d = parse_diag(_LIMITS)
+    lim = d["cpu_limits"]
+    assert lim["governor"] == "ondemand"
+    assert lim["scaling_max_freq"] == 998 and lim["cpuinfo_max_freq"] == 1094
+    assert lim["clamped"] is True
+    assert lim["online"] == "0" and lim["present"] == "0-3"
+
+
+def test_cpu_limits_report_an_unclamped_part_honestly():
+    """A watch running at its hardware limits must NOT read as pinned, or the
+    flag is noise."""
+    d = parse_diag(_LIMITS.replace("scaling_max_freq:998400",
+                                   "scaling_max_freq:1094400"))
+    assert d["cpu_limits"]["clamped"] is False
+
+
+def test_gpu_devfreq_shows_a_pinned_gpu():
+    """min == max == cur is a GPU pinned to one frequency — the thing kido's
+    experiment exists to question, and previously invisible to a-d-b. Hz in
+    sysfs is reported as MHz. Planted-bug: divide by 1000 instead of 1e6 and
+    the frequencies read as 200000."""
+    g = {x["device"]: x for x in parse_diag(_LIMITS)["gpu_devfreq"]}
+    kgsl = g["1c00000.qcom,kgsl-3d0"]
+    assert kgsl["gov"] == "performance"
+    assert kgsl["cur"] == kgsl["min"] == kgsl["max"] == 200
+    assert g["mmc0"]["max"] == 177          # a device that is NOT pinned
+
+
+def test_diag_without_the_new_sections_still_parses():
+    """Older watches, or a failed read, must degrade to absent keys rather
+    than raising — the diag bundle is best-effort by design."""
+    d = parse_diag("---wakeup---\n")
+    assert "cpu_limits" not in d and "gpu_devfreq" not in d
+
+
+def test_a_commanded_reboot_reads_as_booting_not_reconnecting():
+    """Restoring VBUS to a port MIGHT be a boot — only if the watch was
+    shelved — so that case infers coldness from the safe_off marker. A reboot
+    we SENT is always a real boot, whatever the power history says.
+
+    Inferring from safe_off alone made an explicit reboot of a running watch
+    show "reconnecting" while it was genuinely booting (moWerk). Planted-bug:
+    drop the booting_commanded term and this fails."""
+    import time
+    from asteroid_docking_bay.webstatus import _boot_state
+    now = time.time()
+    # a watch that was up and running, then told to reboot
+    ls = {"booting_since": now, "last_live_ts": now - 60,
+          "safe_off_ts": 0, "booting_commanded": True}
+    assert _boot_state(ls, True) == "booting"
+    # the same watch, power merely restored: it only re-enumerates
+    ls_power = {"booting_since": now, "last_live_ts": now - 60, "safe_off_ts": 0}
+    assert _boot_state(ls_power, True) == "reconnecting"
+    # shelved then powered on — a real boot, inferred as before
+    ls_cold = {"booting_since": now, "last_live_ts": now - 60,
+               "safe_off_ts": now - 30}
+    assert _boot_state(ls_cold, True) == "booting"

@@ -403,7 +403,7 @@ def test_power_action_targets_the_fastboot_serial_not_the_mapped_serial(monkeypa
                         lambda cmd, **kw: (seen.__setitem__("cmd", cmd), (0, "", ""))[1])
     monkeypatch.setattr(ro, "find_serial_for_loc_port", lambda *a, **k: "MAPPED_ADB")
     monkeypatch.setattr(ro, "load_config", lambda: {"hubs": []})
-    monkeypatch.setattr(ro, "_mark_booting", lambda s: None)
+    monkeypatch.setattr(ro, "_mark_booting", lambda s, commanded=False: None)
     # fastboot serial differs from the mapped adb serial, at this port's path
     monkeypatch.setattr(ro, "_fastboot_list", lambda: {"FBSERIAL": "1-2.1"})
     r = ro.DISPATCH._data["port.reboot"]({"loc": "1-2", "port": 1})
