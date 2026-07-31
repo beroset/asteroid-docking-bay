@@ -200,13 +200,38 @@ def analyse(rows: "list[dict]", host_epoch: "float | None" = None) -> dict:
 
 # --- watch-side control ---------------------------------------------------
 
-def install(watch, src_dir: Path) -> "str | None":
+# wanze lives in its own repo, so a-d-b has to FIND its files rather than own
+# them. Duplicating the sampler here would give the fleet two sources of truth
+# for the thing that produces every number, which is worse than a search path.
+SRC_CANDIDATES = (
+    Path(__file__).resolve().parent / "wanze-probe",   # a bundled copy, if built with one
+    Path.home() / "Git/wanze/src",                     # a developer checkout
+    Path("/usr/share/wanze"),                          # installed from the ipk
+)
+SRC_FILES = ("wanze-sample", "wanze.service", "wanze.timer")
+
+
+def find_src() -> "Path | None":
+    """The first candidate that holds a COMPLETE set. A directory carrying only
+    some of the files would install a probe that cannot run, and the failure
+    would not show up until the trace came back empty days later."""
+    for cand in SRC_CANDIDATES:
+        if all((cand / f).is_file() for f in SRC_FILES):
+            return cand
+    return None
+
+
+def install(watch, src_dir: "Path | None" = None) -> "str | None":
     """Push the sampler and its units, then enable the timer.
 
     Pushes files rather than piping a script: `adb shell` reads stdin and will
     swallow the remainder of a heredoc, which truncated several scripts during
     the benchmark work.
     """
+    src_dir = src_dir or find_src()
+    if src_dir is None:
+        return ("wanze sources not found — looked in: "
+                + ", ".join(str(c) for c in SRC_CANDIDATES))
     for name, dest in (("wanze-sample", REMOTE_BIN),
                        ("wanze.service", "/etc/systemd/system/wanze.service"),
                        ("wanze.timer", "/etc/systemd/system/wanze.timer")):

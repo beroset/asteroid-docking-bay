@@ -164,3 +164,33 @@ def test_screen_on_samples_are_counted():
 
 def test_empty_trace_reports_not_ok():
     assert analyse([])["ok"] is False
+
+
+# --- source discovery -----------------------------------------------------
+
+def test_a_partial_source_dir_is_not_accepted(tmp_path, monkeypatch):
+    """A directory holding only some of the files would install a probe that
+    cannot run, and nothing would reveal it until the trace came back empty
+    days later — long after the watch left the dock."""
+    from asteroid_docking_bay import wanze as w
+
+    partial = tmp_path / "partial"
+    partial.mkdir()
+    (partial / "wanze-sample").write_text("#!/bin/sh\n")   # units missing
+    complete = tmp_path / "complete"
+    complete.mkdir()
+    for f in w.SRC_FILES:
+        (complete / f).write_text("x")
+
+    monkeypatch.setattr(w, "SRC_CANDIDATES", (partial, complete))
+    assert w.find_src() == complete
+
+
+def test_no_source_anywhere_reports_where_it_looked(tmp_path, monkeypatch):
+    """An install that fails must say what it wanted, not just that it failed."""
+    from asteroid_docking_bay import wanze as w
+
+    monkeypatch.setattr(w, "SRC_CANDIDATES", (tmp_path / "nope",))
+    assert w.find_src() is None
+    err = w.install(object())
+    assert err and "not found" in err and "nope" in err

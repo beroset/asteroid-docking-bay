@@ -29,6 +29,7 @@ from pathlib import Path
 import time
 
 from . import bench
+from . import wanze
 from .util import _run, log
 from .adb import _adb_state, adb_devices, get_watch_codename
 from .config import (_config_lock, _store_smart_verdict, allocate_ssh_ip,
@@ -1281,6 +1282,37 @@ def _bench_app(argsd):
                               "measured nothing. Wake the screen and re-run."),
                     **d}
         return {"ok": True, **d}
+    return {"ok": False, "error": f"unknown action: {action}"}
+
+
+# ── wanze: the probe that records while the watch is away ───────────────────
+# Unlike benchymark, nothing here drives a measurement — wanze is already
+# running on its own timer. These actions only place it, remove it, and read
+# back what it collected.
+
+
+@DISPATCH.op("wanze.probe")
+def _wanze_probe(argsd):
+    """Install / stop / harvest the wanze probe.
+
+    One op with an action, for the same reason bench.app is one op: they share
+    the watch lookup and the failure shape, and the op table is the security
+    boundary — fewer entries is fewer things to audit.
+
+    `harvest` deliberately does NOT clear the on-watch buffer unless asked.
+    Clearing is destructive to the only copy, and a harvest that failed to
+    parse would otherwise take the evidence with it."""
+    serial, action = argsd["serial"], argsd.get("action")
+    w = _watch(serial)
+    if action == "install":
+        err = wanze.install(w)
+        return {"ok": not err, **({"error": err} if err else {"armed": True})}
+    if action == "stop":
+        wanze.stop(w)
+        return {"ok": True}
+    if action == "harvest":
+        d = wanze.harvest(w, clear=bool(argsd.get("clear")))
+        return d
     return {"ok": False, "error": f"unknown action: {action}"}
 
 
