@@ -37,7 +37,7 @@ from .config import (_config_lock, _store_smart_verdict, allocate_ssh_ip,
                      flash_config, load_config, save_config,
                      orbit_add, orbit_forget, orbit_members,
                      hands_cal_for, set_hands_cal, set_hub_name)
-from .usb import (_sysfs_hub_scan, _sysfs_path_to_serial_map,
+from .usb import (_sysfs_hub_scan, _sysfs_path_to_serial_map, adb_usb_paths,
                   _sysfs_serial_at, xhci_slots,
                   test_port_power_switching, uhubctl_cycle, uhubctl_set_power)
 from . import drainlog, wifi
@@ -1529,7 +1529,8 @@ def _onboard_stream(loc: str, port: int):
                     nxt = 15
                     while time.monotonic() - st < secs:
                         devices = adb_devices()
-                        path_map = _sysfs_path_to_serial_map(set(devices.keys()))
+                        path_map = _sysfs_path_to_serial_map(
+                            set(devices.keys()), adb_usb_paths(devices))
                         s = path_map.get(sysfs_path)
                         if s and _adb_state(devices, s) == "device":
                             return s
@@ -1722,7 +1723,8 @@ def _sweep_wait_adb(sysfs_path: str, secs: int, emit) -> "tuple[str | None, str 
             emit("  port skipped by user")
             return None, blocker
         devices = adb_devices()
-        s = _sysfs_path_to_serial_map(set(devices.keys())).get(sysfs_path)
+        s = _sysfs_path_to_serial_map(
+            set(devices.keys()), adb_usb_paths(devices)).get(sysfs_path)
         state = _adb_state(devices, s) if s else None
         if state == "device":
             return s, None

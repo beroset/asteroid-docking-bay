@@ -740,3 +740,71 @@ def test_drainlog_parse_survives_a_truncated_row():
                  "105,-41\n"
                  "110,-410,89,Discharging,321,battery\n")
     assert len(rows) == 2 and rows[-1]["capacity"] == 89
+
+
+# ── ghost USB nodes ─────────────────────────────────────────────────────────
+
+def test_ghost_node_is_dropped_when_adb_names_the_live_path(tmp_path, monkeypatch):
+    """Move a watch between ports and the hub may never raise a disconnect for
+    the old one, leaving the SAME serial readable at two sysfs paths. Both look
+    completely alive — same bConfigurationValue, authorized flag and speed — so
+    the node itself gives nothing away, and the UI shows one watch on two ports.
+
+    adb is the arbiter: it is actually talking to the device down one path.
+    Planted-bug: ignore adb_paths and the ghost survives."""
+    import glob as globmod
+    from asteroid_docking_bay import usb
+
+    (tmp_path / "1-9.2").mkdir()
+    (tmp_path / "1-9.2" / "serial").write_text("SPARROW1\n")
+    (tmp_path / "1-9.4.1").mkdir()
+    (tmp_path / "1-9.4.1" / "serial").write_text("SPARROW1\n")   # the ghost
+    (tmp_path / "1-6.2.1").mkdir()
+    (tmp_path / "1-6.2.1" / "serial").write_text("WREN1\n")
+    # patch the NAME inside usb, not the global glob module — pathlib uses
+    # glob internally, so patching it globally recurses
+    class _G:
+        @staticmethod
+        def glob(pat):
+            return globmod.glob(str(tmp_path / "*" / "serial"))
+    monkeypatch.setattr(usb, "glob", _G)
+
+    both = usb._sysfs_path_to_serial_map({"SPARROW1", "WREN1"})
+    assert sorted(p for p, s in both.items() if s == "SPARROW1") == ["1-9.2", "1-9.4.1"]
+
+    cleaned = usb._sysfs_path_to_serial_map(
+        {"SPARROW1", "WREN1"}, {"SPARROW1": "1-9.2"})
+    assert [p for p, s in cleaned.items() if s == "SPARROW1"] == ["1-9.2"]
+    assert "WREN1" in cleaned.values()          # untouched
+
+
+def test_ghosts_are_kept_when_adb_has_no_opinion(tmp_path, monkeypatch):
+    """If adb does not name a path — the watch is in fastboot, or the server is
+    down — guessing which node is real would be worse than showing both. A
+    caller with no adb view must be no worse off than before."""
+    import glob as globmod
+    from asteroid_docking_bay import usb
+    for p in ("1-9.2", "1-9.4.1"):
+        (tmp_path / p).mkdir()
+        (tmp_path / p / "serial").write_text("SPARROW1\n")
+    # patch the NAME inside usb, not the global glob module — pathlib uses
+    # glob internally, so patching it globally recurses
+    class _G:
+        @staticmethod
+        def glob(pat):
+            return globmod.glob(str(tmp_path / "*" / "serial"))
+    monkeypatch.setattr(usb, "glob", _G)
+    assert len(usb._sysfs_path_to_serial_map({"SPARROW1"}, {})) == 2
+    # adb naming a path we never saw is also not grounds to drop anything
+    assert len(usb._sysfs_path_to_serial_map({"SPARROW1"}, {"SPARROW1": "9-9"})) == 2
+
+
+def test_adb_usb_paths_extracts_only_real_paths():
+    """`adb devices -l` gives usb: per device; a fastboot or offline entry has
+    none and must not appear as an empty path."""
+    from asteroid_docking_bay.usb import adb_usb_paths
+    devices = {"A": {"status": "device", "usb": "1-9.2"},
+               "B": {"status": "device"},
+               "C": "device"}
+    assert adb_usb_paths(devices) == {"A": "1-9.2"}
+    assert adb_usb_paths({}) == {}

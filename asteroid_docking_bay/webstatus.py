@@ -19,7 +19,8 @@ from .config import (_config_lock, charge_config, find_codename_for_serial,
 from . import orbit
 from .usb import (_parse_hub_port_path, _port_device_present, _sysfs_hub_scan,
                   port_device_info,
-                  _sysfs_path_to_serial_map, _sysfs_usb_mode, uhubctl_cycle,
+                  _sysfs_path_to_serial_map, _sysfs_usb_mode, adb_usb_paths,
+                  uhubctl_cycle,
                   uhubctl_list)
 from .fastboot import _fastboot_getvar_product, _fastboot_list, ssh_reach_ip
 from .transport import SshTransport
@@ -490,7 +491,9 @@ def _web_status_data(cfg: dict) -> list[dict]:
         if path is not None
     }
     adb_by_path: dict[str, str] = _timed(
-        "path_map", lambda: _sysfs_path_to_serial_map(set(devices.keys())))
+        "path_map", lambda: _sysfs_path_to_serial_map(
+            set(devices.keys()), adb_usb_paths(devices)))
+    _adb_paths = adb_usb_paths(devices)
     # Live soft-remap: follow booted watches that were physically moved.
     online_by_path = {p: s for p, s in adb_by_path.items()
                       if _adb_state(devices, s) == "device"}
@@ -749,6 +752,15 @@ def _web_status_data(cfg: dict) -> list[dict]:
             dev = port_device_info(loc, port_num)
             if dev and not dev["serial"] and adb_serial:
                 dev["serial"] = adb_serial
+            # A GHOST: sysfs still carries this serial here, but adb is talking
+            # to that watch down a different path, so this node is the leftover
+            # of a move the hub never announced. Say so rather than hide it —
+            # the node really is on the bus, and a silently missing row was the
+            # bug the sysfs-first rendering exists to fix.
+            dev_stale = False
+            if dev and dev["serial"]:
+                live = _adb_paths.get(dev["serial"])
+                dev_stale = bool(live and live != f"{loc}.{port_num}")
             hub_ports.append({
                 "port": port_num, "codename": adb_codename,
                 "slot_loc": loc,
@@ -774,6 +786,7 @@ def _web_status_data(cfg: dict) -> list[dict]:
                 "dev_link": dev["link"] if dev else None,
                 "dev_id": f"{dev['vid']}:{dev['pid']}" if dev else None,
                 "dev_unconfigured": (dev is not None and not dev["configured"]),
+                "dev_stale": dev_stale,
             })
 
         # Order rows by physical socket when known, so the UI reads in the

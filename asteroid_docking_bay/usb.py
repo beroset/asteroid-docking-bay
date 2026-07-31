@@ -665,8 +665,24 @@ def _sysfs_usb_mode(sysfs_path: str) -> "str | None":
     return {"0a03": "adb", "0a02": "ssh"}.get(pid)
 
 
-def _sysfs_path_to_serial_map(serials: set[str]) -> dict[str, str]:
-    """Single-pass sysfs scan: return {sysfs_path: serial} for the given serials."""
+def _sysfs_path_to_serial_map(serials: set[str],
+                              adb_paths: "dict[str, str] | None" = None
+                              ) -> dict[str, str]:
+    """Single-pass sysfs scan: return {sysfs_path: serial} for the given serials.
+
+    GHOST NODES. Move a watch between ports and the hub may never raise a
+    disconnect for the old one, leaving the SAME serial readable at two paths
+    at once. Both look completely alive — same bConfigurationValue, same
+    authorized flag, same speed — so nothing about the node itself gives it
+    away, and the UI then shows one watch sitting on two ports (moWerk saw
+    sparrow on both 1-9.2 and a stale 1-9.4.1).
+
+    `adb_paths` breaks the tie: {serial: "1-9.2"} from `adb devices -l`, which
+    is authoritative because the adb server is actually talking to the device
+    down that path. Where adb names a path, every other path claiming that
+    serial is a ghost and is dropped. Without adb_paths the old behaviour is
+    kept, ghosts and all — a caller with no adb view is no worse off.
+    """
     result: dict[str, str] = {}
     for path in glob.glob("/sys/bus/usb/devices/*/serial"):
         try:
@@ -676,7 +692,32 @@ def _sysfs_path_to_serial_map(serials: set[str]) -> dict[str, str]:
                     result[os.path.basename(os.path.dirname(path))] = s
         except OSError:
             pass
+    if not adb_paths:
+        return result
+    seen: dict[str, list[str]] = {}
+    for p, s in result.items():
+        seen.setdefault(s, []).append(p)
+    for serial, paths in seen.items():
+        if len(paths) < 2:
+            continue
+        live = adb_paths.get(serial)
+        if not live or live not in paths:
+            continue                      # adb has no opinion — keep them all
+        for p in paths:
+            if p != live:
+                log.debug("dropping ghost node %s for %s (adb says %s)",
+                          p, serial, live)
+                result.pop(p, None)
     return result
+
+
+def adb_usb_paths(devices: dict) -> "dict[str, str]":
+    """{serial: sysfs path} from an `adb devices -l` parse. Pure — see tests."""
+    out = {}
+    for serial, info in (devices or {}).items():
+        if isinstance(info, dict) and info.get("usb"):
+            out[serial] = info["usb"]
+    return out
 
 
 def _sysfs_serial_at(loc: str, port: int) -> "str | None":

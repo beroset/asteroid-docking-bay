@@ -1488,6 +1488,8 @@ function benchApp(action){
 function devLabel(p){
   if(!p.dev_link)return '';
   const who=p.dev_serial?esc(p.dev_serial):(p.dev_id?esc(p.dev_id):'device');
+  if(p.dev_stale)
+    return `<span class="dim" title="A leftover node: sysfs still carries this serial here, but adb is talking to that watch down another port. The hub never announced the move. Harmless, and it clears on the next hub power cycle.">${who} <b>stale node</b></span>`;
   if(p.dev_unconfigured)
     return `<span class="warn" title="Enumerated but the kernel never configured it — classic xHCI device-slot exhaustion: the device is on the bus and unusable. Free a slot (power a port off) and cycle this one.">${who} <b>unconfigured</b></span>`;
   const t={adb:'ADB interface present on the bus (the adb server may still not list it)',
