@@ -1,0 +1,92 @@
+{
+  "audit": "wanze — on-watch telemetry probe, design and first bring-up",
+  "date": "2026-07-31",
+  "scope": "wanze v0.1 (sampler + systemd units) and its host-side reader in asteroid_docking_bay/wanze.py",
+  "hardware": [
+    {"codename": "nemo", "serial": "604KPMZ003491", "role": "docked control — timer behaviour"},
+    {"codename": "catfish", "serial": "720EX91190639", "role": "cut from VBUS while running — off-charge trace"}
+  ],
+  "verdict": "Architecture defensible and running on two watches. The blocking precondition (wanze's own battery cost) is UNMEASURED, so no number it produces is quotable yet.",
+
+  "findings": [
+    {
+      "id": "W1",
+      "severity": "critical",
+      "title": "The watch wall clock is not trustworthy",
+      "evidence": "Measured against the host at the same instant: catfish 130 days behind (watch 2026-03-23, host 2026-07-31); nemo ~2 hours ahead. Both recording normally.",
+      "impact": "Any timing computed from `epoch` is silently wrong, and absolute timestamps cannot be correlated with host events.",
+      "fix": "All timing taken from `uptime`, which no clock adjustment can move. `epoch` kept as a host anchor only. Skew measured at harvest and REPORTED, never corrected.",
+      "subtlety": "A CONSTANT offset is harmless to deltas, so a test built on catfish's steady 130-day skew passes against epoch-based timing — it did, on the first attempt. Discriminating cases are a clock STEPPED mid-trace (invents sleep) and FROZEN across suspend (hides sleep).",
+      "status": "fixed + tested"
+    },
+    {
+      "id": "W2",
+      "severity": "high",
+      "title": "/sys/power/wakeup_count blocks and hung the whole probe",
+      "evidence": "First capability probe returned zero output; bisecting with per-command timeouts isolated the read. Blocking is documented kernel behaviour — the read waits until wakeup events can be captured.",
+      "impact": "A sampler reading it would hang; the service would accumulate stuck invocations.",
+      "fix": "Never read from the sampler; wanze.service carries TimeoutStartSec=30 as a backstop. Probe scripts now time out each read individually so one blocking node costs one field, not the run.",
+      "status": "fixed"
+    },
+    {
+      "id": "W3",
+      "severity": "medium",
+      "title": "catfish's two battery nodes disagree about charge",
+      "evidence": "At the same instant, /sys/class/power_supply/battery reported capacity=50 while nanohub_fuelgauge-0 reported 100.",
+      "impact": "a-d-b and wanze both resolve nanohub_fuelgauge-* first, so they agree with each other; if 50 is the true figure they are wrong together, which is the least visible kind of wrong.",
+      "fix": "NOT RESOLVED — watch-side question, belongs to mo.",
+      "status": "open"
+    },
+    {
+      "id": "W4",
+      "severity": "medium",
+      "title": "No /sys/class/backlight on these watches",
+      "evidence": "Absent on nemo; empty on catfish. The panel is exposed as /sys/class/leds/lcd-backlight.",
+      "impact": "The obvious implementation would have recorded an empty screen-state column forever — a silent loss of the field that makes drain attributable.",
+      "fix": "Sampler reads /sys/class/leds/lcd-backlight/brightness.",
+      "status": "fixed"
+    },
+    {
+      "id": "W5",
+      "severity": "low",
+      "title": "Corroboration: nemo runs one core of four",
+      "evidence": "/sys/devices/system/cpu/online = '0', possible = '0-3'. catfish shows '0-3'.",
+      "impact": "Independent confirmation of the underclock experiment's finding that the offline cores, not the GPU frequency pin, are where nemo's performance went.",
+      "status": "informational"
+    }
+  ],
+
+  "preconditions_status": {
+    "PRE1_own_battery_cost": {
+      "status": "OPEN — BLOCKING",
+      "note": "A/B (wanze installed vs not, refereed by a real drain test) has NOT been run. Until it has, every wanze number is provisional. This precondition can kill the design."
+    },
+    "PRE2_suspend_and_timers": {
+      "status": "ANSWERED",
+      "suspend_supported": "both watches: /sys/power/state = 'freeze mem'",
+      "suspend_observed": "catfish 6 entries this boot; nemo 0 while docked, charging, screen lit",
+      "timer_fires_unattended": "CONFIRMED on nemo — uptime 661.68 -> 996.54 across one interval",
+      "systemd": "257 — WakeSystem and AccuracySec fully supported"
+    },
+    "PRE3_bounded_buffer": {
+      "status": "IMPLEMENTED, NOT EXERCISED",
+      "note": "Ring trim with hysteresis is in the sampler but has not been driven against a genuinely long undocked period."
+    }
+  },
+
+  "tests": {
+    "count": 17,
+    "file": "tests/test_wanze.py",
+    "planted_bug_validation": [
+      {"bug": "gaps computed from epoch instead of uptime", "caught_by": 4, "note": "the original steady-skew test did NOT catch it; two clock-divergence tests were added specifically because of that"},
+      {"bug": "reboot detection disabled (uptime drop ignored)", "caught_by": 1}
+    ],
+    "consolidation": "Sensor classification reused from drainlog.classify by giving wanze rows the same key names, rather than writing a second copy of the hardest logic in the codebase."
+  },
+
+  "dead_ends": [
+    "First capability probe returned nothing and was assumed to be an adb fault; it was /sys/power/wakeup_count blocking. Per-command timeouts found it in one pass.",
+    "'One row after 20 minutes' on nemo was read as the timer failing. It was my arithmetic — only one interval had elapsed, and systemctl list-timers said the timer was healthy.",
+    "A wiring test written the same session (for the reconnect badge) passed against a tree with the wiring removed, because setting the monitor's stop flag makes its read loop return on the first line. Same failure shape as the clock test: a test that cannot fail is decoration."
+  ]
+}
