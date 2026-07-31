@@ -65,7 +65,7 @@
   "preconditions_status": {
     "PRE1_own_battery_cost": {
       "status": "OPEN \u2014 BLOCKING",
-      "note": "A/B (wanze installed vs not, refereed by a real drain test) has NOT been run. Until it has, every wanze number is provisional. This precondition can kill the design."
+      "note": "A/B (wanze installed vs not, refereed by a real drain test) has NOT been run. Until it has, every wanze number is provisional. This precondition can kill the design. NOTE: the first undocked run showing 97.8% sleep is SUGGESTIVE of low cost but is not the A/B \u2014 there is no wanze-absent arm to compare against."
     },
     "PRE2_suspend_and_timers": {
       "status": "ANSWERED",
@@ -101,5 +101,37 @@
     "First capability probe returned nothing and was assumed to be an adb fault; it was /sys/power/wakeup_count blocking. Per-command timeouts found it in one pass.",
     "'One row after 20 minutes' on nemo was read as the timer failing. It was my arithmetic \u2014 only one interval had elapsed, and systemctl list-timers said the timer was healthy.",
     "A wiring test written the same session (for the reconnect badge) passed against a tree with the wiring removed, because setting the monitor's stop flag makes its read loop return on the first line. Same failure shape as the clock test: a test that cannot fail is decoration."
-  ]
+  ],
+  "first_undocked_run": {
+    "watch": "catfish (720EX91190639)",
+    "method": "VBUS cut while the watch kept RUNNING (deliberately not a graceful poweroff), ~90 min on battery, power restored automatically and the trace harvested",
+    "headline": "asleep_fraction 0.978 \u2014 catfish was asleep 97.8% of the observed window. 3 samples across 50 minutes of coverage, one unbroken 49-minute gap.",
+    "why_it_matters": "This is the design's central claim demonstrated rather than argued. A conventional 5-minute sampler would have produced ~10 samples in that window BY WAKING THE WATCH TEN TIMES. wanze stayed quiet and still caught the transition.",
+    "the_one_off_charge_sample": {
+      "status": "Discharging",
+      "current_ua": -5000,
+      "capacity": "100 -> 99",
+      "temp": "319 -> 270 (31.9C -> 27.0C, cooling off charge)",
+      "caveat": "ONE discharging sample. Directional only \u2014 this is exactly the T7 trap, and the reader now says so rather than presenting the mean bare."
+    },
+    "defects_this_run_exposed": [
+      {
+        "id": "W6",
+        "severity": "high",
+        "title": "The trailing gap was invisible",
+        "detail": "The trace ends at the last opportunistic sample, so the ~41 minutes catfish slept AFTER it were not counted in asleep_s. The probe was under-reporting the single thing it exists to measure.",
+        "fix": "harvest() takes one closing sample before reading, bounding the final gap.",
+        "status": "fixed + tested (planted)"
+      },
+      {
+        "id": "W7",
+        "severity": "medium",
+        "title": "A single-sample discharge mean read like a measurement",
+        "detail": "One discharging reading produced 'discharge_mean_ua: 5000' with nothing to distinguish it from a settled figure.",
+        "fix": "discharge_samples now travels with the mean; below three samples an explicit 'directional, not a measurement' note is attached. Lives in the shared classifier, so the drain test gains it too.",
+        "status": "fixed + tested (planted)"
+      }
+    ],
+    "not_established_by_this_run": "Nothing about wanze's OWN battery cost. A watch that sleeps 97.8% of the time is consistent with a cheap probe, but it is not the A/B and must not be quoted as one."
+  }
 }
