@@ -409,6 +409,32 @@ def test_battery_graph_dot_opens_battery_info_with_history(tmp_path):
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_connection_shame_badge_bands_and_clamps(tmp_path):
+    """The badge earns its place by being readable at a glance: green only at
+    a genuine zero, and never two digits, which would break the circle."""
+    import json
+    h = tmp_path / "flaps.js"
+    h.write_text(_DOM_STUBS + JS +
+                 "\nconst m=n=>mkstrip({codename:'x',serial:'S9',flaps:n},24);"
+                 "\nconsole.log(JSON.stringify({"
+                 "clean:m(0),one:m(1),five:m(5),six:m(6),huge:m(37)}));"
+                 "\nprocess.exit(0);\n")
+    r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
+    assert r.returncode == 0, r.stderr[:400]
+    out = json.loads(r.stdout.strip().splitlines()[-1])
+    assert 'class="sdot flaps on"' in out["clean"], "a clean port is not green"
+    assert ">0<" in out["clean"], "a clean port does not read 0"
+    # One drop is already worth seeing, but it is not yet a pattern.
+    assert 'class="sdot flaps warn"' in out["one"]
+    assert 'class="sdot flaps warn"' in out["five"], "5 should still be orange"
+    assert 'class="sdot flaps err"' in out["six"], "6 must go red"
+    # The clamp: the circle shows a single digit, the tooltip carries truth.
+    assert ">9<" in out["huge"], "a big count is not clamped to one digit"
+    assert "37 reconnects" in out["huge"], "the true count is missing from the tip"
+    assert ">37<" not in out["huge"], "two digits would break the circle"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
 def test_stats_items_are_dots_and_the_age_trails_as_text(tmp_path):
     """Every stat icon is a dot — a glyph in a circle — for one visual language
     with the power dot and the charging circle. The last-seen age is NOT a pill
@@ -425,13 +451,15 @@ def test_stats_items_are_dots_and_the_age_trails_as_text(tmp_path):
     assert r.returncode == 0, r.stderr[:400]
     out = json.loads(r.stdout.strip().splitlines()[-1])
     assert 'class="sdot chg' in out["charging"], "charging op is not a dot"
-    assert 'class="sdot dim spark"' in out["charging"], "sparkline is not a dot"
-    # Conditional charge state sits last, after the always-present sparkline.
-    assert out["charging"].index("sdot dim spark") < out["charging"].index("sdot chg"), \
-        "the conditional charge dot must come after the battery-graph dot"
+    # The connection shame badge replaced the battery-graph dot in this slot;
+    # it is always present on a mapped port and reads 0 (green) when clean.
+    assert 'class="sdot flaps on"' in out["charging"], "shame badge is not a dot"
+    # Conditional charge state sits last, after the always-present badge.
+    assert out["charging"].index("sdot flaps") < out["charging"].index("sdot chg"), \
+        "the conditional charge dot must come after the connection badge"
     assert 'class="sdot on"' in out["full"], "full-charge state is not a dot"
     # The charge dot opens Battery Info too — gauge, graph dot and charge dot
-    # all lead to the same panel (spark dot + charge dot = two openBI here).
+    # all lead to the same panel (shame badge + charge dot = two openBI here).
     assert out["full"].count("openBI") >= 2, "charge dot does not open Battery Info"
     # An untested wearability reads grey, not amber.
     assert 'class="sdot dim"' in out["off"], "untested wearability is not grey"

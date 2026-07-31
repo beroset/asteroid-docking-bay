@@ -9,6 +9,7 @@ import threading
 import time
 
 from .util import log
+from .flap import flaps
 from .adb import (_adb_state, _resolve_conn_state, adb_devices, adb_shell,
                   battery_and_screen, get_watch_codename)
 from .boottime import measure_boot
@@ -793,6 +794,13 @@ def _web_status_data(cfg: dict) -> list[dict]:
         # order the sockets sit on the hub rather than internal chip order.
         hub_ports.sort(key=lambda p: (p.get("socket") is None,
                                       p.get("socket") or 0, p["port"]))
+
+        # Stamp the reconnect tally on every row in ONE place rather than in
+        # each of the three row shapes above — the count is a property of the
+        # PORT, not of whatever is (or is not) sitting on it, and an empty port
+        # that keeps re-enumerating is exactly the case worth seeing.
+        for row in hub_ports:
+            row["flaps"] = flaps.reconnects(loc, row["port"])
 
         name_prefix, name = hub_name_entry_for(cfg, loc)
         result.append({

@@ -162,6 +162,7 @@ _WEB_TEMPLATE = """\
     .sdot.dim{border-color:#3d4756;color:#8b949e}
     .sdot.chg{border-color:#238636;background:#238636;color:#f2cc60}   /* charging: yellow bolt on green */
     .sdot.drain{border-color:#3d4756;color:#8b949e;animation:drainpulse 1.4s ease-in-out infinite}
+    .sdot.flaps{font-size:10px;font-weight:700;font-variant-numeric:tabular-nums}
     .sdot[onclick]{cursor:pointer}
     .sdot.spark:hover,.sdot[onclick]:hover{background:rgba(88,166,255,.12)}
     @keyframes drainpulse{0%,100%{opacity:.3}50%{opacity:.85}}
@@ -672,9 +673,23 @@ function mkstrip(p,wearH){
   }else if(p.codename){
     out+=sdot('dim','?','never drain-tested — click to run a drain test',wearClk);
   }
-  // 2. battery-graph dot — an always-present indicator that history exists;
-  //    clicking it opens the same Battery Info panel as the battery gauge.
-  if(p.serial)out+=sdot('dim spark',svgicon('trend'),'battery info + history',biClk);
+  // 2. the connection shame badge — reconnects since this port was last
+  //    powered. A clean dock enumerates ONCE and reads 0; every count above
+  //    that is the link dropping and recovering, which is the difference
+  //    between "that cradle feels flakey" and a number. Replaces the old
+  //    battery-graph dot, whose panel is reachable from the gauge anyway and
+  //    which duplicated the Control Center's battery tab.
+  if(p.codename||p.flaps){
+    const n=p.flaps||0;
+    // Clamped to one digit so a second numeral cannot break the circle; the
+    // tooltip always carries the true count.
+    const shown=Math.min(n,9);
+    const cls=n===0?'on':(n<6?'warn':'err');
+    const tip=n===0
+      ?'connection steady — no reconnects since this port was last powered'
+      :`${n} reconnect${n===1?'':'s'} since this port was last powered — the link keeps dropping and coming back. Suspect the cradle, cable or contacts before the watch.`;
+    out+=sdot('flaps '+cls,String(shown),tip,biClk);
+  }
   // 3. charge state — last of the dots, because it only appears conditionally:
   //    an active dock op (charging = yellow bolt on a green disc; drain test =
   //    a dim pulse), else the watch-side charge state (ground truth). Like the

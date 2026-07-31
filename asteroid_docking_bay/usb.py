@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 
 from .util import _run, log
+from .flap import flaps
 from .adb import _adb_state, _wait_adb_state, adb_devices, adb_external_power
 
 
@@ -446,6 +447,10 @@ def uhubctl_set_power(location: str, port: int, on: bool) -> bool:
     Raises RuntimeError on uhubctl command failure.
     """
     action = "on" if on else "off"
+    # The reconnect tally is "since this port was last powered", so our own
+    # switching resets it — otherwise every shelve/cycle would inflate the
+    # badge and the one number that means something would stop meaning it.
+    flaps.reset(location, port)
     # Fast path: write the port's power directly via sysfs (no bus scan).
     # Powering ON only needs ONE side up — VBUS is on if either side is enabled,
     # and a watch (a USB2 device) enumerates on the USB2 side — so sysfs
@@ -484,6 +489,7 @@ def uhubctl_cycle(location: str, port: int, delay: int = 3) -> None:
     """Power-cycle a port in a single uhubctl invocation (off → delay → on).
     Used as the stale-node recovery primitive: unlike a plain off→on pair,
     the cycle makes this dock raise a proper connect event."""
+    flaps.reset(location, port)
     if _sysfs_set_power(location, port, False):
         time.sleep(delay)
         _sysfs_set_power(location, port, True)

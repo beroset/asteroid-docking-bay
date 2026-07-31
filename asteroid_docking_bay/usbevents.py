@@ -27,6 +27,7 @@ import subprocess
 import threading
 import time
 
+from .flap import flaps
 from .usb import port_device_info
 from .util import log
 
@@ -128,6 +129,12 @@ class UsbEventMonitor:
             if ev["action"] in ("add", "remove", "bind", "unbind"):
                 self._pending.set()
             if ev["action"] == "add":
+                # Count it before anything else can fail: this is the only
+                # record that the connection dropped and came back, and a
+                # cradle that flaps is invisible in every other view.
+                parts = split_dev(ev["dev"])
+                if parts:
+                    flaps.record(*parts)
                 threading.Thread(target=self._check_configured, args=(ev["dev"],),
                                  daemon=True).start()
         if not self._stop.is_set():
