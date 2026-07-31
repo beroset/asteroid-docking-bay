@@ -1621,3 +1621,22 @@ def test_a_wanze_run_claims_the_connection_cell(tmp_path):
     assert "voids the run" in out["run"], "the pill does not say why it matters"
     # The drain pill is untouched by this.
     assert "drain test" in out["drain"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_a_wanze_run_on_a_drain_test_still_names_the_drain_test(tmp_path):
+    """A wanze run is IMPLEMENTED as a drain test, so both pills claim the same
+    cell. The wanze one wins the label, but dropping the drain state entirely
+    would hide which consumers are under test."""
+    import json
+    h = tmp_path / "both.js"
+    h.write_text(_DOM_STUBS + JS +
+                 "\nconsole.log(JSON.stringify({both:mkadbrow({codename:'x',"
+                 "serial:'S9',adb:null,wanze_probing:{since:1000},"
+                 "drain:{active:true,features:{}}})}));"
+                 "\nprocess.exit(0);\n")
+    r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
+    assert r.returncode == 0, r.stderr[:400]
+    out = json.loads(r.stdout.strip().splitlines()[-1])["both"]
+    assert "wanze probing" in out, "the run must claim the label"
+    assert "drain test running" in out, "the drain test vanished from the tooltip"
