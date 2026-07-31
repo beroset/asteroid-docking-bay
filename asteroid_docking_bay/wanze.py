@@ -261,6 +261,11 @@ def stop(watch) -> None:
 def harvest(watch, clear: bool = False) -> dict:
     """Pull the trace and say what it means. `clear` truncates the on-watch
     buffer, which is only safe once the rows are actually in hand."""
+    # Take one closing sample BEFORE reading. Without it the trace ends at the
+    # last opportunistic sample and every second the watch slept after that is
+    # invisible — catfish's first real run lost ~41 minutes of standby that way,
+    # under-reporting the very thing the probe exists to measure.
+    watch.t.shell(f"systemctl start wanze.service", timeout=30)
     rc, out, _ = watch.t.shell(f"cat {REMOTE_LOG}", timeout=40)
     host_epoch = time.time()
     if rc != 0 or not out.strip():

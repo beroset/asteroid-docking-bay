@@ -126,6 +126,16 @@ def classify(rows: "list[dict]") -> dict:
         out["current_stdev_ua"] = round(statistics.stdev(vals))
     if sign is not None and disch:
         out["discharge_mean_ua"] = round(abs(statistics.fmean(disch)))
+        # How many samples that mean rests on. Without it a figure derived from
+        # a SINGLE reading is indistinguishable from a settled one — catfish's
+        # first undocked run produced exactly one discharging sample, and
+        # "5000 uA" read like a result rather than a single noisy datum.
+        out["discharge_samples"] = len(disch)
+        if len(disch) < 3:
+            out["discharge_note"] = (
+                f"only {len(disch)} discharging sample(s) — directional, not a "
+                "measurement. These readings are noisy enough that a short "
+                "window says little.")
     return out
 
 

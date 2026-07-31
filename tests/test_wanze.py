@@ -194,3 +194,32 @@ def test_no_source_anywhere_reports_where_it_looked(tmp_path, monkeypatch):
     assert w.find_src() is None
     err = w.install(object())
     assert err and "not found" in err and "nope" in err
+
+
+# --- the trailing gap -----------------------------------------------------
+
+def test_harvest_closes_the_window_before_reading():
+    """The trace ends at the last opportunistic sample, so sleep AFTER it is
+    invisible. catfish's first undocked run lost ~41 minutes of standby that
+    way — under-reporting the exact thing the probe exists to measure."""
+    from asteroid_docking_bay import wanze as w
+
+    calls = []
+
+    class _T:
+        def shell(self, cmd, timeout=0):
+            calls.append(cmd)
+            if cmd.startswith("cat "):
+                return (0, csv(row(1, 300.0), row(2, 600.0)), "")
+            return (0, "", "")
+
+    class _W:
+        serial = "S"
+        t = _T()
+
+    w.harvest(_W())
+    assert any("wanze.service" in c for c in calls), \
+        "harvest did not take a closing sample"
+    assert calls.index(next(c for c in calls if "wanze.service" in c)) < \
+        calls.index(next(c for c in calls if c.startswith("cat "))), \
+        "the closing sample must be taken BEFORE the read, or it is not in it"

@@ -184,3 +184,21 @@ def test_latest_drain_summaries_ignores_low_confidence_results(tmp_path, monkeyp
                           {"ts": 3600, "pct": 96}, {"ts": 7200, "pct": 92}], 4.0, 200)
     s = ev._latest_drain_summaries()
     assert "pike" in s and abs(s["pike"]["rate"] - 4.0) < 0.01
+
+
+def test_a_single_discharge_sample_is_labelled_not_presented_as_a_mean():
+    """One noisy reading must not read like a settled figure. catfish's first
+    undocked run yielded exactly one discharging sample and '5000 uA' looked
+    like a result."""
+    from asteroid_docking_bay.drainlog import classify
+    one = classify([{"current_ua": -5000, "capacity": 99,
+                     "status": "Discharging", "epoch": 1},
+                    {"current_ua": 0, "capacity": 100, "status": "Full",
+                     "epoch": 2}])
+    assert one["discharge_samples"] == 1
+    assert "directional, not a measurement" in one["discharge_note"]
+
+    many = classify([{"current_ua": -5000 - i, "capacity": 99,
+                      "status": "Discharging", "epoch": i} for i in range(6)])
+    assert many["discharge_samples"] == 6
+    assert "discharge_note" not in many, "a real sample count must not be hedged"
