@@ -14,7 +14,14 @@ log = logging.getLogger("asteroid-docking-bay")
 # ── Shell helpers ─────────────────────────────────────────────────────────────
 
 def _run(cmd, check=True, timeout=None) -> tuple[int, str, str]:
-    """Run a command string or list; return (rc, stdout, stderr)."""
+    """Run a command string or list; return (rc, stdout, stderr).
+
+    stdin is closed for every child. `adb shell` READS STDIN, and when a-d-b
+    is driven from a script or a heredoc it will happily swallow the caller's
+    remaining lines — the script then dies half-executed with no error at all.
+    Nothing here ever wants stdin, so closing it removes a whole class of
+    silent truncation rather than asking each caller to remember.
+    """
     try:
         result = subprocess.run(
             cmd,
@@ -22,6 +29,7 @@ def _run(cmd, check=True, timeout=None) -> tuple[int, str, str]:
             capture_output=True,
             text=True,
             timeout=timeout,
+            stdin=subprocess.DEVNULL,
         )
     except subprocess.TimeoutExpired:
         return 1, "", "timeout"

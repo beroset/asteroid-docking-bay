@@ -97,7 +97,7 @@ class UsbEventMonitor:
         try:
             self._proc = subprocess.Popen(
                 MONITOR_CMD, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                text=True, bufsize=1)
+                stdin=subprocess.DEVNULL, text=True, bufsize=1)
         except (OSError, ValueError) as exc:
             log.warning("udev monitoring unavailable, polling only: %s", exc)
             return False

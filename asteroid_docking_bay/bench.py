@@ -33,6 +33,10 @@ APP_NAME = "benchymark"
 #   * download the ipk attached to a release and drop it in.
 IPK_DIR = Path.home() / "Git/asteroid/build/tmp-qt6/deploy/ipk"
 APP_RESULTS = "/home/ceres/.local/share/benchymark/last-run.json"
+# The app publishes its live phase here. It is PERSISTENT dconf, so a value
+# left by the previous run matches instantly and a poller thinks the new run
+# has already reached that phase.
+PHASE_BEACON = "/desktop/asteroid/benchphase"
 # `pgrep -f benchymark` also matches the SHELL RUNNING THE PGREP, because its
 # own command line contains the word — so a liveness check could report the
 # app running when only the check was. The bracket makes the pattern fail to
@@ -81,6 +85,17 @@ def app_start(watch) -> "str | None":
     fallback keeps the shell alive a moment instead, which is enough for the
     child to detach on images without systemd-run.
     """
+    # A BLANKED PANEL PRESENTS NO FRAMES. benchymark counts frameSwapped, so a
+    # run on a dark screen records a complete, plausible result file of ZEROS —
+    # right sample counts, every average nil. DisplayBlanking keeps a lit
+    # screen lit; it does not wake a dark one, so the panel must be woken
+    # before the app starts or the whole run is worthless without saying so.
+    watch.t.shell(shlex.quote("mcetool --unblank-screen; mcetool --blank-prevent"),
+                  timeout=15)
+    # Clear the persistent phase beacon, or a stale value from the last run
+    # makes a poller believe this one is already mid-flight.
+    watch.user_cmd(f"HOME=/home/ceres dconf reset {PHASE_BEACON}", timeout=12)
+
     rc, out, err = watch.user_cmd(
         f"systemd-run --user --collect {APP_NAME}", timeout=20)
     if rc != 0:
@@ -122,6 +137,21 @@ def app_remove(watch) -> "str | None":
     rc, out, err = watch.t.shell(f"opkg remove {APP_NAME} --force-depends",
                                  timeout=60)
     return None if rc == 0 else f"opkg remove failed: {(err or out).strip()[:160]}"
+
+
+def all_zero(result: dict) -> bool:
+    """True when every phase averaged zero while still collecting samples.
+
+    That is the signature of a run against a BLANKED PANEL: the clock ran and
+    the sampler ticked, but no frame was ever presented. It looks like a
+    complete result and is worth nothing, so it has to be named rather than
+    quietly averaged into a campaign. Pure — see tests.
+    """
+    phases = result.get("phases") or []
+    if not phases:
+        return False
+    return (all((p.get("avg") or 0) == 0 for p in phases)
+            and any((p.get("samples") or 0) > 0 for p in phases))
 
 
 def app_results(watch) -> "dict | None":

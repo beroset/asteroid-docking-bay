@@ -140,6 +140,98 @@ def edges_of(faces):
     return out
 
 
+def face_normals(verts, faces):
+    """Unit normal per triangle."""
+    out = []
+    for a, b, c in faces:
+        ax, ay, az = verts[a]
+        bx, by, bz = verts[b]
+        cx, cy, cz = verts[c]
+        ux, uy, uz = bx - ax, by - ay, bz - az
+        vx, vy, vz = cx - ax, cy - ay, cz - az
+        nx, ny, nz = uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx
+        m = (nx * nx + ny * ny + nz * nz) ** 0.5 or 1.0
+        out.append((nx / m, ny / m, nz / m))
+    return out
+
+
+def feature_edges(verts, faces, angle_deg, min_len_pct=0.0):
+    """The edges a person would DRAW: creases and boundaries.
+
+    A wireframe does not want a simplified mesh's edges — it wants the model's
+    features. Every interior edge is shared by two triangles; the angle between
+    their normals says whether it is a crease (the hull chine, the deck edge,
+    a cabin corner) or merely interior tessellation across a smooth panel. Keep
+    the creases, drop the rest, and the result reads as a drawing rather than
+    as triangle soup.
+
+    This replaces DECIMATION, and that is the point. Both a slicer's reduction
+    and the vertex clustering below move or merge vertices, destroying the very
+    creases that make a boat look like a boat — which is why the decimated hull
+    lost its deck lines. Selecting instead of simplifying runs on the original
+    geometry and cannot introduce an artefact: every edge kept is an edge that
+    was really there.
+
+    Boundary edges (one adjacent face) are always kept — on a closed model like
+    3DBenchy there are none, but an open mesh would fall apart without them.
+
+    ANGLE ALONE IS NOT ENOUGH, and the reason is worth recording. 3DBenchy's
+    dihedral distribution is bimodal: 90% of its edges lie under 11 degrees
+    (the smooth hull), and the rest sit near 90. But that rest is ~20 000
+    edges, because the embossed #3DBenchy text, the nameplate and the overhang
+    features are all hard-edged detail and they dominate by COUNT. Raising the
+    threshold from 40 to 80 degrees only drops 20 497 to 18 812 — the knob does
+    nothing useful.
+    LENGTH is the discriminator that works. Those detail creases are tiny: the
+    median is 0.06% of the model, while the hull chine, deck edge and cabin
+    corners run 1-5%. Keeping long creases keeps the lines a person would draw
+    and discards the engraving.
+    """
+    import math
+
+    normals = face_normals(verts, faces)
+    adj = defaultdict(list)
+    for fi, (a, b, c) in enumerate(faces):
+        for u, v in ((a, b), (b, c), (c, a)):
+            adj[(min(u, v), max(u, v))].append(fi)
+
+    cos_limit = math.cos(math.radians(angle_deg))
+    kept = []
+    for edge, fs in adj.items():
+        if len(fs) == 1:
+            kept.append(edge)
+            continue
+        if len(fs) != 2:
+            continue                      # non-manifold: leave it out
+        n1, n2 = normals[fs[0]], normals[fs[1]]
+        dot = n1[0] * n2[0] + n1[1] * n2[1] + n1[2] * n2[2]
+        if dot < cos_limit:               # normals diverge -> a crease
+            kept.append(edge)
+
+    if min_len_pct > 0:
+        xs = [v[0] for v in verts]
+        ys = [v[1] for v in verts]
+        zs = [v[2] for v in verts]
+        span = max(max(xs) - min(xs), max(ys) - min(ys), max(zs) - min(zs)) or 1.0
+        floor = span * min_len_pct / 100.0
+
+        def _len(e):
+            a, b = verts[e[0]], verts[e[1]]
+            return ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2
+                    + (a[2] - b[2]) ** 2) ** 0.5
+
+        kept = [e for e in kept if _len(e) >= floor]
+    return kept
+
+
+def compact(verts, edges):
+    """Drop every vertex no kept edge touches, and renumber."""
+    used = sorted({i for e in edges for i in e})
+    remap = {old: new for new, old in enumerate(used)}
+    return ([verts[i] for i in used],
+            [(remap[a], remap[b]) for a, b in edges])
+
+
 def _join_cost(verts, a_end, b_start):
     """Squared distance between two chain endpoints — the length of the stray
     segment a join would draw."""
@@ -254,7 +346,12 @@ def walk_strips(edges, n_strips, verts=None):
             bucket.append(c[::-1] if best_rev else c)
             size += len(c)
         buckets.append(bucket)
-    return [[v for chain in b for v in chain] for b in buckets if b]
+    # Chains stay SEPARATE. Concatenating them into one polyline forced a
+    # stroke from the end of each to the start of the next, and on sparse
+    # feature-edge geometry those joins cross the whole model. PathMultiline
+    # draws a list of independent polylines in one path with no strokes
+    # between them, so the joins simply do not exist.
+    return [b for b in buckets if b]
 
 
 def main():
@@ -266,16 +363,32 @@ def main():
     ap.add_argument("--scale", type=int, default=1000)
     ap.add_argument("--target-verts", type=int, default=0,
                     help="decimate to roughly this many vertices (0 = keep all)")
+    ap.add_argument("--min-edge-pct", type=float, default=0.0,
+                    help="with --feature-angle: drop creases shorter than this "
+                         "percent of the model's size. This is what separates "
+                         "structure from engraving; angle alone cannot.")
+    ap.add_argument("--feature-angle", type=float, default=0.0,
+                    help="keep only edges whose faces diverge by more than this "
+                         "many degrees (0 = every edge). Selecting features "
+                         "beats decimating: it runs on the original geometry "
+                         "and cannot invent an artefact.")
     args = ap.parse_args()
 
     tris = read_binary_stl(args.stl)
     verts, faces = dedupe(tris)
-    if args.target_verts:
-        verts, faces = cluster(verts, faces, args.target_verts)
-    verts = normalise(verts, args.scale)
-    edges = edges_of(faces)
+    if args.feature_angle:
+        # No decimation at all: pick the edges that matter from the real model.
+        edges = feature_edges(verts, faces, args.feature_angle,
+                              args.min_edge_pct)
+        verts, edges = compact(verts, edges)
+        verts = normalise(verts, args.scale)
+    else:
+        if args.target_verts:
+            verts, faces = cluster(verts, faces, args.target_verts)
+        verts = normalise(verts, args.scale)
+        edges = edges_of(faces)
     strips = walk_strips(edges, args.strips, verts)
-    segments = sum(len(s) - 1 for s in strips)
+    segments = sum(len(ch) - 1 for b in strips for ch in b)
 
     flat = [c for v in verts for c in v]
     with open(args.out, "w") as fh:
@@ -289,8 +402,11 @@ def main():
         fh.write(".pragma library\n")
         fh.write(f"var SCALE = {args.scale};\n")
         fh.write("var V = [" + ",".join(str(c) for c in flat) + "];\n")
-        fh.write("var S = [" + ",".join("[" + ",".join(str(i) for i in s) + "]"
-                                        for s in strips) + "];\n")
+        # S[bucket][chain][vertex-index] — one bucket per ShapePath (colour),
+        # each holding independent chains for a PathMultiline.
+        fh.write("var S = [" + ",".join(
+            "[" + ",".join("[" + ",".join(str(i) for i in ch) + "]"
+                           for ch in b) + "]" for b in strips) + "];\n")
 
     print(f"{len(tris)} triangles → {len(verts)} vertices, {len(edges)} edges, "
           f"{len(strips)} strips, {segments} segments", file=sys.stderr)

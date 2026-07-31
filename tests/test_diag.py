@@ -654,3 +654,89 @@ def test_a_commanded_reboot_reads_as_booting_not_reconnecting():
     ls_cold = {"booting_since": now, "last_live_ts": now - 60,
                "safe_off_ts": now - 30}
     assert _boot_state(ls_cold, True) == "booting"
+
+
+# ── kido-run tooling: the defects that corrupt results silently ─────────────
+
+def test_all_zero_names_a_run_against_a_blanked_panel():
+    """A blanked panel presents no frames, so benchymark records a COMPLETE
+    result file with correct sample counts and every average nil. It looks
+    like a finished run and is worth nothing.
+
+    This is the defect that would have invalidated the whole kido campaign —
+    four runs came back this way before it was spotted. Planted-bug: drop the
+    samples>0 term and a watch that never started reads as blanked."""
+    from asteroid_docking_bay.bench import all_zero
+    dark = {"phases": [{"phase": "IDLE", "avg": 0, "samples": 9},
+                       {"phase": "SCALE", "avg": 0, "samples": 9}]}
+    assert all_zero(dark) is True
+    real = {"phases": [{"phase": "IDLE", "avg": 60, "samples": 9},
+                       {"phase": "BENCHY", "avg": 0, "samples": 9}]}
+    assert all_zero(real) is False          # one dead phase is not a dark run
+    assert all_zero({"phases": []}) is False
+    # never-started: zeros but NO samples — not the blanked-panel signature
+    assert all_zero({"phases": [{"phase": "IDLE", "avg": 0, "samples": 0}]}) is False
+
+
+def test_bench_start_wakes_the_panel_and_clears_the_beacon():
+    """Both are preconditions for a measurable run: a dark panel yields zeros,
+    and the phase beacon is persistent dconf so a stale value makes a poller
+    think the new run is already mid-flight. Planted-bug: remove either call
+    and this fails."""
+    import inspect
+    from asteroid_docking_bay import bench
+    src = inspect.getsource(bench.app_start)
+    assert "unblank-screen" in src
+    assert "dconf reset" in src and "PHASE_BEACON" in src
+
+
+def test_drainlog_learns_the_sign_instead_of_assuming_it():
+    """The current sign convention is NOT shared between watches: in the
+    identical state (Full, on charge) beluga reports +488 uA and sawfish -468.
+    Comparing raw sign across watches is therefore meaningless, so the
+    discharge direction is taken from rows the watch itself marked
+    Discharging. Planted-bug: hardcode a sign and one of these fails."""
+    from asteroid_docking_bay.drainlog import classify
+    neg = classify([{"epoch": 1, "current_ua": -400, "capacity": 90, "status": "Discharging", "temp": None},
+                    {"epoch": 6, "current_ua": -420, "capacity": 90, "status": "Discharging", "temp": None}])
+    pos = classify([{"epoch": 1, "current_ua": 400, "capacity": 90, "status": "Discharging", "temp": None},
+                    {"epoch": 6, "current_ua": 420, "capacity": 90, "status": "Discharging", "temp": None}])
+    assert neg["discharge_sign"] == -1 and pos["discharge_sign"] == 1
+    # magnitude is sign-independent, which is the whole point
+    assert neg["discharge_mean_ua"] == pos["discharge_mean_ua"] == 410
+
+
+def test_drainlog_calls_a_dead_sensor_a_dead_sensor():
+    """nemo reports a flat 0 forever. A log full of zeros reads as 'no drain'
+    when it means 'no instrument' — and that mistake would silently make a
+    watch look like the best performer in a battery comparison."""
+    from asteroid_docking_bay.drainlog import classify
+    d = classify([{"epoch": 1, "current_ua": 0, "capacity": 100, "status": "Full", "temp": None},
+                  {"epoch": 6, "current_ua": 0, "capacity": 100, "status": "Full", "temp": None}])
+    assert d["sensor"] == "always-zero" and "no instrument" in d["note"]
+    assert classify([])["sensor"] == "absent"
+
+
+def test_drainlog_reports_the_spread_not_just_a_mean():
+    """Readings are genuinely noisy — sawfish gave -1560, -156 and +936 inside
+    fifteen seconds. A mean without a spread invites treating a short window as
+    a settled figure, which is exactly the mistake the tooling exists to
+    prevent."""
+    from asteroid_docking_bay.drainlog import classify
+    d = classify([{"epoch": 1, "current_ua": -1560, "capacity": 100, "status": "Full", "temp": None},
+                  {"epoch": 6, "current_ua": -156, "capacity": 100, "status": "Full", "temp": None},
+                  {"epoch": 11, "current_ua": 936, "capacity": 100, "status": "Full", "temp": None}])
+    assert d["sensor"] == "usable"
+    assert d["current_stdev_ua"] > 1000        # the noise is visible, not hidden
+    assert d["span_s"] == 10
+
+
+def test_drainlog_parse_survives_a_truncated_row():
+    """The watch may be mid-shutdown when it writes the last line. One ragged
+    row must not lose the whole trace."""
+    from asteroid_docking_bay.drainlog import parse
+    rows = parse("epoch,current_ua,capacity,status,temp,gauge\n"
+                 "100,-400,90,Discharging,320,battery\n"
+                 "105,-41\n"
+                 "110,-410,89,Discharging,321,battery\n")
+    assert len(rows) == 2 and rows[-1]["capacity"] == 89

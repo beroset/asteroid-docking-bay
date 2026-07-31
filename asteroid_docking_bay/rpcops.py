@@ -40,7 +40,7 @@ from .config import (_config_lock, _store_smart_verdict, allocate_ssh_ip,
 from .usb import (_sysfs_hub_scan, _sysfs_path_to_serial_map,
                   _sysfs_serial_at, xhci_slots,
                   test_port_power_switching, uhubctl_cycle, uhubctl_set_power)
-from . import wifi
+from . import drainlog, wifi
 from .watchctl import BACKUP_ROOT, DIAG_ROOT, Watch
 from .ops import ChargeOp, DrainOp, WorkbenchOp, _flash_one_watch
 from .fastboot import (_switch_ssh_to_adb, _usb_moded_switch_failed,
@@ -617,6 +617,27 @@ def _wifi_provision(args):
     if not ap:
         return {"ok": False, "error": f"no saved credential for {ssid!r}"}
     return Watch(serial).provision_wifi(ap)
+
+
+@DISPATCH.op("watch.drainlog")
+def _watch_drainlog(args):
+    """Start / stop / fetch the on-watch battery-current sampler.
+
+    The point is that it keeps sampling while the watch is OFF CHARGE and
+    unreachable: start it, cut the port, let the watch sit, restore the port,
+    fetch. Reading current over USB measures the charger, not the battery.
+    """
+    serial, action = args["serial"], args.get("action")
+    w = _watch(serial)
+    if action == "start":
+        err = drainlog.start(w, int(args.get("interval") or drainlog.DEFAULT_INTERVAL))
+        return {"ok": not err, **({"error": err} if err else {})}
+    if action == "stop":
+        drainlog.stop(w)
+        return {"ok": True}
+    if action == "fetch":
+        return drainlog.fetch(w)
+    return {"ok": False, "error": f"unknown action: {action}"}
 
 
 @DISPATCH.op("watch.session_restart")
@@ -1251,6 +1272,14 @@ def _bench_app(argsd):
         d = bench.app_results(w)
         if not d:
             return {"ok": False, "error": "no completed run on this watch yet"}
+        if bench.all_zero(d):
+            # Refuse to hand back a run that measured a dark screen. Silently
+            # returning it is how a campaign ends up averaging nothing.
+            return {"ok": False,
+                    "error": ("every phase read 0 fps with samples collected — "
+                              "the panel was blanked for this run, so it "
+                              "measured nothing. Wake the screen and re-run."),
+                    **d}
         return {"ok": True, **d}
     return {"ok": False, "error": f"unknown action: {action}"}
 

@@ -203,3 +203,35 @@ def test_web_template_has_no_raw_newline_escapes():
     assert not hits, (
         "single-backslash-n in the template — this becomes a real newline at "
         "import and breaks the JS string containing it:\n  " + "\n  ".join(hits))
+
+
+def test_no_child_process_inherits_stdin():
+    """`adb shell` READS STDIN. A child that inherits it will swallow the
+    caller's remaining input — when a-d-b is driven from a script or a
+    heredoc, the script then dies half-executed with no error whatsoever.
+
+    Every subprocess this package spawns must close stdin. Planted-bug: drop
+    stdin=subprocess.DEVNULL from _run and this fails.
+    """
+    import ast
+    from pathlib import Path
+
+    pkg = Path(__file__).resolve().parent.parent / "asteroid_docking_bay"
+    offenders = []
+    for path in sorted(pkg.glob("*.py")):
+        tree = ast.parse(path.read_text())
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            fn = node.func
+            name = getattr(fn, "attr", None)
+            if name not in ("run", "Popen"):
+                continue
+            mod = getattr(getattr(fn, "value", None), "id", None)
+            if mod != "subprocess":
+                continue
+            if not any(k.arg == "stdin" for k in node.keywords):
+                offenders.append(f"{path.name}:{node.lineno}")
+    assert not offenders, (
+        "subprocess call(s) inheriting stdin — adb shell will eat the "
+        "caller's input:\n  " + "\n  ".join(offenders))
