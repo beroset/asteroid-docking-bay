@@ -1563,3 +1563,61 @@ def test_every_tab_fetches_the_same_way_however_it_is_reached():
     assert not missing and not extra, (
         f"tab fetches disagree — only on open: {sorted(missing)}; "
         f"only on switch: {sorted(extra)}")
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_wanze_shows_as_a_bug_in_the_three_places_it_matters(tmp_path):
+    """The probe has to be visible without being another row of clutter, so it
+    reuses slots that were already redundant: the battery-full tick (the gauge
+    beside it already says full) and the trailing last-seen text."""
+    import json
+    h = tmp_path / "wanze.js"
+    h.write_text(_DOM_STUBS + JS +
+                 "\nconst full=p=>mkstrip(Object.assign("
+                 "{codename:'x',serial:'S9',adb:'device',charge_status:'Full'},p),24);"
+                 "\nconst away=p=>mkstrip(Object.assign("
+                 "{codename:'x',serial:'S9',adb:null,last_live_ts:1000},p),24);"
+                 "\nconsole.log(JSON.stringify({"
+                 "plainFull:full({}),bugFull:full({wanze:true}),"
+                 "plainAway:away({}),bugAway:away({wanze_known:true})}));"
+                 "\nprocess.exit(0);\n")
+    r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
+    assert r.returncode == 0, r.stderr[:400]
+    out = json.loads(r.stdout.strip().splitlines()[-1])
+
+    # Without wanze the old behaviour is untouched.
+    assert "&#10003;" in out["plainFull"], "the plain full-battery tick is gone"
+    assert 'class="lastseen"' in out["plainAway"], "plain last-seen text is gone"
+
+    # With wanze the tick becomes a green bug, and says both things.
+    assert "&#10003;" not in out["bugFull"], "the tick should be replaced, not joined"
+    assert 'class="sdot on"' in out["bugFull"], "the bug should keep the green dot styling"
+    assert "wanze detected" in out["bugFull"] and "battery full" in out["bugFull"]
+
+    # An ABSENT watch carrying the probe shows an amber bug instead of the age,
+    # which is exactly when the probe is working and nothing else would say so.
+    assert 'class="sdot warn wanze"' in out["bugAway"], "absent+wanze is not an amber bug"
+    assert "wanze present, last seen" in out["bugAway"]
+    assert 'class="lastseen"' not in out["bugAway"], "the age text should be replaced"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_a_wanze_run_claims_the_connection_cell(tmp_path):
+    """A run in progress must be impossible to miss — using the watch for
+    anything else voids hours of measurement."""
+    import json
+    h = tmp_path / "probing.js"
+    h.write_text(_DOM_STUBS + JS +
+                 "\nconsole.log(JSON.stringify({"
+                 "run:mkadbrow({codename:'x',serial:'S9',adb:null,"
+                 "wanze_probing:{since:1000}}),"
+                 "drain:mkadbrow({codename:'x',serial:'S9',adb:null,"
+                 "drain:{active:true}})}));"
+                 "\nprocess.exit(0);\n")
+    r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
+    assert r.returncode == 0, r.stderr[:400]
+    out = json.loads(r.stdout.strip().splitlines()[-1])
+    assert "wanze probing" in out["run"]
+    assert "voids the run" in out["run"], "the pill does not say why it matters"
+    # The drain pill is untouched by this.
+    assert "drain test" in out["drain"]

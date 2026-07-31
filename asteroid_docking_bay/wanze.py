@@ -276,3 +276,93 @@ def harvest(watch, clear: bool = False) -> dict:
     if clear:
         watch.t.shell(shlex.quote(f"rm -f {REMOTE_LOG}"), timeout=20)
     return {**analyse(rows, host_epoch), "first": rows[0], "last": rows[-1]}
+
+
+# --- presence and run state -----------------------------------------------
+# Two different questions, deliberately kept apart:
+#   "is wanze on this watch?"   — cheap, cached, and remembered while it is away
+#   "is a measurement running?" — persisted, because forgetting it ruins the run
+
+_present: "dict[str, tuple[float, bool]]" = {}     # serial -> (checked_ts, present)
+_PRESENT_TTL = 600
+_known: "dict[str, bool] | None" = None            # lazily mirrored from the registry
+
+
+def _load_known() -> "dict[str, bool]":
+    """What the registry remembers about wanze, mirrored once into memory.
+
+    Read once rather than per row: the status document is rebuilt on every
+    refresh and every port would otherwise deep-copy a registry record."""
+    global _known
+    if _known is None:
+        from .registry import registry
+        _known = {}
+        for rec in registry.all():
+            val = (rec.get("fields") or {}).get("wanze")
+            if val is not None:
+                _known[rec["serial"]] = bool(val)
+    return _known
+
+
+def detect(serial: "str | None", force: bool = False) -> "bool | None":
+    """Is wanze installed on this watch? Takes a SERIAL, not a Watch, because
+    the caller is the status pass, which has serials and no Watch objects.
+
+    Cached hard. This runs while the status document is rebuilt, and an adb
+    round trip per watch per refresh would be a real cost for a fact that
+    changes about twice a year. On an unreachable watch the previous answer
+    stands rather than being downgraded to "no" — absence of evidence here is
+    a dropped link, not a removed probe.
+
+    Records the answer in the registry so it outlives the watch leaving the
+    dock, which is the point: the row has to say "that one is carrying a
+    probe" while the watch is in a drawer.
+    """
+    from .adb import adb_shell
+    if not serial:
+        return None
+    hit = _present.get(serial)
+    if hit and not force and time.time() - hit[0] < _PRESENT_TTL:
+        return hit[1]
+    rc, out, _ = adb_shell(serial, f'"test -x {REMOTE_BIN} && echo yes"')
+    if rc != 0:
+        return hit[1] if hit else None
+    found = out.strip() == "yes"
+    _present[serial] = (time.time(), found)
+    if _load_known().get(serial) != found:
+        _load_known()[serial] = found
+        from .registry import registry
+        registry.note(serial, source="wanze", wanze=found)
+    return found
+
+
+def known(serial: "str | None") -> bool:
+    """Was wanze ever seen on this watch? Answers for an ABSENT watch, from the
+    registry rather than from a live read."""
+    return bool(serial and _load_known().get(serial))
+
+
+def probing(cfg: dict, serial: "str | None") -> "dict | None":
+    """The marker for a measurement run in progress on this watch.
+
+    Persisted in the config, not held in memory like the drain task, because a
+    wanze run spans hours and a service restart mid-run must not quietly drop
+    the one indicator that says 'do not touch this watch'."""
+    if not serial:
+        return None
+    return (cfg.get("wanze_probing") or {}).get(serial)
+
+
+def probing_set(serial: str, on: bool, note: str = "") -> dict:
+    """Start or clear the run marker."""
+    from .config import _config_lock, load_config, save_config
+    with _config_lock:
+        cfg = load_config()
+        runs = cfg.setdefault("wanze_probing", {})
+        if on:
+            runs[serial] = {"since": time.time(), "note": note}
+        else:
+            runs.pop(serial, None)
+        save_config(cfg)
+    log.info("%s: wanze probing %s", serial, "started" if on else "cleared")
+    return {"ok": True, "probing": on}

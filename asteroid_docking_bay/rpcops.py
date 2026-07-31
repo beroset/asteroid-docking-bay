@@ -1313,6 +1313,12 @@ def _wanze_probe(argsd):
     if action == "harvest":
         d = wanze.harvest(w, clear=bool(argsd.get("clear")))
         return d
+    # The run marker. Persisted rather than held in memory like the drain task:
+    # a wanze run spans hours, and a service restart mid-run must not drop the
+    # one indicator saying "leave this watch alone".
+    if action in ("probing_start", "probing_stop"):
+        return wanze.probing_set(serial, action == "probing_start",
+                                 argsd.get("note") or "")
     return {"ok": False, "error": f"unknown action: {action}"}
 
 

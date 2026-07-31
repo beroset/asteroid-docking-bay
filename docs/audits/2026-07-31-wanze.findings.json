@@ -42,7 +42,10 @@
       "evidence": "At the same instant, /sys/class/power_supply/battery reported capacity=50 while nanohub_fuelgauge-0 reported 100.",
       "impact": "a-d-b and wanze both resolve nanohub_fuelgauge-* first, so they agree with each other; if 50 is the true figure they are wrong together, which is the least visible kind of wrong.",
       "fix": "NOT RESOLVED \u2014 watch-side question, belongs to mo.",
-      "status": "open"
+      "status": "open",
+      "mo_hypothesis": "moWerk, 2026-07-31: 'since we got aware of the two value issue, it was always the one that did not show 50% that was correct. since catfish has an MCU for the secondary lcd, i think the good value is the reading from that mcu. no idea frankly.' \u2014 offered explicitly as a guess, not a finding.",
+      "consequence_if_true": "nanohub_fuelgauge-* IS the MCU gauge, and both a-d-b and wanze already resolve it first \u2014 so current behaviour would be correct by luck rather than by evidence. The preference order was chosen before this was known.",
+      "how_to_settle_it": "Watch a full charge/discharge on catfish and see which node tracks reality. wanze records the gauge NAME in every row, so a trace taken now can be re-read later against whichever node turns out to be right."
     },
     {
       "id": "W4",

@@ -10,6 +10,7 @@ import time
 
 from .util import log
 from .flap import flaps
+from . import wanze as wanze_mod
 from .adb import (_adb_state, _resolve_conn_state, adb_devices, adb_shell,
                   battery_and_screen, get_watch_codename)
 from .boottime import measure_boot
@@ -703,6 +704,11 @@ def _web_status_data(cfg: dict) -> list[dict]:
                           or (drain and drain["active"])
                           or (workbench and workbench["active"]))
             _maybe_self_heal_fake_power(slot, loc, port_num, wedged, busy, cfg)
+            # Only probe a watch that is actually reachable and idle; the read
+            # is cached for ten minutes, so this costs one adb call per watch
+            # per TTL rather than one per refresh.
+            wanze_here = (wanze_mod.detect(serial)
+                          if adb_state == "device" and not busy else None)
             if not busy:
                 _maybe_align_usb_mode(serial, adb_state, cfg)
             hub_ports.append({
@@ -729,6 +735,12 @@ def _web_status_data(cfg: dict) -> list[dict]:
                 "charge_pct": charge_pct, "charge_target": charge_target,
                 "charge_losing": charge_losing,
                 "drain": drain, "drain_last": drain_last,
+                # wanze: whether the probe is on this watch, and whether a
+                # measurement run is under way. `wanze_known` answers from the
+                # registry so an ABSENT watch still shows it is carrying one.
+                "wanze": wanze_here,
+                "wanze_known": wanze_mod.known(serial),
+                "wanze_probing": wanze_mod.probing(cfg, serial),
                 "workbench": workbench,
                 "socket": sockets.get(port_str),
                 "excluded": excludes.get(port_str),
