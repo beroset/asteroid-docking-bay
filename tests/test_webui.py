@@ -1643,28 +1643,30 @@ def test_a_wanze_run_on_a_drain_test_still_names_the_drain_test(tmp_path):
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
-def test_an_ssh_watch_without_an_allocation_shows_the_shared_default(tmp_path):
-    """A watch with no allocated address is not address-less — it is on the
-    shared 192.168.2.15 with every other watch that came up that way. Showing
-    nothing reads as "a-d-b lost it"; showing the address, marked as shared,
-    says what is actually true and why it may be unreachable."""
+def test_an_ssh_watch_without_an_allocation_reads_as_an_error(tmp_path):
+    """We do not have an address for it. It is EXPECTED on the shared default,
+    but nothing verified that, and printing the guess would make a row nothing
+    can reach look identical to a working one — which is how the fault went
+    unnoticed. So the state renders as an error and the guess stays in the
+    tooltip, labelled."""
     import json
     h = tmp_path / "sshpill.js"
     h.write_text(_DOM_STUBS + JS +
                  "\nconsole.log(JSON.stringify({"
                  "own:mkadb('ssh',null,'asteroidos','S9','192.168.13.40','dory'),"
-                 "stray:mkadb('ssh',null,'asteroidos','S9',null,'dory')}));"
+                 "bad:mkadb('ssh',null,'asteroidos','S9',null,'dory')}));"
                  "\nprocess.exit(0);\n")
     r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
     assert r.returncode == 0, r.stderr[:400]
     out = json.loads(r.stdout.strip().splitlines()[-1])
 
     assert "192.168.13.40" in out["own"] and "its own address" in out["own"]
-    assert "stray" not in out["own"], "an allocated watch must not be marked shared"
+    assert "noaddr" not in out["own"], "a reachable watch must not read as an error"
 
-    # The one that was showing a bare pill.
-    assert "192.168.2.15" in out["stray"], "the shared default address is not shown"
-    assert "SHARED" in out["stray"], "nothing says the address is shared"
-    assert 'class="cbadge ssh stray"' in out["stray"]
-    # And the click must open the Network Center at the address it is really on.
-    assert "192.168.2.15" in out["stray"].split("onclick=")[1].split("title=")[0]
+    # The broken one must LOOK broken.
+    assert 'class="cbadge ssh noaddr"' in out["bad"]
+    assert "no address" in out["bad"], "the error state is not stated"
+    # The unverified guess must not be presented as the watch's address.
+    assert "unverified" in out["bad"], "the guess is not labelled as a guess"
+    assert "192.168.2.15" not in out["bad"].split("onclick=")[1].split("title=")[0], \
+        "an unverified address was passed to the Network Center as fact"

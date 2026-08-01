@@ -163,7 +163,7 @@ _WEB_TEMPLATE = """\
     .sdot.chg{border-color:#238636;background:#238636;color:#f2cc60}   /* charging: yellow bolt on green */
     .sdot.drain{border-color:#3d4756;color:#8b949e;animation:drainpulse 1.4s ease-in-out infinite}
     .sdot.flaps{font-size:10px;font-weight:700;font-variant-numeric:tabular-nums}
-    .cbadge.ssh.stray{border-color:#d29922}
+    .cbadge.ssh.noaddr{border-color:#f85149;color:#f85149}
     .sdot.wanze{border-color:#d29922;color:#d29922}
     .cbadge.wanze{border-color:#8957e5;color:#d2a8ff;animation:drainpulse 1.4s ease-in-out infinite}
     .sdot[onclick]{cursor:pointer}
@@ -778,17 +778,15 @@ function mkadb(adb,fbprod,os,serial,sshIp,name){
     return `<span class="cbadge adb" title="${ttl}">${logo}ADB${ser}</span>`;
   }
   if(adb==='ssh'){
-    // A watch with no allocated address is NOT address-less — it is on the
-    // shared default, along with every other watch that came up this way. So
-    // show that address rather than nothing, and colour it to say it is the
-    // shared one: an allocated address is the watch's own, the default is a
-    // place several watches shadow each other and only one is reachable.
-    const eff=sshIp||USB_SSH_IP, own=!!sshIp;
-    const ipl=` <span class="${own?'dim':'warn'}">${esc(eff)}</span>`;
-    const ttl=own
-      ?`SSH/developer USB mode at ${esc(eff)} (its own address) — click for network details`
-      :`SSH/developer USB mode on the SHARED default ${esc(USB_SSH_IP)} — it has no address of its own yet, so any other watch that comes up this way shadows it and only one is reachable. a-d-b relocates it automatically; if this sticks, the host has not finished DHCP on that link.`;
-    return `<button class="cbadge ssh${own?'':' stray'}" onclick="openNC('${esc(serial||'')}','${nm}',event,'${esc(eff)}','ssh')" title="${ttl}">${AOSLOGO}SSH${ipl}</button>`;
+    // An allocated address is one a-d-b handed out and can reach. WITHOUT one
+    // we do not have an address at all: the watch is expected on the shared
+    // default, but that is an assumption we have not verified, and printing it
+    // would make a broken row look exactly like a working one. So this state
+    // is rendered as what it is — an error — and the guess stays in the
+    // tooltip where it is labelled as a guess.
+    if(sshIp)
+      return `<button class="cbadge ssh" onclick="openNC('${esc(serial||'')}','${nm}',event,'${esc(sshIp)}','ssh')" title="SSH/developer USB mode at ${esc(sshIp)} (its own address) — click for network details">${AOSLOGO}SSH${` <span class="dim">${esc(sshIp)}</span>`}</button>`;
+    return `<button class="cbadge ssh noaddr" onclick="openNC('${esc(serial||'')}','${nm}',event,'','ssh')" title="Enumerated in SSH/developer mode but a-d-b has NO usable address for it, so no command can reach it. It was never given an address of its own, so it should be on the shared default ${USB_SSH_IP} — but that is unverified, and it has not answered there. Typically the host has not completed DHCP on this link (check that the interface got an IPv4 address), or another watch is shadowing the shared address.">${AOSLOGO}SSH <b>no address</b></button>`;
   }
   if(adb==='fastboot'){const l=fbprod?`fastboot: ${esc(fbprod)}`:'fastboot';return `<span class="cbadge fb" title="watch is in the bootloader (fastboot) — flash/backup only, no ADB or watch functions">${l}</span>`;}
   if(adb)return `<span class="dim">${esc(adb)}</span>`;
