@@ -174,3 +174,47 @@ def test_a_udev_add_event_is_counted():
     # duplicate of the same plug and must not inflate the count.
     assert flaps.reconnects("1-3", 7) == 1, \
         "udev add events are not reaching the counter (or interfaces double-count)"
+
+
+# --- re-enumerations we cause ourselves -----------------------------------
+
+def test_an_expected_reenumeration_is_not_shameful():
+    """A USB-mode swap (adb <-> ssh) drops the gadget and re-adds it. At the
+    udev level that is an ordinary `add`; only the code that CAUSED it knows
+    otherwise, so doing the rig's job must not shame a healthy cradle."""
+    f = FlapCounter()
+    f.record("1-3", 1)                  # the dock itself
+    f.expect("1-3", 1)                  # we are about to switch modes
+    f.record("1-3", 1)                  # ...and here is its re-enumeration
+    assert f.reconnects("1-3", 1) == 0, "a mode swap was counted as a fault"
+
+
+def test_only_the_announced_add_is_excused():
+    """The grace covers exactly one add. A genuine drop straight afterwards
+    must still count, or one switch would blind the port indefinitely."""
+    f = FlapCounter()
+    f.record("1-3", 1)
+    f.expect("1-3", 1)
+    f.record("1-3", 1)                  # excused
+    f.record("1-3", 1)                  # real
+    f.record("1-3", 1)                  # real
+    assert f.reconnects("1-3", 1) == 2
+
+
+def test_expectations_do_not_leak_to_other_ports():
+    f = FlapCounter()
+    f.expect("1-3", 1)
+    f.record("1-3", 2)
+    f.record("1-3", 2)
+    assert f.reconnects("1-3", 2) == 1, "a neighbour consumed the grace"
+
+
+def test_a_power_change_drops_a_stale_expectation():
+    """A switch that was announced but never happened would otherwise swallow
+    a real reconnect much later, and the badge would under-report forever."""
+    f = FlapCounter()
+    f.expect("1-3", 1)                  # announced...
+    f.reset("1-3", 1)                   # ...but the port got power-cycled instead
+    f.record("1-3", 1)                  # the dock after power
+    f.record("1-3", 1)                  # a genuine drop
+    assert f.reconnects("1-3", 1) == 1, "a stale expectation ate a real reconnect"

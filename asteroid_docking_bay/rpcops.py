@@ -712,7 +712,25 @@ def _ssh_switch_adb(args):
     ip = (ssh_reach_ip(cfg, serial)
           or (ssh_ip_for_serial(cfg, serial) if serial else None)
           or USB_SSH_IP)
+    if serial:
+        _expect_mode_reenumeration(serial)
     return _switch_ssh_to_adb(ip)
+
+
+def _expect_mode_reenumeration(serial: str) -> None:
+    """Mark the re-enumeration a USB-mode switch is about to cause, so the
+    connection badge does not count it as a cradle fault.
+
+    Resolved from sysfs rather than from adb: the switch works in both
+    directions, and coming BACK from SSH there is no adb link to ask."""
+    from .flap import flaps
+    from .usb import _parse_hub_port_path, _sysfs_path_to_serial_map
+    for path, found in _sysfs_path_to_serial_map({serial}).items():
+        if found != serial:
+            continue
+        parsed = _parse_hub_port_path(path)
+        if parsed:
+            flaps.expect(*parsed)
 
 
 @DISPATCH.op("watch.switch_ssh")
@@ -733,6 +751,11 @@ def _watch_switch_ssh(args):
         cfg = load_config()
         ip = allocate_ssh_ip(cfg, serial)
         save_config(cfg)
+    # The mode swap drops the gadget and brings it back under a different
+    # product ID. At the udev level that is an `add` like any other, so tell
+    # the reconnect counter it is ours — otherwise doing the rig's job puts
+    # shame on a perfectly good cradle.
+    _expect_mode_reenumeration(serial)
     _run(f"adb -s {serial} shell usb_moded_util -n set:ip,{ip}",
          check=False, timeout=10)
     _, out, err = _run(f"adb -s {serial} shell usb_moded_util -s developer_mode",
