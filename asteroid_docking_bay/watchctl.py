@@ -562,7 +562,7 @@ class Watch:
         per-feature drain attribution. WiFi/BT come from connmanctl (same source
         the CC reads); AoD from its dconf key (default-on, so empty == on). Any
         field is None when unreadable."""
-        feats = {"wifi": None, "bt": None, "aod": None}
+        feats = {"wifi": None, "bt": None, "aod": None, "aod_toggle": None}
         _, out, _ = self.t.shell('"connmanctl technologies 2>/dev/null"', timeout=10)
         ctype = None
         for line in out.splitlines():
@@ -578,12 +578,26 @@ class Watch:
         rc, aod, _ = self.user_cmd(
             "HOME=/home/ceres dconf read /org/asteroidos/settings/always-on-display",
             timeout=10)
-        # Only trust a successful read: dconf returns rc 0 with empty output for
-        # an unset key (== default ON), but a failed read (unreachable watch, su
-        # error) also yields empty — and reporting that as "on" mislabels the
-        # per-feature drain attribution (audit C2). Leave it None on failure.
+        # The toggle is what the user ASKED for, and it is not evidence that
+        # anything is drawing. There is no gsettings schema for this key (only
+        # the weather ones are installed), so an unset key has no default at
+        # all — the "on" shown in the UI is declared in QML. Unset therefore
+        # means NOBODY EVER WROTE IT, which is exactly the state in which MCE
+        # was never told and nothing renders in low-power mode.
+        #
+        # This used to read `empty == default ON`, so a-d-b recorded aod:True
+        # for precisely the watches where AoD provably was not running, and
+        # every drain figure attributed to AoD was attributed to something that
+        # was not happening. Report the toggle as-is, unset included.
         if rc == 0:
-            feats["aod"] = aod.strip().lower() != "false"
+            val = aod.strip().lower()
+            feats["aod_toggle"] = None if not val else val != "false"
+        # MCE is the authority on whether low-power mode is actually performed.
+        rc2, mce, _ = self.t.shell(
+            shlex.quote("mcetool 2>/dev/null | grep '^Use low power mode'"),
+            timeout=10)
+        if rc2 == 0 and ":" in mce:
+            feats["aod"] = mce.split(":", 1)[1].strip().lower().startswith("enabled")
         return feats
 
     def last_recording_path(self) -> Path:

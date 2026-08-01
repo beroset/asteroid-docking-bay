@@ -30,6 +30,7 @@ import time
 
 from . import bench
 from . import wanze
+from . import aodcheck
 from .util import _run, log
 from .adb import _adb_state, adb_devices, get_watch_codename
 from .config import (_config_lock, _store_smart_verdict, allocate_ssh_ip,
@@ -1286,10 +1287,47 @@ def _bench_app(argsd):
     return {"ok": False, "error": f"unknown action: {action}"}
 
 
+# The 'before' capture per serial, for aod.check — see the op.
+_aod_before: dict = {}
+
+
 # ── wanze: the probe that records while the watch is away ───────────────────
 # Unlike benchymark, nothing here drives a measurement — wanze is already
 # running on its own timer. These actions only place it, remove it, and read
 # back what it collected.
+
+
+@DISPATCH.op("aod.check")
+def _aod_check(argsd):
+    """Capture a watch's AoD state, and diff it against an earlier capture.
+
+    `capture` is side-effect free ON PURPOSE: the evidence for a boot is
+    destroyed the moment anything opens the settings app, so this has to be
+    safe to run first, before the toggle is even looked at.
+
+    Captures are kept in memory per serial — one "before" per watch is all the
+    procedure needs, and persisting them would invite comparing captures from
+    different boots, which answers nothing."""
+    serial, action = argsd["serial"], argsd.get("action") or "capture"
+    w = _watch(serial)
+    if action == "capture":
+        res = aodcheck.capture(w)
+        if res.get("ok"):
+            _aod_before[serial] = res
+        return res
+    if action == "diff":
+        before = _aod_before.get(serial)
+        if not before:
+            return {"ok": False,
+                    "error": "no earlier capture for this watch — run "
+                             "'capture' BEFORE the action you want to test"}
+        after = aodcheck.capture(w)
+        if not after.get("ok"):
+            return after
+        return {"ok": True, "before_uptime": before.get("uptime"),
+                "after_uptime": after.get("uptime"),
+                **aodcheck.diff(before, after)}
+    return {"ok": False, "error": f"unknown action: {action}"}
 
 
 @DISPATCH.op("wanze.probe")

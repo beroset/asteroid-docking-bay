@@ -123,6 +123,7 @@ Deliberately mirrors the existing `/api/*` routes and module seams — the
 | `bench.run` | streaming: switch to the benchmark, sample FPS, switch back |
 | `bench.restore` | put a watch's own watchface back after an interrupted run |
 | `bench.app` | benchymark app lifecycle: install/start/stop/remove/results |
+| `aod.check` | capture a watch's AoD state (MCE + dconf) and diff two captures; read-only, safe to run before anything touches the UI |
 | `wanze.probe` | wanze telemetry probe: install/stop/harvest. Reads a trace the watch recorded while undocked; `harvest` only clears the on-watch buffer when explicitly asked, since it is the only copy |
 
 The dispatch table is an allow-list; unknown ops get `ok:false`. Nothing

@@ -44,6 +44,7 @@ _JSON_ROUTES = [
     ("POST", "/api/watch/<serial>/locale/<locale>",    "watch.locale_set", {},        False),
     ("POST", "/api/watch/<serial>/bench/app/<action>", "bench.app",      {},             False),
     ("POST", "/api/watch/<serial>/wanze/<action>",   "wanze.probe",     {},             False),
+    ("POST", "/api/watch/<serial>/aod/<action>",     "aod.check",       {},             False),
     ("POST", "/api/watch/<serial>/session/restart",  "watch.session_restart", {},      False),
     ("POST", "/api/watch/<serial>/drainlog/<action>", "watch.drainlog",  {},             False),
     ("GET",  "/api/wifi/aps",                        "wifi.aps",        {},             False),

@@ -69,8 +69,16 @@ def test_set_mute_and_av_read_passthrough(monkeypatch):
 # ── av_read parsing ──────────────────────────────────────────────────────────
 
 class _T:
-    def __init__(self, out): self._out = out
-    def shell(self, cmd, timeout=None): return (0, self._out, "")
+    def __init__(self, out, mce=None):
+        self._out = out
+        self._mce = mce
+
+    def shell(self, cmd, timeout=None):
+        # standby_features now asks MCE whether low-power mode is actually
+        # performed, so a stub must answer that separately from connman.
+        if self._mce is not None and "low power mode" in cmd:
+            return (0, self._mce, "")
+        return (0, self._out, "")
 
 
 def test_av_read_parses_speaker_and_mic(monkeypatch):
@@ -115,16 +123,32 @@ def test_record_audio_op_failure(monkeypatch):
 def test_standby_features_parses_connman_and_aod(monkeypatch):
     conn = ("  Type = wifi\n  Powered = True\n  Connected = yes\n"
             "  Type = bluetooth\n  Powered = False\n")
-    w = Watch("S", transport=_T(conn))
+    # aod now comes from MCE, so the transport must answer the mcetool probe
+    # too; the dconf toggle is recorded separately as intent.
+    w = Watch("S", transport=_T(conn, mce="Use low power mode: enabled\n"))
     monkeypatch.setattr(w, "user_cmd", lambda c, timeout=None: (0, "true\n", ""))
-    assert w.standby_features() == {"wifi": True, "bt": False, "aod": True}
+    assert w.standby_features() == {"wifi": True, "bt": False,
+                                    "aod": True, "aod_toggle": True}
 
 
-def test_standby_features_aod_defaults_on_when_empty(monkeypatch):
-    w = Watch("S", transport=_T(""))                      # connman unreadable
+def test_standby_features_unset_toggle_is_not_aod_running(monkeypatch):
+    """This test used to assert the OPPOSITE — that an unset key meant
+    "default on" — and that assumption was wrong in the way that mattered.
+
+    There is no gsettings schema for the key (only the weather schemas are
+    installed on a watch), so unset has no default: it means nobody ever wrote
+    it. That is exactly the state in which MCE was never told and nothing
+    renders in low-power mode. a-d-b therefore recorded aod:True for precisely
+    the watches where AoD provably was not running, and drain figures were
+    attributed to something that was not happening.
+
+    MCE is the authority now; the toggle is kept separately as intent."""
+    w = Watch("S", transport=_T("", mce="Use low power mode: disabled\n"))
     monkeypatch.setattr(w, "user_cmd", lambda c, timeout=None: (0, "", ""))
     f = w.standby_features()
-    assert f["aod"] is True and f["wifi"] is None and f["bt"] is None  # empty aod = default on
+    assert f["aod"] is False, "an unset toggle was read as AoD running"
+    assert f["aod_toggle"] is None, "unset must be recorded as unset, not True"
+    assert f["wifi"] is None and f["bt"] is None
 
 
 
@@ -134,7 +158,8 @@ def test_standby_features_aod_is_none_on_a_failed_read(monkeypatch):
     per-feature drain attribution (audit C2)."""
     w = Watch("S", transport=_T(""))
     monkeypatch.setattr(w, "user_cmd", lambda c, timeout=None: (1, "", "dconf error"))
-    assert w.standby_features()["aod"] is None
+    f = w.standby_features()
+    assert f["aod_toggle"] is None and f["aod"] is None
 
 
 def test_record_audio_always_kills_the_recorder(monkeypatch, tmp_path):
