@@ -141,11 +141,32 @@ A sturgeon test image was built with:
 2. Diagnostic logging in the four ambient decision points, behind the existing
    `LIPSTICK_COMPOSITOR_DEBUG` gate, so every early return says why it returned.
 
-**Result on first boot after flashing: _[TO BE FILLED — pending flash]_**
+**Result: AoD RENDERS on first boot.** Confirmed 2026-08-01 on sturgeon,
+under the strictest conditions we could construct:
 
-If AoD renders on first boot with the sync in place, Defect 2 is confirmed as
-the missing boot-time apply. If it does not, the log names the failing link
-directly.
+* freshly flashed image (userdata wiped)
+* VBUS cut immediately after `fastboot reboot`, so the watch's **first boot
+  ever ran on battery and it never saw a charger** — nightstand mode therefore
+  could not apply
+* nightstand left at its **default** (`enabled`, unset key)
+* firstrun completed, tutorial skipped, **nothing else touched** — no Settings,
+  no quickpanel, no app launched
+
+Measured on the same boot, unattended, before any interaction:
+
+```
+asteroid-aod-sync       : active, ExecMainStatus 0
+MCE Use low power mode  : enabled          <- applied at boot
+dconf always-on-display : (unset)          <- nobody ever wrote it
+```
+
+So the missing boot-time apply IS the mechanism: with the key unset and MCE at
+its factory default, supplying MCE the value the UI already claims is enough to
+make AoD work out of the box.
+
+**Control not yet run:** fresh flash + undocked + *without* the sync. MCE
+defaults to `disabled`, so guard B would discard every tick and nothing should
+render — but that is inference, not measurement.
 
 ---
 
