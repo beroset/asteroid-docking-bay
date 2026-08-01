@@ -227,3 +227,81 @@ toggle. This investigation proves the toggle is not evidence that AoD ran —
 the compositor may simply not be drawing. a-d-b now reads MCE's state as the
 authority and records the toggle separately as intent. Past attributions should
 be treated as unreliable rather than re-interpreted.
+
+---
+
+# Results, part 2 — the nightstand guard, measured
+
+## CONFIRMED: two distinct bugs, not one
+
+**Bug 1 — the nightstand guard (asteroid-settings).** `DisplayPage.qml`:
+
+```qml
+onCheckedChanged: {
+    if (alwaysOnDisplay.value === checked) return          // guard 1
+    alwaysOnDisplay.value = checked
+    if (!nightstandEnabled.value || mceChargerType.type == MceChargerType.None) {
+        displaySettings.lowPowerModeEnabled = checked      // guard 2
+    }
+}
+```
+
+With nightstand ON and the watch on a charger, guard 2 is false and the display
+layer is **never told**. Reproduced deterministically on beluga (`225791c5`) and
+measured, not inferred:
+
+```
+dconf org/asteroidos/settings/always-on-display = true
+dconf desktop/asteroid/nightstand/enabled       = true
+MCE   Use low power mode                        = disabled
+verdict: consistent = FALSE
+```
+
+moWerk's quickpanel (`QuickPanel.qml:969`) writes both the dconf key and
+`displaySettings.lowPowerModeEnabled` **unconditionally**, which is why it is
+the only control that repairs the state. The quickpanel is the workaround, not
+the cause — despite `lowPowerModeEnabled` first appearing there in #180
+(2026-01-27, before 2.0 shipped on 2026-02-01), so it is present in every
+release where the bug was seen and is a constant, not a variable.
+
+**Bug 2 — sturgeon's case, still unexplained.** MCE `enabled`,
+`setAmbientUpdatesEnabled(true)` firing every 60 s, screen black, nightstand
+`false`. Guard 2 cannot explain it. This is the one that matches the
+fresh-flash reports.
+
+## The screenshot instrument: built, calibrated, and defeated
+
+Idea: `screenshottool <path> <delay>` sleeps then captures via lipstick's own
+`saveScreenshot`, so a delayed capture could photograph LPM and answer
+dodoradio's challenge — *is the compositor actually not drawing?*
+
+- **Docked calibration failed.** Frames at 31 s and 75 s were identical to a
+  known-awake frame (mean luma 43.4 vs 43.4, diff 0.25). A docked watch takes
+  the nightstand path and never reaches true LPM — a caveat this very document
+  states, and which was ignored anyway.
+- **Undocked capture worked once** (sturgeon, working state): armed detached
+  with `systemd-run --collect`, VBUS cut, captured at `Display state: off` with
+  0.21 s between the state read and the grab. It returned a **full-colour**
+  watchface, which is itself suspicious: `saveScreenshot` may re-render on
+  demand rather than capture what is presented.
+- **Undocked capture on the broken watch never fired.** The unit was still
+  alive minutes later with `sleep 150` unfinished:
+
+```
+├─11364 /bin/sh /tmp/lpm-onwatch.sh 150
+└─11365 sleep 150          # ~4 min of wall clock later, still sleeping
+```
+
+**A plain `sleep` does not advance while the watch is suspended.** This is the
+exact principle wanze is built on, now demonstrated on hardware — and it is a
+hard limit on this instrument: **photographing a suspended watch requires
+waking it, and a woken watch is no longer in the state under test.**
+
+## Consequence
+
+dodoradio's original suggestion — put logging where the compositor is suspected
+of not drawing — is now the only remaining route for Bug 2. That is a local
+debug build of lipstick or asteroid-launcher: shared upstream code, moWerk's
+call, not to be patched from here.
+
+Bug 1 needs no further investigation and can be filed as-is.

@@ -664,11 +664,19 @@ class Watch:
         grab fails (watch offline). May not exist yet."""
         return Path(tempfile.gettempdir()) / f"dockingbay_ss_{self.serial}.jpg"
 
-    def screenshot(self) -> "Path | None":
+    def screenshot(self, delay: int = 0) -> "Path | None":
         """Capture the screen and pull it locally. Returns the Path or None.
-        screenshottool exits 10 even on success, so judge by the pulled file."""
+        screenshottool exits 10 even on success, so judge by the pulled file.
+
+        `delay` is screenshottool's own second argument: it sleeps that many
+        seconds and THEN captures. That is what makes it possible to photograph
+        low-power mode at all — issuing any adb command wakes the watch, so an
+        immediate capture always shows a woken screen. Waiting past the blank
+        timeout lets it settle back into LPM before lipstick grabs the frame.
+        """
         remote = "/home/ceres/.dockingbay_ss.jpg"
-        self.user_cmd(f"screenshottool {remote} 0", timeout=15)
+        self.user_cmd(f"screenshottool {remote} {int(delay)}",
+                      timeout=max(15, int(delay) + 25))
         local = self.last_screenshot_path()
         rc, _, _ = self.t.pull(remote, shlex.quote(str(local)), timeout=15)
         self.t.shell(f"rm -f {remote}", timeout=8)
