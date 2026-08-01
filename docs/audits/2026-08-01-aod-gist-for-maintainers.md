@@ -1,14 +1,27 @@
-# AoD never renders in LPM after a fresh flash — root cause, one-line fix, demonstrated
+# AoD never renders in LPM after a fresh flash — SHIPPED
 
-**TL;DR:** two QML files declare different `defaultValue`s for the *same* dconf
-key. On a fresh flash the key is unset, so each falls back to its own default
-and they disagree. Settings shows the AoD toggle **ON** while the launcher
-writes `lowPowerModeEnabled = false` to MCE. Everything downstream follows.
+**The technical record now lives upstream, where it is durable and
+discoverable:**
 
-**Fix: one line in `asteroid-launcher`.** Built, flashed and confirmed on
-hardware. Nightstand keeps every feature.
+* **Fix (PR):** [AsteroidOS/asteroid-launcher#289](https://github.com/AsteroidOS/asteroid-launcher/pull/289)
+  — one line, with the D-Bus traces, the before/after launcher log, the
+  reproduction and the ruled-out table.
+* **Second defect (issue):** [AsteroidOS/asteroid-settings#146](https://github.com/AsteroidOS/asteroid-settings/issues/146)
+  — the Display page's AoD toggle silently does nothing while nightstand is
+  active on a charger. Deliberately an issue, not a PR: two reasonable fixes
+  encode different intent about who owns low power mode during nightstand, and
+  that belongs to the feature's author.
+
+**In one sentence:** `asteroid-settings` and `asteroid-launcher` declared
+different `defaultValue`s for the same unset dconf key, so the user was shown
+an AoD toggle reading ON while the launcher wrote `lowPowerModeEnabled = false`
+to MCE.
+
+The full narrative below is kept as the local process record — it includes the
+two hypotheses of ours that were built, flashed and disproved by controls.
 
 ---
+
 
 ## The defect
 
