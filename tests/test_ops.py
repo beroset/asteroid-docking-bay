@@ -645,6 +645,39 @@ def test_a_no_poll_window_takes_exactly_two_readings(monkeypatch):
     assert task.get("drain_rate") is not None, "no rate from the closing read"
 
 
+def test_the_closing_read_happens_before_the_watch_is_shut_down(monkeypatch):
+    """_end_port shuts the watch down at the end of a drain. A closing read
+    placed after it finds a powered-off watch, so the window ends with no
+    second point — the one number the whole run exists to produce.
+
+    This shipped briefly and the reading-count test did not catch it, because
+    with everything mocked a read "succeeds" whether or not the watch is up.
+    Ordering is the thing to assert."""
+    import threading
+    opsmod, power, slot, task = _drain_env(monkeypatch, [100, 96])
+    opsmod._drain_tasks[slot]["no_poll"] = True
+
+    order = []
+    inner_read = opsmod._adb_read_battery
+    monkeypatch.setattr(opsmod, "_adb_read_battery",
+                        lambda *a, **k: (order.append("read"), inner_read(*a, **k))[1])
+    monkeypatch.setattr(opsmod, "_end_port",
+                        lambda *a, **k: order.append("shutdown"))
+
+    threading.Timer(0.05, opsmod._drain_stop[slot].set).start()
+    opsmod.DrainOp(slot, "1-2", 2, {}).run()
+
+    assert "shutdown" in order, "the watch was never returned to rest"
+    # The LAST read is the closing one. Using the first would pass trivially,
+    # because the run always opens with an initial read before the cut.
+    last_read = len(order) - 1 - order[::-1].index("read")
+    assert last_read < order.index("shutdown"), \
+        f"the closing read ran AFTER the watch was shut down (order={order})"
+    # And the last read must not inherit the caller's already-set stop event,
+    # or it aborts instantly on the ordinary user-stop path.
+    assert task.get("last_pct") == 96, "the closing read did not complete"
+
+
 def test_a_normal_drain_still_polls(monkeypatch):
     """The guard must be conditional. Fixing the no-poll mode by breaking the
     curve every other drain test depends on would be a bad trade."""

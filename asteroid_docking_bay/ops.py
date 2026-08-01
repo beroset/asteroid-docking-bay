@@ -830,6 +830,33 @@ class DrainOp(Operation):
             task["stopped"] = stop_event.is_set()
             _drain_stop.pop(slot, None)
             task_store.unpersist("drain", slot)
+            # The closing reading for a no-poll window, taken BEFORE any of
+            # the power decisions below. _end_port shuts the watch down, so a
+            # read placed after it would find a powered-off watch and the
+            # window would end with no second point at all — the one number
+            # the whole run exists to produce.
+            #
+            # A FRESH event, not stop_event: by now the caller's stop is set,
+            # and the read aborts on it, so the closing read would never
+            # complete on the ordinary "user stopped the window" path.
+            if task.get("no_poll") and not task.get("blind_abort"):
+                end_pct = _adb_read_battery(loc, port, task.get("serial"),
+                                            charge_cfg, threading.Event())
+                if end_pct is not None:
+                    now = time.time()
+                    task["last_ts"], task["last_pct"] = now, end_pct
+                    task.setdefault("readings", []).append(
+                        {"ts": now, "pct": end_pct})
+                    span_h = (now - task.get("start_ts", now)) / 3600
+                    if span_h > 0 and task.get("start_pct") is not None:
+                        task["drain_rate"] = (task["start_pct"] - end_pct) / span_h
+                    log.info("%s: no-poll window closed at %d%% (from %s%% "
+                             "over %.2fh)", codename, end_pct,
+                             task.get("start_pct"), span_h)
+                else:
+                    log.warning("%s: could not read the closing battery for "
+                                "the no-poll window", codename)
+
             # Optionally charge back into the healthy band before powering off,
             # so a completed test doesn't leave the watch stored near the floor.
             # Only when it ran to completion (a user stop leaves it as-is).
@@ -857,27 +884,6 @@ class DrainOp(Operation):
                                          target=charge_cfg.low_threshold)
                 # Return the watch to rest: shut it down instead of leaving it on.
                 _end_port(loc, port, serial, charge_cfg, "drain ended")
-            # The closing reading for a no-poll window. Taken HERE because it
-            # is the only moment the port may be powered without corrupting the
-            # measurement — the window is already over.
-            if task.get("no_poll") and not task.get("blind_abort"):
-                serial = task.get("serial")
-                end_pct = _adb_read_battery(loc, port, serial, charge_cfg,
-                                            stop_event)
-                if end_pct is not None:
-                    now = time.time()
-                    task["last_ts"], task["last_pct"] = now, end_pct
-                    task.setdefault("readings", []).append(
-                        {"ts": now, "pct": end_pct})
-                    span_h = (now - task.get("start_ts", now)) / 3600
-                    if span_h > 0 and task.get("start_pct") is not None:
-                        task["drain_rate"] = (task["start_pct"] - end_pct) / span_h
-                    log.info("%s: no-poll drain window closed at %d%% "
-                             "(from %s%% over %.1fh)", codename, end_pct,
-                             task.get("start_pct"), span_h)
-                else:
-                    log.warning("%s: could not read the closing battery for "
-                                "the no-poll window", codename)
             _save_drain_results(task, slot, codename)
 
 
