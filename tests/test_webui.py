@@ -1640,3 +1640,31 @@ def test_a_wanze_run_on_a_drain_test_still_names_the_drain_test(tmp_path):
     out = json.loads(r.stdout.strip().splitlines()[-1])["both"]
     assert "wanze probing" in out, "the run must claim the label"
     assert "drain test running" in out, "the drain test vanished from the tooltip"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_an_ssh_watch_without_an_allocation_shows_the_shared_default(tmp_path):
+    """A watch with no allocated address is not address-less — it is on the
+    shared 192.168.2.15 with every other watch that came up that way. Showing
+    nothing reads as "a-d-b lost it"; showing the address, marked as shared,
+    says what is actually true and why it may be unreachable."""
+    import json
+    h = tmp_path / "sshpill.js"
+    h.write_text(_DOM_STUBS + JS +
+                 "\nconsole.log(JSON.stringify({"
+                 "own:mkadb('ssh',null,'asteroidos','S9','192.168.13.40','dory'),"
+                 "stray:mkadb('ssh',null,'asteroidos','S9',null,'dory')}));"
+                 "\nprocess.exit(0);\n")
+    r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
+    assert r.returncode == 0, r.stderr[:400]
+    out = json.loads(r.stdout.strip().splitlines()[-1])
+
+    assert "192.168.13.40" in out["own"] and "its own address" in out["own"]
+    assert "stray" not in out["own"], "an allocated watch must not be marked shared"
+
+    # The one that was showing a bare pill.
+    assert "192.168.2.15" in out["stray"], "the shared default address is not shown"
+    assert "SHARED" in out["stray"], "nothing says the address is shared"
+    assert 'class="cbadge ssh stray"' in out["stray"]
+    # And the click must open the Network Center at the address it is really on.
+    assert "192.168.2.15" in out["stray"].split("onclick=")[1].split("title=")[0]

@@ -163,6 +163,7 @@ _WEB_TEMPLATE = """\
     .sdot.chg{border-color:#238636;background:#238636;color:#f2cc60}   /* charging: yellow bolt on green */
     .sdot.drain{border-color:#3d4756;color:#8b949e;animation:drainpulse 1.4s ease-in-out infinite}
     .sdot.flaps{font-size:10px;font-weight:700;font-variant-numeric:tabular-nums}
+    .cbadge.ssh.stray{border-color:#d29922}
     .sdot.wanze{border-color:#d29922;color:#d29922}
     .cbadge.wanze{border-color:#8957e5;color:#d2a8ff;animation:drainpulse 1.4s ease-in-out infinite}
     .sdot[onclick]{cursor:pointer}
@@ -759,6 +760,7 @@ function doSetSocket(slot,cur){
   fetch('/api/socket/'+_api(slot)+'?n='+encodeURIComponent(v.trim()),{method:'POST'}).then(()=>refresh());
 }
 const AOSLOGO='<svg viewBox="0 0 2000 2000" width="13" height="13" style="vertical-align:-2px;margin-right:5px" shape-rendering="crispEdges" xmlns="http://www.w3.org/2000/svg"><defs><rect id="T" width="2" height="2"/></defs><g transform="matrix(100 100 -100 100 1000 0)"><g><use href="#T" style="fill:#be3729"/><use href="#T" id="b" x="2" style="fill:#dc2919"/><use href="#T" id="c" x="4" style="fill:#e54b3a"/><use href="#T" id="d" x="6" style="fill:#e56934"/><use href="#T" id="e" x="8" style="fill:#e57c21"/></g><g transform="translate(-2,2)"><use href="#b"/><use href="#c"/><use href="#T" id="f" x="10" style="fill:#e58a21"/></g><g transform="translate(-4,4)"><use href="#c"/><use href="#e"/><use href="#T" id="g" x="12" style="fill:#f19a11"/></g><g transform="translate(-6,6)"><use href="#d"/><use href="#e"/><use href="#f"/><use href="#T" id="h" x="14" style="fill:#f0ae0e"/></g><g transform="translate(-8,8)"><use href="#e"/><use href="#f"/><use href="#g"/><use href="#h"/><use href="#T" x="16" style="fill:#f0c30e"/></g></g></svg>';
+const USB_SSH_IP='192.168.2.15';
 function mkadb(adb,fbprod,os,serial,sshIp,name){
   const nm=esc(name||serial||'');
   if(adb==='device'){
@@ -775,7 +777,19 @@ function mkadb(adb,fbprod,os,serial,sshIp,name){
       return `<button class="cbadge adb" onclick="openNC('${esc(serial)}','${nm}',event,'${esc(sshIp||'')}','device')" title="${ttl} — click for network details">${logo}ADB${ser}</button>`;
     return `<span class="cbadge adb" title="${ttl}">${logo}ADB${ser}</span>`;
   }
-  if(adb==='ssh'){const ipl=sshIp?` <span class="dim">${esc(sshIp)}</span>`:'';return `<button class="cbadge ssh" onclick="openNC('${esc(serial||'')}','${nm}',event,'${esc(sshIp||'')}','ssh')" title="SSH/developer USB mode at ${esc(sshIp||'192.168.2.15')} — click for network details">${AOSLOGO}SSH${ipl}</button>`;}
+  if(adb==='ssh'){
+    // A watch with no allocated address is NOT address-less — it is on the
+    // shared default, along with every other watch that came up this way. So
+    // show that address rather than nothing, and colour it to say it is the
+    // shared one: an allocated address is the watch's own, the default is a
+    // place several watches shadow each other and only one is reachable.
+    const eff=sshIp||USB_SSH_IP, own=!!sshIp;
+    const ipl=` <span class="${own?'dim':'warn'}">${esc(eff)}</span>`;
+    const ttl=own
+      ?`SSH/developer USB mode at ${esc(eff)} (its own address) — click for network details`
+      :`SSH/developer USB mode on the SHARED default ${esc(USB_SSH_IP)} — it has no address of its own yet, so any other watch that comes up this way shadows it and only one is reachable. a-d-b relocates it automatically; if this sticks, the host has not finished DHCP on that link.`;
+    return `<button class="cbadge ssh${own?'':' stray'}" onclick="openNC('${esc(serial||'')}','${nm}',event,'${esc(eff)}','ssh')" title="${ttl}">${AOSLOGO}SSH${ipl}</button>`;
+  }
   if(adb==='fastboot'){const l=fbprod?`fastboot: ${esc(fbprod)}`:'fastboot';return `<span class="cbadge fb" title="watch is in the bootloader (fastboot) — flash/backup only, no ADB or watch functions">${l}</span>`;}
   if(adb)return `<span class="dim">${esc(adb)}</span>`;
   return '<span class="dim">&mdash;</span>';
