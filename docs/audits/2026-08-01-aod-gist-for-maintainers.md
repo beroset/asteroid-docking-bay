@@ -141,32 +141,42 @@ A sturgeon test image was built with:
 2. Diagnostic logging in the four ambient decision points, behind the existing
    `LIPSTICK_COMPOSITOR_DEBUG` gate, so every early return says why it returned.
 
-**Result: AoD RENDERS on first boot.** Confirmed 2026-08-01 on sturgeon,
-under the strictest conditions we could construct:
+**Result: the sync was NOT the fix. Retracted.**
 
-* freshly flashed image (userdata wiped)
-* VBUS cut immediately after `fastboot reboot`, so the watch's **first boot
-  ever ran on battery and it never saw a charger** — nightstand mode therefore
-  could not apply
-* nightstand left at its **default** (`enabled`, unset key)
-* firstrun completed, tutorial skipped, **nothing else touched** — no Settings,
-  no quickpanel, no app launched
+AoD did render on that run — but a **control image, identical except with the
+sync package removed, rendered too.** So being off-charger was doing the work,
+not the boot-time apply. The control is what saved this from being a wrong
+claim in front of maintainers.
 
-Measured on the same boot, unattended, before any interaction:
+What the compositor logging then established, on a docked watch:
 
 ```
-asteroid-aod-sync       : active, ExecMainStatus 0
-MCE Use low power mode  : enabled          <- applied at boot
-dconf always-on-display : (unset)          <- nobody ever wrote it
+AOD setAmbientEnabled( false ) supported= true current= false
+AOD setAmbientUpdatesEnabled( true ) displayState= 0 ambientEnabled= false
+AOD update DISCARDED: ambient mode is not enabled
 ```
 
-So the missing boot-time apply IS the mechanism: with the key unset and MCE at
-its factory default, supplying MCE the value the UI already claims is enough to
-make AoD work out of the box.
+**MCE is not failing to talk to the compositor — it actively pushes
+`setAmbientEnabled(FALSE)`,** because its own `Use low power mode` is
+`disabled`. Every 60-second update tick is then discarded and nothing draws.
 
-**Control not yet run:** fresh flash + undocked + *without* the sync. MCE
-defaults to `disabled`, so guard B would discard every tick and nothing should
-render — but that is inference, not measurement.
+Setting MCE's LPM to `enabled` by hand (`mcetool -E enabled`), changing nothing
+else, flips the same log to accepted ticks and **the watchface renders** —
+docked, nightstand on. That part is confirmed.
+
+### Still unexplained — do not present this as complete
+
+1. **Undocked with MCE `disabled`, AoD renders anyway.** By the mechanism above
+   it should be black. No `AOD` trace lines appear at all while undocked, so the
+   off-charger path may not go through this code.
+2. **Undocking RESETS MCE's LPM to `disabled`.** Observed directly: set to
+   `enabled`, undocked, and it came back `disabled`. The obvious suspect is
+   nightstand's off-charger timer writing `lowPowerModeEnabled =
+   alwaysOnDisplay.value` — but that key is unset and BOTH the launcher and the
+   settings app declare `defaultValue: true`, so it should have written `true`.
+3. A `Component.onCompleted` fix for nightstand's uninitialised state
+   (`onReadyChanged` never fires when a watch boots already on the charger) was
+   built and flashed. It did **not** fix it on its own.
 
 ---
 
