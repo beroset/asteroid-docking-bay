@@ -1221,7 +1221,8 @@ def _register_lifecycle(op_cls, name, stop_error):
         @DISPATCH.op(f"{name}.start")
         def _start(args):
             err = op_cls.start(args["loc"], args["port"], load_config(),
-                               owner=args.get("owner"))
+                               owner=args.get("owner"),
+                               opts={"no_poll": True} if args.get("no_poll") else None)
             return {"ok": False, "error": err} if err else {"ok": True}
 
     @DISPATCH.op(f"{name}.stop")

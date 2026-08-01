@@ -331,7 +331,8 @@ class Operation:
 
     @classmethod
     def start(cls, loc: str, port: int, cfg: dict,
-              owner: "str | None" = None) -> "str | None":
+              owner: "str | None" = None,
+              opts: "dict | None" = None) -> "str | None":
         """Begin the operation. Returns an error string, or None on success.
 
         `owner` records who claimed the watch. Several sessions and people now
@@ -356,7 +357,7 @@ class Operation:
             return err
         if is_slot_smart(cfg, loc, port) is False:
             return "non-smart port — power cannot be switched"
-        cls.tasks[slot] = {"done": False, "owner": owner}
+        cls.tasks[slot] = {"done": False, "owner": owner, **(opts or {})}
         cls.stops[slot] = threading.Event()
         task_store.persist(cls.kind, slot, loc, port, cls.tasks[slot])
         threading.Thread(target=cls(slot, loc, port, cfg).run,
@@ -749,6 +750,15 @@ class DrainOp(Operation):
 
             blind = 0   # consecutive failed battery reads
             while not stop_event.wait(timeout=_DRAIN_POLL_SEC):
+                # A no-poll window: never read while the watch is discharging.
+                # Every mid-run read POWERS THE PORT to reach adb, and on a
+                # watch that is slow to enumerate that window is minutes long —
+                # enough to put more charge in than the standby drain takes
+                # out. catfish measured 97% -> 98% over nine hours that way, so
+                # the instrument was reporting the opposite of the truth. Two
+                # points and no interference beat a curve that charges.
+                if task.get("no_poll"):
+                    continue
                 # Reload config in case serial mapping changed.
                 serial  = find_serial_for_loc_port(load_config(), loc, port)
                 if serial != task.get("serial"):
@@ -847,6 +857,27 @@ class DrainOp(Operation):
                                          target=charge_cfg.low_threshold)
                 # Return the watch to rest: shut it down instead of leaving it on.
                 _end_port(loc, port, serial, charge_cfg, "drain ended")
+            # The closing reading for a no-poll window. Taken HERE because it
+            # is the only moment the port may be powered without corrupting the
+            # measurement — the window is already over.
+            if task.get("no_poll") and not task.get("blind_abort"):
+                serial = task.get("serial")
+                end_pct = _adb_read_battery(loc, port, serial, charge_cfg,
+                                            stop_event)
+                if end_pct is not None:
+                    now = time.time()
+                    task["last_ts"], task["last_pct"] = now, end_pct
+                    task.setdefault("readings", []).append(
+                        {"ts": now, "pct": end_pct})
+                    span_h = (now - task.get("start_ts", now)) / 3600
+                    if span_h > 0 and task.get("start_pct") is not None:
+                        task["drain_rate"] = (task["start_pct"] - end_pct) / span_h
+                    log.info("%s: no-poll drain window closed at %d%% "
+                             "(from %s%% over %.1fh)", codename, end_pct,
+                             task.get("start_pct"), span_h)
+                else:
+                    log.warning("%s: could not read the closing battery for "
+                                "the no-poll window", codename)
             _save_drain_results(task, slot, codename)
 
 

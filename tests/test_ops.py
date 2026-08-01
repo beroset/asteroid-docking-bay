@@ -607,3 +607,48 @@ def test_warm_port_power_reads_only_empty_ports(monkeypatch, tmp_path):
     ops._warm_port_power({"hubs": [{"location": "9-9"}]})
     assert sorted(probed) == [1, 3]                     # occupied port skipped
     assert cached == {("9-9", 1): True, ("9-9", 3): False}
+
+
+# --- the no-poll drain window ---------------------------------------------
+
+def test_a_no_poll_window_takes_exactly_two_readings(monkeypatch):
+    """Every mid-run read POWERS THE PORT to reach adb, and on a watch slow to
+    enumerate that window runs to minutes — putting in more charge than standby
+    takes out. catfish went 97% -> 98% across nine hours that way, the
+    instrument reporting the exact opposite of the truth.
+
+    So a no-poll window must call the battery read EXACTLY twice: once before
+    the cut, once after the window. Counting the calls is the assertion that
+    discriminates — asserting on the stored readings does not, because a
+    polling run can end up with the same two values."""
+    import threading
+    opsmod, power, slot, task = _drain_env(monkeypatch, [100, 96, 95, 94, 93])
+    opsmod._drain_tasks[slot]["no_poll"] = True
+
+    inner = opsmod._adb_read_battery
+    calls = []
+
+    def _counted(*a, **k):
+        calls.append(1)
+        return inner(*a, **k)
+
+    monkeypatch.setattr(opsmod, "_adb_read_battery", _counted)
+
+    # End the window shortly after it opens, the way a user's stop would.
+    threading.Timer(0.05, opsmod._drain_stop[slot].set).start()
+    opsmod.DrainOp(slot, "1-2", 2, {}).run()
+
+    assert len(calls) == 2, (
+        f"a no-poll window read the battery {len(calls)} times; it must read "
+        "only before the cut and after the window, because every read powers "
+        "the port and charges the watch it is measuring")
+    assert task.get("drain_rate") is not None, "no rate from the closing read"
+
+
+def test_a_normal_drain_still_polls(monkeypatch):
+    """The guard must be conditional. Fixing the no-poll mode by breaking the
+    curve every other drain test depends on would be a bad trade."""
+    opsmod, power, slot, task = _drain_env(monkeypatch, [90, 80, 70, 14])
+    opsmod.DrainOp(slot, "1-2", 2, {}).run()
+    assert len(task.get("readings", [])) > 2, \
+        "a normal drain test stopped polling"
