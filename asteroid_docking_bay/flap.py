@@ -44,39 +44,37 @@ class FlapCounter:
 
     def __init__(self) -> None:
         self._adds: dict[tuple[str, int], int] = {}
-        # Re-enumerations WE asked for. A USB-mode swap (adb <-> ssh) tears the
-        # gadget down and brings it back under a different product ID, which is
-        # an `add` like any other — but it is the rig doing its job, not a
-        # cradle failing, and counting it would put shame on a healthy port.
-        self._expected: dict[tuple[str, int], int] = {}
         self._lock = threading.Lock()
 
     def record(self, location: str, port: int) -> None:
-        """One `add` event landed on this port. An add we were told to expect
-        is consumed instead of counted."""
+        """One `add` event landed on this port."""
         with self._lock:
             key = (location, port)
-            if self._expected.get(key):
-                self._expected[key] -= 1
-                return
             self._adds[key] = self._adds.get(key, 0) + 1
 
-    def expect(self, location: str, port: int, count: int = 1) -> None:
-        """Announce a re-enumeration the rig is about to cause itself.
+    def excuse(self, location: str, port: int) -> None:
+        """Take back the most recent count on this port.
 
-        Used by the USB-mode switch: it drops the gadget and re-adds it, which
-        is indistinguishable from a cradle glitch at the event level. Only the
-        code that CAUSED it knows the difference, so it has to say so."""
+        A USB-mode swap (adb <-> ssh) tears the gadget down and re-adds it,
+        which is an `add` like any other at the event level. It is only
+        distinguishable AFTER the fact, by the product ID having changed — so
+        the add is counted immediately (never losing a real one to a race) and
+        retracted once the device has been read.
+
+        Deliberately decided here rather than announced by whoever performs the
+        switch: there are five call sites that switch USB mode, and a duty
+        attached to callers is a duty the sixth one forgets. This also covers
+        the swap a-d-b did NOT cause — a mode changed on the watch itself."""
         with self._lock:
             key = (location, port)
-            self._expected[key] = self._expected.get(key, 0) + count
+            if self._adds.get(key):
+                self._adds[key] -= 1
 
     def reset(self, location: str, port: int) -> None:
         """The port's power was changed, so the tally starts over. Counting
         across a power cut would blame the cradle for something we did."""
         with self._lock:
             self._adds.pop((location, port), None)
-            self._expected.pop((location, port), None)
 
     def reconnects(self, location: str, port: int) -> int:
         """How many times the connection has come BACK — which is one fewer

@@ -45,6 +45,10 @@ _DEVPATH_TAIL = re.compile(r"/([0-9]+-[0-9.]+)$")
 # signature. The kernel gives it a moment, so do not judge it instantly.
 _CONFIG_GRACE_S = 2.0
 
+# Last product ID seen per port, so a re-enumeration can be compared
+# against what was there before it.
+_last_pid: "dict[tuple[str, int], str]" = {}
+
 
 def parse_event(line: str) -> "dict | None":
     """One `udevadm monitor` header line -> {action, devpath, subsystem, dev}.
@@ -131,7 +135,8 @@ class UsbEventMonitor:
             if ev["action"] == "add":
                 # Count it before anything else can fail: this is the only
                 # record that the connection dropped and came back, and a
-                # cradle that flaps is invisible in every other view.
+                # cradle that flaps is invisible in every other view. A mode
+                # swap is retracted later, once the device can be read.
                 parts = split_dev(ev["dev"])
                 if parts:
                     flaps.record(*parts)
@@ -166,6 +171,17 @@ class UsbEventMonitor:
             return
         time.sleep(_CONFIG_GRACE_S)
         info = port_device_info(*parts)
+        # A gadget that came back under a DIFFERENT product ID changed USB
+        # mode (adb <-> ssh); it did not lose contact. A cradle fault
+        # re-enumerates as the same device, so the ID is what separates "the
+        # rig switched it" from "the connection failed".
+        if info and info.get("pid"):
+            prev = _last_pid.get(parts)
+            _last_pid[parts] = info["pid"]
+            if prev and prev != info["pid"]:
+                flaps.excuse(*parts)
+                log.info("%s: USB mode change (%s -> %s), not counted as a "
+                         "reconnect", dev, prev, info["pid"])
         if info and not info["configured"]:
             log.warning(
                 "%s enumerated but was never configured (%s) — this is what "

@@ -176,45 +176,70 @@ def test_a_udev_add_event_is_counted():
         "udev add events are not reaching the counter (or interfaces double-count)"
 
 
-# --- re-enumerations we cause ourselves -----------------------------------
+# --- mode swaps are not cradle faults -------------------------------------
 
-def test_an_expected_reenumeration_is_not_shameful():
-    """A USB-mode swap (adb <-> ssh) drops the gadget and re-adds it. At the
-    udev level that is an ordinary `add`; only the code that CAUSED it knows
-    otherwise, so doing the rig's job must not shame a healthy cradle."""
+def test_a_mode_swap_is_retracted_not_counted():
+    """A USB-mode swap re-adds the gadget under a different product ID. It is
+    counted first (so a race can never lose a REAL reconnect) and retracted
+    once the device has been read."""
     f = FlapCounter()
-    f.record("1-3", 1)                  # the dock itself
-    f.expect("1-3", 1)                  # we are about to switch modes
-    f.record("1-3", 1)                  # ...and here is its re-enumeration
-    assert f.reconnects("1-3", 1) == 0, "a mode swap was counted as a fault"
+    f.record("1-3", 1)                  # the dock
+    f.record("1-3", 1)                  # the swap's re-enumeration
+    assert f.reconnects("1-3", 1) == 1  # ...counted for now
+    f.excuse("1-3", 1)                  # ...then read: the product ID changed
+    assert f.reconnects("1-3", 1) == 0
 
 
-def test_only_the_announced_add_is_excused():
-    """The grace covers exactly one add. A genuine drop straight afterwards
-    must still count, or one switch would blind the port indefinitely."""
+def test_excuse_cannot_drive_the_count_negative():
+    """Excuses can arrive for a port whose tally was just reset by a power
+    change; that must not create a negative debt that eats real reconnects."""
     f = FlapCounter()
+    f.excuse("1-3", 1)
+    f.excuse("1-3", 1)
+    assert f.reconnects("1-3", 1) == 0
     f.record("1-3", 1)
-    f.expect("1-3", 1)
-    f.record("1-3", 1)                  # excused
-    f.record("1-3", 1)                  # real
-    f.record("1-3", 1)                  # real
-    assert f.reconnects("1-3", 1) == 2
+    f.record("1-3", 1)
+    assert f.reconnects("1-3", 1) == 1, "a phantom debt swallowed a real reconnect"
 
 
-def test_expectations_do_not_leak_to_other_ports():
+def test_excuse_is_per_port():
     f = FlapCounter()
-    f.expect("1-3", 1)
     f.record("1-3", 2)
     f.record("1-3", 2)
-    assert f.reconnects("1-3", 2) == 1, "a neighbour consumed the grace"
+    f.excuse("1-3", 1)
+    assert f.reconnects("1-3", 2) == 1, "a neighbour's excuse was applied here"
 
 
-def test_a_power_change_drops_a_stale_expectation():
-    """A switch that was announced but never happened would otherwise swallow
-    a real reconnect much later, and the badge would under-report forever."""
+def test_a_reconnect_in_the_same_mode_still_counts():
+    """The whole point: a cradle fault re-enumerates as the SAME device, so
+    nothing retracts it."""
     f = FlapCounter()
-    f.expect("1-3", 1)                  # announced...
-    f.reset("1-3", 1)                   # ...but the port got power-cycled instead
-    f.record("1-3", 1)                  # the dock after power
-    f.record("1-3", 1)                  # a genuine drop
-    assert f.reconnects("1-3", 1) == 1, "a stale expectation ate a real reconnect"
+    f.record("1-6.2", 1)
+    for _ in range(3):
+        f.record("1-6.2", 1)            # three genuine drops, no excuses
+    assert f.reconnects("1-6.2", 1) == 3
+
+
+def test_the_monitor_retracts_a_mode_swap_but_not_a_plain_drop(monkeypatch):
+    """Wiring: the deferred read is what distinguishes the two, so this drives
+    the monitor rather than the counter. Removing the comparison leaves every
+    unit test above green."""
+    from asteroid_docking_bay import usbevents as ue
+    from asteroid_docking_bay.flap import flaps
+
+    monkeypatch.setattr(ue.time, "sleep", lambda s: None)
+    monkeypatch.setattr(ue, "_last_pid", {})
+    pid = {"v": "0a03"}
+    monkeypatch.setattr(ue, "port_device_info",
+                        lambda loc, port: {"pid": pid["v"], "vid": "18d1",
+                                           "configured": True, "serial": "S",
+                                           "link": None})
+    flaps.reset("1-3", 9)
+
+    flaps.record("1-3", 9); ue.UsbEventMonitor(lambda: None)._check_configured("1-3.9")
+    flaps.record("1-3", 9); ue.UsbEventMonitor(lambda: None)._check_configured("1-3.9")
+    assert flaps.reconnects("1-3", 9) == 1, "a same-mode reconnect was excused"
+
+    pid["v"] = "0a02"                   # the watch switched to SSH mode
+    flaps.record("1-3", 9); ue.UsbEventMonitor(lambda: None)._check_configured("1-3.9")
+    assert flaps.reconnects("1-3", 9) == 1, "the mode swap was counted as a fault"
