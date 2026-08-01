@@ -1,6 +1,8 @@
 # AoD does not render in low-power mode — investigation plan
 
-**Date:** 2026-08-01 · **Status:** PLAN, no tests run yet
+**Date:** 2026-08-01 · **Status:** tests 1-3 RUN — see Results at the end.
+The plan below is kept as written, including the hypotheses it got wrong,
+because which ones died and how is the useful part.
 **Reported by:** moWerk; first noticed by dodoradio
 **Scope:** upstream AsteroidOS. a-d-b's part (wrong drain attribution) is
 already fixed — see `Ask MCE whether AoD runs, not the toggle`.
@@ -44,7 +46,7 @@ non-deterministic.*
 
 **H-C — nothing was instantiated.** MCE is correctly enabled and the thing that
 draws was simply never created. *Predicts: capture reads `consistent: true`
-while the screen is still black.*
+while the screen is still black.* **← THIS ONE. Confirmed; see Results.**
 
 ## THE TRAP — read before touching a watch
 
