@@ -146,3 +146,82 @@ Every past drain result recording `aod: true` took it from the userland toggle,
 which this bug proves is not evidence that AoD ran. Those attributions should
 be treated as unreliable rather than re-interpreted — a-d-b now records MCE's
 state alongside, so future runs carry the answer with them.
+
+---
+
+# Results — 2026-08-01
+
+Run on **sturgeon** (`MQB7N15C09000847`), AoD confirmed rendering by eye
+before starting. Visual state is moWerk's; everything else is captured.
+
+## What was established
+
+**1. The failure is DOWNSTREAM of MCE.** With the screen black in LPM, all
+three upstream layers were correct *and active*:
+
+| layer | state while black |
+|---|---|
+| `org/asteroidos/settings/always-on-display` | `true` |
+| MCE `Use low power mode` | `enabled` |
+| `setAmbientUpdatesEnabled(true)` → `org.nemomobile.compositor` | **firing every 60 s** |
+| actually drawing | **no** |
+
+The compositor was being told to do ambient updates, once a minute, and was
+not drawing. No amount of settings or dconf inspection could have found this —
+`aod/diff` across the repair reported **`mce changed: 0, dconf changed: 0`**.
+
+**2. Opening the settings app repairs it WITHOUT opening the display page.**
+moWerk launched it and closed it immediately. So it is not the page's
+bindings; merely starting an app is enough.
+
+**3. It is INTERMITTENT across boots — a startup race.** Two reboots, nothing
+else different: the first came up black, the second came up rendering. A race
+also explains why a fresh flash (slow boot, firstrun, tutorial) loses far more
+often, and why the bug has survived unnoticed across 2.0/2.1/2.2.
+
+**4. A VBUS cycle and a usb_moded mode switch do NOT break it.** Tested
+directly, because both had been applied to the black boot and not to the
+working one — a confounder introduced by the investigation itself. After the
+cycle and switch, AoD kept rendering. Hypothesis refuted.
+
+## What was ruled out
+
+- **Configuration**, in either layer — identical across the repair.
+- **The nightstand implementation** as the direct cause: nightstand was
+  `enabled=false` throughout, while ambient calls flowed normally. (This was
+  dodoradio's suspicion; it may still be involved in the race, but it is not
+  the gate.)
+- **The Qt6 migration** — present in 2.0 and 2.1, per moWerk.
+- **MCE** — it does its job, on time, every minute.
+
+## No remote oracle exists (negative result worth keeping)
+
+`Display state` reads `off` **while the watchface is visibly rendering**, and
+`backlight` read `70` (normal brightness, not dim) — almost certainly because
+the adb query itself woke the watch. **AoD rendering cannot be reliably
+detected over adb: the observation disturbs the state.** Ground truth remains
+a human looking at the watch, or wanze sampling locally with no USB
+interaction. That rules out a scripted reboot-loop with an automated verdict,
+which was the obvious way to get a failure rate.
+
+## Open, and what to do next
+
+- **The trigger inside the race is not identified.** Is it the app *launch* or
+  the *close*/return-to-homescreen? Launch an app and leave it open: if the
+  next LPM renders, the launch is enough.
+- **Is it settings-specific?** Repeat with any other app (flashlight,
+  stopwatch). If any app repairs it, the report becomes "the ambient surface is
+  not live until the first app launch/close cycle", which points squarely at
+  asteroid-launcher rather than at settings.
+- **A failure rate** needs repeated reboots with a human check each time, since
+  there is no oracle.
+- Filing target on current evidence: **the compositor/launcher side**, not MCE
+  and not asteroid-settings.
+
+## Consequence for a-d-b (already fixed)
+
+Every past drain result recording `aod: true` took it from the userland
+toggle. This investigation proves the toggle is not evidence that AoD ran —
+the compositor may simply not be drawing. a-d-b now reads MCE's state as the
+authority and records the toggle separately as intent. Past attributions should
+be treated as unreliable rather than re-interpreted.
