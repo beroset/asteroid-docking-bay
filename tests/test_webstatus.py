@@ -486,3 +486,98 @@ def test_soft_remap_retries_unidentified_watch_not_skip_forever(monkeypatch):
     assert calls == ["S1"]
     assert cfg["hubs"][0]["ports"].get("1") == "skipjack"
     assert "S1" not in ws._soft_remap_unknown
+
+
+def _stray_cfg():
+    return {"ssh_ips": {}, "usb_mode_preference": "ssh",
+            "hubs": [{"location": "1-3.4", "port_serials": {"2": "S1"}}]}
+
+
+def test_unreachable_stray_is_power_cycled_once(monkeypatch):
+    """A stray that cannot be reached will NEVER be reached by retrying: it has
+    no DHCP lease and cannot get one without re-enumerating, so the 90s backoff
+    would re-run an impossible probe forever. After a couple of failures it gets
+    one power cycle — a-d-b's own proven recovery — and only one, because if the
+    cycle does not help, churning the bus will not find out why."""
+    from asteroid_docking_bay import webstatus as ws
+    import asteroid_docking_bay.fastboot as fb
+    import asteroid_docking_bay.usb as usb
+    cycles = []
+    monkeypatch.setattr(fb, "_switch_ssh_to_adb",
+                        lambda ip="x": {"ok": False, "error": "unreachable"})
+    monkeypatch.setattr(ws, "load_config", _stray_cfg)
+    monkeypatch.setattr(ws, "uhubctl_cycle", lambda l, p: cycles.append((l, p)))
+    monkeypatch.setattr(usb, "_sysfs_serial_at", lambda l, p: "S1")
+    ws._ssh_align_fail.clear()
+    ws._ssh_align_cycled.clear()
+
+    ws._align_usb_mode_worker("S1", "ssh")
+    assert cycles == [], "cycled on the very first failure — that is churn, not recovery"
+    ws._align_usb_mode_worker("S1", "ssh")
+    assert cycles == [("1-3.4", 2)], "never recovered an unreachable stray"
+    ws._align_usb_mode_worker("S1", "ssh")
+    ws._align_usb_mode_worker("S1", "ssh")
+    assert cycles == [("1-3.4", 2)], "kept cycling a watch the cycle did not fix"
+
+
+def test_reaching_the_stray_again_rearms_the_recovery(monkeypatch):
+    """The one-cycle limit is per run of failures, not per process lifetime —
+    once a watch is reachable again, a LATER outage must be recoverable too."""
+    from asteroid_docking_bay import webstatus as ws
+    import asteroid_docking_bay.fastboot as fb
+    import asteroid_docking_bay.rpcops as ro
+    import asteroid_docking_bay.usb as usb
+    cycles, reachable = [], {"ok": False}
+    monkeypatch.setattr(fb, "_switch_ssh_to_adb", lambda ip="x": dict(reachable))
+    monkeypatch.setattr(ws, "load_config", _stray_cfg)
+    monkeypatch.setattr(ws, "uhubctl_cycle", lambda l, p: cycles.append((l, p)))
+    monkeypatch.setattr(usb, "_sysfs_serial_at", lambda l, p: "S1")
+    monkeypatch.setattr(ws, "adb_devices", lambda: {"S1": {}})
+    monkeypatch.setattr(ws.time, "sleep", lambda *a: None)
+    monkeypatch.setitem(ro.DISPATCH._data, "watch.switch_ssh",
+                        lambda args: {"ok": True, "ip": "x"})
+    ws._ssh_align_fail.clear()
+    ws._ssh_align_cycled.clear()
+
+    ws._align_usb_mode_worker("S1", "ssh")
+    ws._align_usb_mode_worker("S1", "ssh")
+    assert len(cycles) == 1
+    reachable["ok"] = True                      # the cycle worked
+    ws._align_usb_mode_worker("S1", "ssh")
+    reachable["ok"] = False                     # a NEW outage, later
+    ws._align_usb_mode_worker("S1", "ssh")
+    ws._align_usb_mode_worker("S1", "ssh")
+    assert len(cycles) == 2, "a later outage could never be recovered"
+
+
+def test_unreachable_stray_never_cycles_someone_elses_port(monkeypatch):
+    """Same guard as adb's recovery (audit A4): the watch may have been moved,
+    and cutting power to its old seat would bounce whoever sits there now. Also
+    covers the unbound case — no exact binding means no port to cut, and the
+    codename is never good enough to guess with."""
+    from asteroid_docking_bay import webstatus as ws
+    import asteroid_docking_bay.fastboot as fb
+    import asteroid_docking_bay.usb as usb
+    cycles = []
+    monkeypatch.setattr(fb, "_switch_ssh_to_adb",
+                        lambda ip="x": {"ok": False, "error": "unreachable"})
+    monkeypatch.setattr(ws, "uhubctl_cycle", lambda l, p: cycles.append((l, p)))
+    monkeypatch.setattr(ws, "load_config", _stray_cfg)
+    monkeypatch.setattr(usb, "_sysfs_serial_at", lambda l, p: "SOMEONE-ELSE")
+    ws._ssh_align_fail.clear()
+    ws._ssh_align_cycled.clear()
+    ws._align_usb_mode_worker("S1", "ssh")
+    ws._align_usb_mode_worker("S1", "ssh")
+    assert cycles == [], "bounced a different watch that had taken the seat"
+
+    # No exact port binding at all → nothing to cycle, and no guessing.
+    monkeypatch.setattr(ws, "load_config",
+                        lambda: {"hubs": [{"location": "1-3.4",
+                                           "ports": {"2": "nemo"}}],
+                                 "serials": {"S1": "nemo"}})
+    monkeypatch.setattr(usb, "_sysfs_serial_at", lambda l, p: "S1")
+    ws._ssh_align_fail.clear()
+    ws._ssh_align_cycled.clear()
+    ws._align_usb_mode_worker("S1", "ssh")
+    ws._align_usb_mode_worker("S1", "ssh")
+    assert cycles == [], "guessed a port from the codename and cut its power"

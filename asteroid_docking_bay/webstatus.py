@@ -15,7 +15,8 @@ from .adb import (_adb_state, _resolve_conn_state, adb_devices, adb_shell,
                   battery_and_screen, get_watch_codename)
 from .boottime import measure_boot
 from .config import (_config_lock, charge_config, find_codename_for_serial,
-                     hub_name_entry_for, load_config, orbit_members,
+                     hub_name_entry_for, load_config, loc_port_for_serial,
+                     orbit_members,
                      record_exact_codename, save_config, ssh_ip_for_serial,
                      usb_mode_preference)
 from . import orbit
@@ -133,6 +134,13 @@ def _maybe_self_heal_fake_power(slot: str, loc: str, port: int,
 _STRAY_SSH_IP = "192.168.2.15"
 _ssh_align_attempt: dict[str, float] = {}
 _SSH_ALIGN_BACKOFF_SEC = 90
+# Consecutive failures to REACH a stray, and the serials already power-cycled
+# for the current run of them. An unreachable stray is not a slow stray: it has
+# no DHCP lease and will not get one without re-enumerating, so the backoff
+# alone would retry an impossible probe forever.
+_ssh_align_fail: dict[str, int] = {}
+_ssh_align_cycled: set[str] = set()
+_SSH_ALIGN_FAILS_BEFORE_CYCLE = 2
 
 
 def _maybe_align_usb_mode(serial: "str | None", adb_state: "str | None",
@@ -148,6 +156,8 @@ def _maybe_align_usb_mode(serial: "str | None", adb_state: "str | None",
     if adb_state != "ssh" or not serial or ssh_ip_for_serial(cfg, serial):
         if serial:
             _ssh_align_attempt.pop(serial, None)
+            _ssh_align_fail.pop(serial, None)
+            _ssh_align_cycled.discard(serial)
         return
     now = time.time()
     if now - _ssh_align_attempt.get(serial, 0) < _SSH_ALIGN_BACKOFF_SEC:
@@ -170,7 +180,10 @@ def _align_usb_mode_worker(serial: str, pref: str) -> None:
     if not res.get("ok"):
         log.warning("%s: could not reach the stray SSH watch to align it: %s",
                     serial, res.get("error"))
+        _recover_unreachable_stray(serial)
         return
+    _ssh_align_fail.pop(serial, None)
+    _ssh_align_cycled.discard(serial)
     if pref == "adb":
         return   # back on the standard mode — done
     finish_ssh_relocation(serial)
@@ -198,6 +211,44 @@ def finish_ssh_relocation(serial: str) -> None:
     if not out.get("ok"):
         log.warning("%s: SSH IP relocation failed: %s", serial, out.get("error"))
 
+
+def _recover_unreachable_stray(serial: str) -> None:
+    """Power-cycle a stray that cannot be reached — ONCE.
+
+    Retrying the probe cannot work: a watch that cold-booted into developer
+    mode gets no DHCP lease until it re-enumerates, so the same probe fails
+    identically on every backoff, forever. a-d-b already owns the right
+    recovery for exactly this shape — adb's "not enumerating → power-cycling
+    once" — including its safety check, so this applies that rather than
+    inventing a second mechanism.
+
+    One cycle per run of failures: if the cycle does not help, something else
+    is wrong and churning the bus will not find it."""
+    if serial in _ssh_align_cycled:
+        return
+    fails = _ssh_align_fail.get(serial, 0) + 1
+    _ssh_align_fail[serial] = fails
+    if fails < _SSH_ALIGN_FAILS_BEFORE_CYCLE:
+        return
+    seat = loc_port_for_serial(load_config(), serial)
+    if seat is None:
+        log.warning("%s: unreachable stray is not bound to a port — not "
+                    "guessing which one to cycle", serial)
+        return
+    loc, port = seat
+    from .usb import _sysfs_serial_at
+    here = _sysfs_serial_at(loc, port)
+    if here and here != serial:
+        # Same guard as adb's recovery (audit A4): the watch may have moved,
+        # and cycling would bounce whoever is sitting there now.
+        log.warning("%s: not power-cycling %s:%s to recover it — a different "
+                    "watch (%s) is seated there now", serial, loc, port, here)
+        return
+    log.info("%s: stray SSH watch unreachable after %d attempts — power-cycling "
+             "%s:%s once so it re-enumerates and can take a lease",
+             serial, fails, loc, port)
+    _ssh_align_cycled.add(serial)
+    uhubctl_cycle(loc, port)
 
 
 def _soft_remap(cfg: dict, online_by_path: dict[str, str]) -> "dict | None":
