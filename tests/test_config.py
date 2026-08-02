@@ -249,3 +249,33 @@ def test_ssh_ip_fills_a_freed_gap():
     del cfg["ssh_ips"]["S1"]              # free .37
     assert allocate_ssh_ip(cfg, "S3") == "192.168.13.37", "did not reuse the gap"
     assert b == "192.168.13.38"
+
+
+def test_loc_port_for_serial_only_trusts_an_exact_binding():
+    """The seat lookup is used to CUT POWER, so it must never guess. An exact
+    port_serials binding is the only acceptable answer; a codename mapping —
+    which find_serial_for_loc_port is happy to fall back on — is not, because
+    two watches of one codename would send the cycle to the innocent one."""
+    from asteroid_docking_bay.config import loc_port_for_serial
+    cfg = {"hubs": [{"location": "1-2", "port_serials": {"1": "OTHER"}},
+                    {"location": "1-3.4", "port_serials": {"2": "S1", "3": "S2"}}],
+           "serials": {"S9": "nemo"}}
+
+    assert loc_port_for_serial(cfg, "S1") == ("1-3.4", 2)
+    assert loc_port_for_serial(cfg, "S2") == ("1-3.4", 3)
+    assert loc_port_for_serial(cfg, "OTHER") == ("1-2", 1)
+
+    # Known watch, but bound to no port: None, not a codename-derived guess.
+    assert loc_port_for_serial(cfg, "S9") is None
+    assert loc_port_for_serial(cfg, "NEVER-SEEN") is None
+    assert loc_port_for_serial(cfg, "") is None
+    assert loc_port_for_serial({}, "S1") is None
+
+    # Malformed entries are not ports to cut power on.
+    assert loc_port_for_serial(
+        {"hubs": [{"location": "1-2", "port_serials": {"notanint": "S1"}}]},
+        "S1") is None
+    assert loc_port_for_serial(
+        {"hubs": [{"port_serials": {"1": "S1"}}]}, "S1") is None
+    assert loc_port_for_serial(
+        {"hubs": [{"location": "1-2", "port_serials": None}]}, "S1") is None

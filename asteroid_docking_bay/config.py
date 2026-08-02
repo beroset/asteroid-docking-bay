@@ -457,6 +457,30 @@ def find_codename_for_loc_port(cfg: dict, loc: str, port: int) -> str | None:
     return None
 
 
+def loc_port_for_serial(cfg: dict, serial: str) -> "tuple[str, int] | None":
+    """Where this serial is seated: (location, port), or None if unknown.
+
+    The inverse of find_serial_for_loc_port, but deliberately NOT its mirror.
+    That function falls back to the codename when no exact binding exists,
+    which is right for answering "who is probably on this port". It is wrong
+    here: callers use this answer to CUT POWER, and with two watches of the
+    same codename a guess would cycle the innocent one. So only an exact
+    per-port binding counts, and an unbound serial reports None rather than a
+    best effort.
+    """
+    if not serial:
+        return None
+    for hub in cfg.get("hubs", []):
+        for port_str, bound in (hub.get("port_serials") or {}).items():
+            if bound != serial:
+                continue
+            try:
+                return hub["location"], int(port_str)
+            except (KeyError, ValueError):
+                return None      # a malformed entry is not a port to cut
+    return None
+
+
 def find_serial_for_loc_port(cfg: dict, loc: str, port: int) -> str | None:
     """Return the best serial for a specific hub port.
 
