@@ -14,7 +14,8 @@ from .adb import (adb_devices_checked, battery_and_screen, get_battery_level,
                   maybe_heal_wedged_adb, wait_serial_online)
 from .config import (ChargeConfig, FlashConfig, charge_config, find_codename_for_loc_port,
                      find_port_for_codename, find_serial_for_loc_port,
-                     is_port_smart, is_slot_smart, load_config, orbit_members)
+                     is_port_smart, is_slot_smart, load_config, orbit_members,
+                     usb_mode_preference)
 from . import fastboot, orbit, usb
 from .registry import registry
 from .usb import (_SYSFS_USB, _port_device_present, _sysfs_get_power,
@@ -242,7 +243,17 @@ def _maybe_realign_stray_ssh(cfg: dict) -> None:
     _last_ssh_realign = time.time()
     log.info("stray SSH watch %s on the shared default address — switching it "
              "to adb to clear the address for the next one", serial)
-    _switch_ssh_to_adb()
+    if not _switch_ssh_to_adb().get("ok"):
+        return
+    if usb_mode_preference(cfg) != "ssh":
+        return
+    # Step two, which this path used to skip: hand the watch its own address
+    # and send it back out. Off this thread — the warmer is sequential and
+    # gently paced, and the completion waits up to 20s for the watch to
+    # reappear on adb.
+    from .webstatus import finish_ssh_relocation   # local: avoid an import cycle
+    threading.Thread(target=finish_ssh_relocation, args=(serial,),
+                     daemon=True).start()
 
 
 def _background_warmer() -> None:

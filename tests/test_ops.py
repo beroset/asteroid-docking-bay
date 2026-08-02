@@ -685,3 +685,54 @@ def test_a_normal_drain_still_polls(monkeypatch):
     opsmod.DrainOp(slot, "1-2", 2, {}).run()
     assert len(task.get("readings", [])) > 2, \
         "a normal drain test stopped polling"
+
+
+def _peel_env(monkeypatch, pref, switch_ok=True):
+    """Drive the real peeler with one stray found and a controllable switch."""
+    from asteroid_docking_bay import ops
+    spawned = []
+
+    class _T:
+        def __init__(self, target=None, args=(), daemon=None):
+            spawned.append((getattr(target, "__name__", target), args))
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(ops.threading, "Thread", _T)
+    monkeypatch.setattr(ops, "rndis_links", lambda: [{"serial": "S1", "iface": "e0"}])
+    monkeypatch.setattr(ops, "_stray_ssh_to_realign", lambda *a: "S1")
+    monkeypatch.setattr(ops, "_route_winner_iface", lambda: "e0")
+    monkeypatch.setattr(ops, "_detect_rndis", lambda ip: True)
+    monkeypatch.setattr(ops, "_switch_ssh_to_adb", lambda *a, **k: {"ok": switch_ok})
+    monkeypatch.setattr(ops, "usb_mode_preference", lambda cfg: pref)
+    ops._last_ssh_realign = 0.0
+    return ops, spawned
+
+
+def test_peeler_finishes_the_relocation_under_an_ssh_preference(monkeypatch):
+    """The peel is only step ONE. Two paths act on strays and this is the one
+    that can actually reach a shadowed watch, so when it stopped after the
+    switch to adb an 'ssh' fleet preference was silently never honoured — both
+    dory and sturgeon ended up on adb under an ssh preference. It must hand off
+    to the same completion step the poll-side aligner uses."""
+    ops, spawned = _peel_env(monkeypatch, "ssh")
+    ops._maybe_realign_stray_ssh({})
+    assert spawned == [("finish_ssh_relocation", ("S1",))], \
+        "the ssh preference was left unhonoured after the peel"
+
+
+def test_peeler_stops_at_adb_when_that_is_the_preference(monkeypatch):
+    """Under an 'adb' preference the peel IS the whole job — sending the watch
+    back out to SSH would undo the thing that was just asked for."""
+    ops, spawned = _peel_env(monkeypatch, "adb")
+    ops._maybe_realign_stray_ssh({})
+    assert spawned == [], "relocated a watch back to SSH under an adb preference"
+
+
+def test_peeler_does_not_relocate_a_watch_it_never_switched(monkeypatch):
+    """If the switch to adb failed, the watch is not on adb — handing it to a
+    step that waits for it there would just burn a thread and log a lie."""
+    ops, spawned = _peel_env(monkeypatch, "ssh", switch_ok=False)
+    ops._maybe_realign_stray_ssh({})
+    assert spawned == [], "chased a relocation after the switch had failed"

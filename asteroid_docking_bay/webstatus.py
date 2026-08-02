@@ -173,6 +173,19 @@ def _align_usb_mode_worker(serial: str, pref: str) -> None:
         return
     if pref == "adb":
         return   # back on the standard mode — done
+    finish_ssh_relocation(serial)
+
+
+def finish_ssh_relocation(serial: str) -> None:
+    """Second half of the stray round-trip: once the watch is back on adb, give
+    it its own SSH address and send it back out.
+
+    Shared with ops._maybe_realign_stray_ssh. Two code paths act on strays —
+    that one peels by route-winner scan, this module's aligner picks the serial
+    off the poll — and only the aligner used to carry this step. Since the
+    peeler is the path that can actually reach a shadowed watch, an "ssh" fleet
+    preference was routinely left unhonoured: the watch landed on adb and
+    stopped there. One completion step, called by whichever path acted."""
     for _ in range(20):
         time.sleep(1)
         if serial in adb_devices():
@@ -184,6 +197,7 @@ def _align_usb_mode_worker(serial: str, pref: str) -> None:
     out = rpcops.DISPATCH._data["watch.switch_ssh"]({"serial": serial})
     if not out.get("ok"):
         log.warning("%s: SSH IP relocation failed: %s", serial, out.get("error"))
+
 
 
 def _soft_remap(cfg: dict, online_by_path: dict[str, str]) -> "dict | None":
