@@ -761,6 +761,9 @@ function doSetSocket(slot,cur){
 }
 const AOSLOGO='<svg viewBox="0 0 2000 2000" width="13" height="13" style="vertical-align:-2px;margin-right:5px" shape-rendering="crispEdges" xmlns="http://www.w3.org/2000/svg"><defs><rect id="T" width="2" height="2"/></defs><g transform="matrix(100 100 -100 100 1000 0)"><g><use href="#T" style="fill:#be3729"/><use href="#T" id="b" x="2" style="fill:#dc2919"/><use href="#T" id="c" x="4" style="fill:#e54b3a"/><use href="#T" id="d" x="6" style="fill:#e56934"/><use href="#T" id="e" x="8" style="fill:#e57c21"/></g><g transform="translate(-2,2)"><use href="#b"/><use href="#c"/><use href="#T" id="f" x="10" style="fill:#e58a21"/></g><g transform="translate(-4,4)"><use href="#c"/><use href="#e"/><use href="#T" id="g" x="12" style="fill:#f19a11"/></g><g transform="translate(-6,6)"><use href="#d"/><use href="#e"/><use href="#f"/><use href="#T" id="h" x="14" style="fill:#f0ae0e"/></g><g transform="translate(-8,8)"><use href="#e"/><use href="#f"/><use href="#g"/><use href="#h"/><use href="#T" x="16" style="fill:#f0c30e"/></g></g></svg>';
 const USB_SSH_IP='192.168.2.15';
+// Text, not logos — see the note in mkadb. Keys match watchctl.WEAR_BRANDS.
+const WEAR_SHORT={'WearOS':'WO','AndroidWear':'AW'};
+const WEAR_LONG={'WearOS':'Wear OS','AndroidWear':'Android Wear'};
 function mkadb(adb,fbprod,os,serial,sshIp,name){
   const nm=esc(name||serial||'');
   if(adb==='device'){
@@ -772,10 +775,16 @@ function mkadb(adb,fbprod,os,serial,sshIp,name){
     const known=os&&os!=='asteroidos'&&os!=='unknown';
     const logo=os==='asteroidos'?AOSLOGO:'';
     const ser=serial?` <span class="dim">${esc(serial)}</span>`:'';
-    const ttl=`ADB mode${os==='asteroidos'?' — AsteroidOS':(known?' — '+esc(os):'')}`;
+    // Stock-Android watches get a two-letter brand prefix instead of a vendor
+    // logo. Google's marks are trademarked and their logos are copyrighted, so
+    // shipping one — especially in the same slot as the AsteroidOS logo, which
+    // would read as an affiliation between the two systems — needs permission
+    // we do not have. Naming the OS in text is referential use and needs none.
+    const brand=WEAR_SHORT[os]||'';
+    const ttl=`ADB mode${os==='asteroidos'?' — AsteroidOS':(known?' — '+esc(WEAR_LONG[os]||os):'')}`;
     if(!known&&serial)
       return `<button class="cbadge adb" onclick="openNC('${esc(serial)}','${nm}',event,'${esc(sshIp||'')}','device')" title="${ttl} — click for network details">${logo}ADB${ser}</button>`;
-    return `<span class="cbadge adb" title="${ttl}">${logo}ADB${ser}</span>`;
+    return `<span class="cbadge adb" title="${ttl}">${logo}${brand?brand+' ':''}ADB${ser}</span>`;
   }
   if(adb==='ssh'){
     // An allocated address is one a-d-b handed out and can reach. WITHOUT one

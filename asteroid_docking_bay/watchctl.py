@@ -102,7 +102,13 @@ def detect_watch_os(serial: str) -> str:
     # Android-based (Wear OS) watches have getprop instead of os-release.
     rc, out, _ = adb_shell(serial, "getprop ro.build.version.release")
     if rc == 0 and out.strip():
-        return "WearOS"
+        # Which brand it shipped under needs the companion app version; a
+        # failed read falls back to the modern name inside wear_brand().
+        _, sdk, _e = adb_shell(serial, "getprop ro.build.version.sdk")
+        _, app, _e = adb_shell(
+            serial, "dumpsys package com.google.android.wearable.app "
+                    "2>/dev/null | sed -n 's/.*versionName=//p' | head -1")
+        return wear_brand(sdk if _ == 0 else "", app)
     return "unknown"
 
 
@@ -178,7 +184,7 @@ _CC_SCRIPT = _CC_SCRIPT.replace("__BATDIR__", battery_dir_snippet())
 # Note also that getprop, /system/build.prop and ro.build.fingerprint all exist
 # on AsteroidOS too (it mounts the stock system partition read-only), so none of
 # them can be used to tell the two apart. detect_watch_os keys on /etc/os-release.
-_CC_SCRIPT_WEAROS = r'''echo "os=Wear OS $(getprop ro.build.version.release)"
+_CC_SCRIPT_WEAROS = r'''echo "android=$(getprop ro.build.version.release)"
 echo "host=$(getprop ro.product.model)"
 echo "kernel=$(uname -r)"
 echo "uptime=$(cut -d" " -f1 /proc/uptime 2>/dev/null)"
@@ -194,6 +200,7 @@ echo "bt_name=$(settings get secure bluetooth_name 2>/dev/null)"
 echo "build_id=$(getprop ro.build.id)"
 echo "fingerprint=$(getprop ro.build.fingerprint)"
 echo "sdk=$(getprop ro.build.version.sdk)"
+echo "wear_app=$(dumpsys package com.google.android.wearable.app 2>/dev/null | sed -n "s/.*versionName=//p" | head -1)"
 dumpsys battery 2>/dev/null | sed -n "s/^  level: /bat_cap=/p
 s/^  status: /bat_status_raw=/p
 s/^  health: /bat_health_raw=/p
@@ -210,13 +217,65 @@ _WEAROS_BAT_HEALTH = {"1": "Unknown", "2": "Good", "3": "Overheat", "4": "Dead",
                       "7": "Cold"}
 
 
-def normalise_wearos_cc(info: dict) -> dict:
+# Google renamed Android Wear to Wear OS in March 2018. The rename shipped as
+# an update to the companion app, NOT as a platform release — devices that
+# stayed on Android 7.1.1 were rebranded in place. So the Android version alone
+# cannot tell the two apart around that boundary, and the companion app version
+# is the only signal that actually moved.
+WEAR_BRANDS = ("WearOS", "AndroidWear")
+WEAR_LABEL = {"WearOS": "Wear OS", "AndroidWear": "Android Wear"}
+WEAR_SHORT = {"WearOS": "WO", "AndroidWear": "AW"}
+_WEAR_OS_APP_MIN = (2, 20)   # com.google.android.wearable.app at the rebrand
+
+
+def is_android_watch(os_name: "str | None") -> bool:
+    """Whether this watch runs the stock Android-based OS it shipped with,
+    under either of its brand names."""
+    return os_name in WEAR_BRANDS
+
+
+def wear_brand(sdk: str = "", app_version: str = "") -> str:
+    """Which of the two brand names this watch shipped under.
+
+    Pure, so the boundary cases can be tested without hardware — which matters
+    here because the rig has no Android Wear device to check against, so the
+    AndroidWear branch is reasoned, not observed.
+
+    Android 8.0 (SDK 26) postdates the rename, so anything at or above it is
+    unambiguously Wear OS. Below that, the companion app version decides.
+    When neither is readable we answer WearOS: an Android Wear device still in
+    service was rebranded in place by the app update years ago, so it is much
+    the likelier of the two — but that is a default, not a detection.
+    """
+    try:
+        if int(sdk.strip()) >= 26:
+            return "WearOS"
+    except (ValueError, AttributeError):
+        pass
+    parts = (app_version or "").strip().split(".")
+    try:
+        ver = (int(parts[0]), int(parts[1]))
+    except (ValueError, IndexError):
+        return "WearOS"
+    return "WearOS" if ver >= _WEAR_OS_APP_MIN else "AndroidWear"
+
+
+def normalise_wearos_cc(info: dict, brand: str = "WearOS") -> dict:
     """Translate the Android-flavoured readings into the fleet's own units.
 
     Pure, so it can be tested against captured device output. dumpsys reports
     status and health as integers and voltage in MILLIvolts, while every other
     watch reports words and MICROvolts — leaving that difference in place would
-    put two spellings of one concept in the same UI column."""
+    put two spellings of one concept in the same UI column.
+
+    The OS label is assembled here rather than on the watch: `ro.build.version.
+    release` is the ANDROID version, and printing it as "Wear OS 9" would state
+    a version that does not exist — Android 9 carries Wear OS 2.x.
+    """
+    android = info.pop("android", "").strip()
+    label = WEAR_LABEL.get(brand, brand)
+    info["os"] = f"{label} (Android {android})" if android else label
+    info["wear_brand"] = brand
     st = info.pop("bat_status_raw", None)
     if st is not None:
         info["bat_status"] = _WEAROS_BAT_STATUS.get(st.strip(), st.strip())
@@ -303,7 +362,8 @@ class Watch:
         the last AsteroidOS snapshot it had — indistinguishable from live data,
         which is how a watch reflashed to Wear OS went on reporting an
         AsteroidOS version, uptime and battery level it no longer had."""
-        wearos = _watch_os_for(self.serial) == "WearOS"
+        detected = _watch_os_for(self.serial)
+        wearos = is_android_watch(detected)
         script = _CC_SCRIPT_WEAROS if wearos else _CC_SCRIPT
         rc, out, _ = self.t.shell(shlex.quote(script), timeout=12)
         if rc != 0 or not out.strip():
@@ -330,7 +390,9 @@ class Watch:
         if wearos:
             # No connman on Android; leave the toggles unknown rather than
             # reporting them off, which would look like a state we had read.
-            return normalise_wearos_cc(info)
+            return normalise_wearos_cc(
+                info, wear_brand(info.get("sdk", ""),
+                                 info.get("wear_app", "")))
         info["wifi"] = tech.get("wifi")
         info["bluetooth"] = tech.get("bluetooth")
         # mce demo mode (mcetool -D on) forces the screen on and drains the

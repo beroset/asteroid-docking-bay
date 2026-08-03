@@ -112,7 +112,7 @@ def test_every_battery_reader_uses_the_preferred_gauge():
 # Android 9 / SDK 28, uid 2000) captured 2026-08-03. The empty values are the
 # point: those reads exist on AsteroidOS and silently return nothing here.
 
-_WEAROS_CC_OUT = """os=Wear OS 9
+_WEAROS_CC_OUT = """android=9
 host=OPPO Watch
 kernel=4.9.112-gf6e60c6-dirty-ab109
 uptime=39674.78
@@ -127,6 +127,7 @@ df=/dev/block/mmcblk0p40   4387952 398664   3989288  10% /data
 bt_name=OPPO Watch 9c8c
 build_id=PXDR.201012.001.OW19W6EU_11_A.51.211203091439
 sdk=28
+wear_app=2.41.0.333086249
 bat_cap=100
 bat_status_raw=5
 bat_health_raw=2
@@ -159,7 +160,7 @@ def test_wearos_watch_is_read_with_android_commands(monkeypatch):
     info, seen = _cc_via(monkeypatch, "22979c8c", "WearOS", _WEAROS_CC_OUT)
     assert "dumpsys battery" in seen["cmd"], "used the AsteroidOS script"
     assert "connmanctl" not in seen["cmd"], "connman does not exist on Android"
-    assert info["os"] == "Wear OS 9"
+    assert info["os"] == "Wear OS (Android 9)"
     assert info["host"] == "OPPO Watch"
     assert info["serial"] == "22979c8c"
 
@@ -195,12 +196,65 @@ def test_asteroidos_watch_still_uses_the_original_script(monkeypatch):
     assert info["bat_cap"] == "88"
 
 
-def test_normalise_is_a_noop_without_android_battery_fields():
-    """Called on anything else it must not invent or drop fields."""
+def test_normalise_invents_nothing_it_did_not_read():
+    """It labels the OS and converts battery units — and touches nothing else.
+    A field dumpsys did not report must stay absent rather than appear empty,
+    since an empty value in the UI reads as a reading, not as a gap."""
     from asteroid_docking_bay.watchctl import normalise_wearos_cc
-    before = {"bat_cap": "50", "os": "x"}
-    assert normalise_wearos_cc(dict(before)) == before
-    # A value dumpsys could plausibly emit but we have no mapping for stays put.
-    got = normalise_wearos_cc({"bat_status_raw": "9", "bat_mv": "notanumber"})
-    assert got["bat_status"] == "9"
-    assert "bat_volt" not in got, "a non-numeric voltage was converted anyway"
+    got = normalise_wearos_cc({"bat_cap": "50", "host": "OPPO Watch"})
+    assert got["bat_cap"] == "50" and got["host"] == "OPPO Watch"
+    for absent in ("bat_status", "bat_health", "bat_volt", "bat_temp"):
+        assert absent not in got, f"{absent} was invented from nothing"
+    # No android version read: label the brand alone, do not print "(Android )".
+    assert got["os"] == "Wear OS"
+
+    # A code dumpsys could emit that we have no mapping for stays as-is rather
+    # than being dropped or guessed at.
+    odd = normalise_wearos_cc({"bat_status_raw": "9", "bat_mv": "notanumber"})
+    assert odd["bat_status"] == "9"
+    assert "bat_volt" not in odd, "a non-numeric voltage was converted anyway"
+
+
+def test_os_label_never_prints_the_android_version_as_a_wear_version(monkeypatch):
+    """ro.build.version.release is the ANDROID version. Printing it as
+    "Wear OS 9" would state a version that has never existed — Android 9
+    carries Wear OS 2.x — so the label names both explicitly."""
+    info, _ = _cc_via(monkeypatch, "22979c8c", "WearOS", _WEAROS_CC_OUT)
+    assert info["os"] == "Wear OS (Android 9)"
+    assert info["os"] != "Wear OS 9"
+    assert info["wear_brand"] == "WearOS"
+
+
+def test_wear_brand_uses_the_companion_app_not_the_android_version():
+    """Google renamed Android Wear to Wear OS in March 2018 via an update to
+    the COMPANION APP, so watches that stayed on Android 7.1.1 were rebranded
+    in place. The Android version alone therefore cannot separate them around
+    that boundary — both rig watches sit on either side of it and are Wear OS."""
+    from asteroid_docking_bay.watchctl import wear_brand
+    # Verified devices: beluga (Android 9, app 2.41) and nemo (7.1.1, app 2.35).
+    assert wear_brand("28", "2.41.0.333086249") == "WearOS"
+    assert wear_brand("25", "2.35.0.325323493") == "WearOS", \
+        "an old Android version was mistaken for old branding"
+    # Pre-rename app on the same Android version -> the other brand.
+    assert wear_brand("25", "2.10.0.1") == "AndroidWear"
+    assert wear_brand("22", "1.5.0.7") == "AndroidWear"
+    # SDK 26+ postdates the rename outright, whatever the app says.
+    assert wear_brand("26", "1.0.0.0") == "WearOS"
+
+
+def test_wear_brand_defaults_rather_than_guessing_wrong_when_unreadable():
+    """Neither signal readable: answer with the modern name, because an Android
+    Wear device still in service was rebranded in place years ago. A default,
+    not a detection — and it must never crash on junk."""
+    from asteroid_docking_bay.watchctl import wear_brand
+    for bad in ("", "notanumber", "2", "..", None):
+        assert wear_brand(bad or "", bad or "") == "WearOS"
+
+
+def test_is_android_watch_covers_both_brands_but_not_asteroidos():
+    """cc_data picks its script from this; missing a brand would send the
+    AsteroidOS reads to an Android watch and reproduce the stale-panel bug."""
+    from asteroid_docking_bay.watchctl import is_android_watch
+    assert is_android_watch("WearOS") and is_android_watch("AndroidWear")
+    assert not is_android_watch("asteroidos")
+    assert not is_android_watch("unknown") and not is_android_watch(None)
