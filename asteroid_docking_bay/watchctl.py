@@ -165,6 +165,69 @@ echo "--connman--"
 connmanctl technologies 2>/dev/null'''
 _CC_SCRIPT = _CC_SCRIPT.replace("__BATDIR__", battery_dir_snippet())
 
+# The same read, for a watch running the stock Android/Wear OS it shipped with.
+# Deliberately emits the SAME KEY NAMES as _CC_SCRIPT: the parser, the UI and
+# every consumer stay unchanged, and only the source of each value differs.
+#
+# Every command here was verified on a stock, non-rooted watch (beluga
+# 22979c8c, Android 9 / SDK 28, uid 2000). What is ABSENT is as important as
+# what is present, because AsteroidOS reads happen to be the wrong ones:
+#   * /sys/class/power_supply/* is not readable by the shell user -> dumpsys
+#   * /proc/loadavg and /sys/class/net/*/address return empty
+#   * the rootfs is not on /, so `df /` says nothing useful -> df /data
+# Note also that getprop, /system/build.prop and ro.build.fingerprint all exist
+# on AsteroidOS too (it mounts the stock system partition read-only), so none of
+# them can be used to tell the two apart. detect_watch_os keys on /etc/os-release.
+_CC_SCRIPT_WEAROS = r'''echo "os=Wear OS $(getprop ro.build.version.release)"
+echo "host=$(getprop ro.product.model)"
+echo "kernel=$(uname -r)"
+echo "uptime=$(cut -d" " -f1 /proc/uptime 2>/dev/null)"
+echo "memtotal=$(grep -m1 MemTotal /proc/meminfo 2>/dev/null | tr -dc 0-9)"
+echo "memfree=$(grep -m1 MemFree /proc/meminfo 2>/dev/null | tr -dc 0-9)"
+echo "membuffers=$(grep -m1 Buffers /proc/meminfo 2>/dev/null | tr -dc 0-9)"
+echo "memcached=$(grep -m1 "^Cached" /proc/meminfo 2>/dev/null | tr -dc 0-9)"
+echo "soc=$(getprop ro.board.platform)"
+echo "datetime=$(date "+%Y-%m-%d %H:%M:%S")"
+echo "tz=$(getprop persist.sys.timezone)"
+echo "df=$(df /data 2>/dev/null | tail -1)"
+echo "bt_name=$(settings get secure bluetooth_name 2>/dev/null)"
+echo "build_id=$(getprop ro.build.id)"
+echo "fingerprint=$(getprop ro.build.fingerprint)"
+echo "sdk=$(getprop ro.build.version.sdk)"
+dumpsys battery 2>/dev/null | sed -n "s/^  level: /bat_cap=/p
+s/^  status: /bat_status_raw=/p
+s/^  health: /bat_health_raw=/p
+s/^  voltage: /bat_mv=/p
+s/^  temperature: /bat_temp=/p
+s/^  technology: /bat_tech=/p"'''
+
+# Android BatteryManager constants, mapped to the same words the AsteroidOS
+# sysfs read produces, so one concept has one spelling across the fleet.
+_WEAROS_BAT_STATUS = {"1": "Unknown", "2": "Charging", "3": "Discharging",
+                      "4": "Not charging", "5": "Full"}
+_WEAROS_BAT_HEALTH = {"1": "Unknown", "2": "Good", "3": "Overheat", "4": "Dead",
+                      "5": "Over voltage", "6": "Unspecified failure",
+                      "7": "Cold"}
+
+
+def normalise_wearos_cc(info: dict) -> dict:
+    """Translate the Android-flavoured readings into the fleet's own units.
+
+    Pure, so it can be tested against captured device output. dumpsys reports
+    status and health as integers and voltage in MILLIvolts, while every other
+    watch reports words and MICROvolts — leaving that difference in place would
+    put two spellings of one concept in the same UI column."""
+    st = info.pop("bat_status_raw", None)
+    if st is not None:
+        info["bat_status"] = _WEAROS_BAT_STATUS.get(st.strip(), st.strip())
+    hl = info.pop("bat_health_raw", None)
+    if hl is not None:
+        info["bat_health"] = _WEAROS_BAT_HEALTH.get(hl.strip(), hl.strip())
+    mv = info.pop("bat_mv", "").strip()
+    if mv.isdigit():
+        info["bat_volt"] = str(int(mv) * 1000)   # mV -> µV
+    return info
+
 # UI-session tools (screenshots, notifications) talk to the Wayland compositor
 # and the user's D-Bus session, which live under the `ceres` account — adb shell
 # is root and can't reach them, so Watch.user_cmd runs them via `su ceres` with
@@ -232,8 +295,17 @@ class Watch:
 
     def cc_data(self) -> dict:
         """Read About-style stats + connman toggle states in one batch.
-        Returns {} if unreachable."""
-        rc, out, _ = self.t.shell(shlex.quote(_CC_SCRIPT), timeout=12)
+        Returns {} if unreachable.
+
+        A watch running its stock Android/Wear OS answers none of the
+        AsteroidOS reads, so it gets its own script. Without this the batch
+        came back empty, cc_data returned {}, and the UI simply kept rendering
+        the last AsteroidOS snapshot it had — indistinguishable from live data,
+        which is how a watch reflashed to Wear OS went on reporting an
+        AsteroidOS version, uptime and battery level it no longer had."""
+        wearos = _watch_os_for(self.serial) == "WearOS"
+        script = _CC_SCRIPT_WEAROS if wearos else _CC_SCRIPT
+        rc, out, _ = self.t.shell(shlex.quote(script), timeout=12)
         if rc != 0 or not out.strip():
             return {}
         info: dict = {}
@@ -255,6 +327,10 @@ class Watch:
                 elif s.startswith("Powered =") and ctype:
                     tech[ctype] = (s.split("=", 1)[1].strip().lower() == "true")
         info["serial"] = self.serial
+        if wearos:
+            # No connman on Android; leave the toggles unknown rather than
+            # reporting them off, which would look like a state we had read.
+            return normalise_wearos_cc(info)
         info["wifi"] = tech.get("wifi")
         info["bluetooth"] = tech.get("bluetooth")
         # mce demo mode (mcetool -D on) forces the screen on and drains the

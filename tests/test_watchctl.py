@@ -105,3 +105,102 @@ def test_every_battery_reader_uses_the_preferred_gauge():
     # the two readers derive from one list, so they cannot drift apart
     assert _BATTERY_SYSFS_PATHS == tuple(f"{d}/capacity" for d in BATTERY_DIRS)
     assert BATTERY_DIRS[0].endswith("nanohub_fuelgauge-*")
+
+
+# ── Wear OS control-centre read ──────────────────────────────────────────────
+# Fixture is VERBATIM output from a stock, non-rooted watch (beluga 22979c8c,
+# Android 9 / SDK 28, uid 2000) captured 2026-08-03. The empty values are the
+# point: those reads exist on AsteroidOS and silently return nothing here.
+
+_WEAROS_CC_OUT = """os=Wear OS 9
+host=OPPO Watch
+kernel=4.9.112-gf6e60c6-dirty-ab109
+uptime=39674.78
+memtotal=921400
+memfree=37180
+membuffers=
+memcached=
+soc=msm8909
+datetime=2021-12-03 12:32:53
+tz=GMT
+df=/dev/block/mmcblk0p40   4387952 398664   3989288  10% /data
+bt_name=OPPO Watch 9c8c
+build_id=PXDR.201012.001.OW19W6EU_11_A.51.211203091439
+sdk=28
+bat_cap=100
+bat_status_raw=5
+bat_health_raw=2
+bat_mv=4411
+bat_temp=363
+"""
+
+
+def _cc_via(monkeypatch, serial, os_name, out):
+    """Drive the real cc_data with a stubbed transport and OS detection."""
+    from asteroid_docking_bay import watchctl as wc
+    monkeypatch.setitem(wc._watch_os, serial, os_name)
+    w = wc.Watch.__new__(wc.Watch)
+    w.serial = serial
+    seen = {}
+
+    class _T:
+        def shell(self, cmd, timeout=None):
+            seen["cmd"] = cmd
+            return 0, out, ""
+    w.t = _T()
+    return w.cc_data(), seen
+
+
+def test_wearos_watch_is_read_with_android_commands(monkeypatch):
+    """A Wear OS watch answers none of the AsteroidOS reads. Before this, the
+    batch came back empty, cc_data returned {}, and the UI kept rendering the
+    last AsteroidOS snapshot as though live — a watch reflashed to Wear OS went
+    on reporting an AsteroidOS version and battery it no longer had."""
+    info, seen = _cc_via(monkeypatch, "22979c8c", "WearOS", _WEAROS_CC_OUT)
+    assert "dumpsys battery" in seen["cmd"], "used the AsteroidOS script"
+    assert "connmanctl" not in seen["cmd"], "connman does not exist on Android"
+    assert info["os"] == "Wear OS 9"
+    assert info["host"] == "OPPO Watch"
+    assert info["serial"] == "22979c8c"
+
+
+def test_wearos_battery_is_translated_into_fleet_units(monkeypatch):
+    """dumpsys reports status/health as integers and voltage in MILLIvolts,
+    while every other watch reports words and MICROvolts. Leaving that alone
+    would put two spellings of one concept in the same UI column."""
+    info, _ = _cc_via(monkeypatch, "22979c8c", "WearOS", _WEAROS_CC_OUT)
+    assert info["bat_cap"] == "100"
+    assert info["bat_status"] == "Full"        # 5
+    assert info["bat_health"] == "Good"        # 2
+    assert info["bat_volt"] == "4411000"       # mV -> µV
+    assert info["bat_temp"] == "363"           # tenths on both, unchanged
+    for raw in ("bat_status_raw", "bat_health_raw", "bat_mv"):
+        assert raw not in info, f"{raw} leaked into the UI payload"
+
+
+def test_wearos_leaves_unread_toggles_unknown_rather_than_off(monkeypatch):
+    """There is no connman on Android. Reporting the radios as off would show a
+    state we never read — the same class of lie as rendering a stale snapshot."""
+    info, _ = _cc_via(monkeypatch, "22979c8c", "WearOS", _WEAROS_CC_OUT)
+    assert info.get("wifi") is None and info.get("bluetooth") is None
+
+
+def test_asteroidos_watch_still_uses_the_original_script(monkeypatch):
+    """The Wear OS path must not disturb the fleet's normal read."""
+    out = "os=AsteroidOS 2.2-nightly\nbat_cap=88\n--connman--\nType = wifi\nPowered = True\n"
+    info, seen = _cc_via(monkeypatch, "225791c5", "asteroidos", out)
+    assert "connmanctl" in seen["cmd"] and "dumpsys" not in seen["cmd"]
+    assert info["os"] == "AsteroidOS 2.2-nightly"
+    assert info["wifi"] is True
+    assert info["bat_cap"] == "88"
+
+
+def test_normalise_is_a_noop_without_android_battery_fields():
+    """Called on anything else it must not invent or drop fields."""
+    from asteroid_docking_bay.watchctl import normalise_wearos_cc
+    before = {"bat_cap": "50", "os": "x"}
+    assert normalise_wearos_cc(dict(before)) == before
+    # A value dumpsys could plausibly emit but we have no mapping for stays put.
+    got = normalise_wearos_cc({"bat_status_raw": "9", "bat_mv": "notanumber"})
+    assert got["bat_status"] == "9"
+    assert "bat_volt" not in got, "a non-numeric voltage was converted anyway"
