@@ -1052,7 +1052,29 @@ def _mark_booting(serial, commanded=False):
                        booting_commanded=bool(commanded))
 
 
-def _watch_action(loc, port, adb_cmd, fb_cmd, fail_msg, boots_os=False):
+_SSH_UNREACHABLE = ("connection refused", "no route to host",
+                    "connection timed out", "connection closed by remote host",
+                    "could not resolve", "permission denied",
+                    "host key verification failed")
+
+
+def _ssh_delivered(rc: int, err: str) -> bool:
+    """Whether an SSH command reached the watch.
+
+    A reboot or poweroff kills the link it arrived on, so ssh almost always
+    exits non-zero on success — rc alone cannot tell "the watch obeyed" from
+    "we never got there". What CAN be told apart is a failure to connect, and
+    that is the only case worth reporting as a failure: anything else means the
+    command was handed over before the link went.
+    """
+    if rc == 0:
+        return True
+    low = (err or "").lower()
+    return not any(marker in low for marker in _SSH_UNREACHABLE)
+
+
+def _watch_action(loc, port, adb_cmd, fb_cmd, fail_msg, boots_os=False,
+                  ssh_cmd=None):
     """Run a power action against whichever protocol the watch is speaking.
 
     A docked watch is reachable over adb when it is booted and over fastboot
@@ -1073,28 +1095,59 @@ def _watch_action(loc, port, adb_cmd, fb_cmd, fail_msg, boots_os=False):
     # link (the bootloader has no adb). Command the fastboot device bound to
     # THIS port by its own fastboot serial.
     fb_serial = _fastboot_serial_for_port(loc, port)
-    in_fb = fb_serial is not None
-    target = fb_serial if in_fb else serial
-    if not target:
+    if fb_serial is not None:
+        if fb_cmd is None:
+            return {"ok": False, "error": "action not available over fastboot"}
+        rc, _, err = _run(f"fastboot -s {fb_serial} {fb_cmd}",
+                          check=False, timeout=20)
+        if rc != 0:
+            return {"ok": False, "error": err or fail_msg}
+        if boots_os:
+            _mark_booting(serial or fb_serial, commanded=True)
+        return {"ok": True, "via": "fastboot"}
+
+    if not serial:
         return {"ok": False, "error": "no serial found for port"}
-    cmd = fb_cmd if in_fb else adb_cmd
-    if cmd is None:
+
+    # Only reach for adb when adb can actually answer. Firing the command at a
+    # watch that is in SSH mode used to leave the caller waiting on a state
+    # change that was never coming — the button appeared to do nothing at all.
+    if _adb_state(adb_devices(), serial) == "device":
+        if adb_cmd is None:
+            return {"ok": False, "error": "action not available over adb"}
+        rc, _, err = _run(f"adb -s {serial} {adb_cmd}", check=False, timeout=20)
+        if rc != 0:
+            return {"ok": False, "error": err or fail_msg}
+        if boots_os:
+            _mark_booting(serial, commanded=True)
+        return {"ok": True, "via": "adb"}
+
+    transport = _reachable_transport(serial)
+    if transport is not None and ssh_cmd:
+        rc, _, err = transport.shell(ssh_cmd, timeout=20)
+        if not _ssh_delivered(rc, err):
+            return {"ok": False, "error": err or fail_msg}
+        if boots_os:
+            _mark_booting(serial, commanded=True)
+        return {"ok": True, "via": transport.kind}
+
+    # Nothing could carry the command. Say so, and say what would fix it —
+    # reporting success here is worse than any error, because the caller then
+    # waits on a watch that was never told to do anything.
+    if transport is not None:
         return {"ok": False,
-                "error": f"action not available over {'fastboot' if in_fb else 'adb'}"}
-    tool = "fastboot" if in_fb else "adb"
-    rc, _, err = _run(f"{tool} -s {target} {cmd}", check=False, timeout=20)
-    if rc != 0:
-        return {"ok": False, "error": err or fail_msg}
-    if boots_os:
-        # We sent the reboot ourselves — no inference needed.
-        _mark_booting(serial or fb_serial, commanded=True)
-    return {"ok": True, "via": tool}
+                "error": "this watch is only reachable over SSH, and this "
+                         "action has no SSH equivalent — switch it to ADB "
+                         "mode first (Network Center → USB mode)"}
+    return {"ok": False,
+            "error": "no way to reach this watch right now: not in fastboot, "
+                     "not on adb, and no usable SSH address"}
 
 
 @DISPATCH.op("port.reboot")
 def _port_reboot(args):
     return _watch_action(args["loc"], args["port"], "reboot", "reboot",
-                         "reboot failed", boots_os=True)
+                         "reboot failed", boots_os=True, ssh_cmd="reboot")
 
 
 @DISPATCH.op("port.bootloader")
@@ -1102,6 +1155,10 @@ def _port_bootloader(args):
     # From adb this enters the bootloader; from fastboot it cycles it, which
     # is also how a fastboot battery reading gets re-sampled (the bootloader
     # snapshots it on entry and never refreshes within a session).
+    # No ssh_cmd on purpose: rebooting into the bootloader is an Android
+    # concept with no portable SSH equivalent, and inventing one would be a
+    # claim about watch-side behaviour we have not tested. Without adb the
+    # caller now gets an actionable refusal instead of silence.
     return _watch_action(args["loc"], args["port"], "reboot bootloader",
                          "reboot bootloader", "reboot to bootloader failed")
 

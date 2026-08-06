@@ -363,6 +363,11 @@ def _cap_cmd(monkeypatch, in_fastboot):
     # resolves fastboot by path, so the key here is the port's path, not a name.
     monkeypatch.setattr(ro, "_fastboot_list",
                         lambda: ({"S1": "1-2.1"} if in_fastboot else {}))
+    # "not in fastboot" no longer implies "on adb" — a watch can also be in
+    # SSH mode, which is the case the routing fix exists for. These cases are
+    # the booted-on-adb ones, so state that rather than leaving it implied.
+    monkeypatch.setattr(ro, "adb_devices", lambda: {})
+    monkeypatch.setattr(ro, "_adb_state", lambda d, s: "device")
     return ro, seen
 
 
@@ -738,6 +743,8 @@ def test_reboot_and_continue_track_the_boot_but_bootloader_does_not(monkeypatch)
     monkeypatch.setattr(ro, "load_config", lambda: {})
     monkeypatch.setattr(ro, "find_serial_for_loc_port", lambda c, l, p: "S9")
     monkeypatch.setattr(ro, "_run", lambda cmd, **k: (0, "", ""))
+    monkeypatch.setattr(ro, "adb_devices", lambda: {})
+    monkeypatch.setattr(ro, "_adb_state", lambda d, s: "device")   # booted on adb
     monkeypatch.setattr(ro.last_seen, "mark", lambda s, **k: marks.append((s, k)))
 
     monkeypatch.setattr(ro, "_fastboot_list", lambda: {})    # on adb, not fastboot
@@ -1006,3 +1013,93 @@ def test_sweep_unauthorized_watch_stays_powered_and_is_noted(monkeypatch):
                                   lambda m: None) == (None, "unauthorized")
     assert "cut" not in events                 # left powered
     assert "WEAR123" in noted                  # sighted in the fleet registry
+
+
+# ── _watch_action transport routing ──────────────────────────────────────────
+
+def _action_env(monkeypatch, *, fb=None, adb_online=False, transport=None):
+    """Stand up the three transports independently so each branch is reachable."""
+    import types
+    calls = []
+    monkeypatch.setattr(rpcops, "_refuse_if_busy", lambda l, p: None)
+    monkeypatch.setattr(rpcops, "load_config", lambda: {})
+    monkeypatch.setattr(rpcops, "find_serial_for_loc_port", lambda c, l, p: "S1")
+    monkeypatch.setattr(rpcops, "_fastboot_serial_for_port", lambda l, p: fb)
+    monkeypatch.setattr(rpcops, "adb_devices", lambda: {})
+    monkeypatch.setattr(rpcops, "_adb_state",
+                        lambda d, s: "device" if adb_online else None)
+    monkeypatch.setattr(rpcops, "_reachable_transport", lambda s: transport)
+    monkeypatch.setattr(rpcops, "_mark_booting", lambda *a, **k: None)
+    monkeypatch.setattr(rpcops, "_run",
+                        lambda cmd, **k: calls.append(cmd) or (0, "", ""))
+    return calls
+
+
+class _Ssh:
+    kind = "ssh (usb)"
+
+    def __init__(self, rc=255, err="Connection to 1.2.3.4 closed by remote host."):
+        self.rc, self.err, self.sent = rc, err, []
+
+    def shell(self, cmd, timeout=None):
+        self.sent.append(cmd)
+        return self.rc, "", self.err
+
+
+def test_watch_action_prefers_fastboot_then_adb():
+    """Unchanged behaviour for the two links that already worked."""
+    import pytest
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        calls = _action_env(monkeypatch, fb="FB1")
+        assert rpcops._watch_action("1-3", 1, "reboot", "reboot", "x")["via"] == "fastboot"
+        assert calls and calls[0].startswith("fastboot -s FB1")
+        calls2 = _action_env(monkeypatch, adb_online=True)
+        assert rpcops._watch_action("1-3", 1, "reboot", "reboot", "x")["via"] == "adb"
+        assert calls2 and calls2[0].startswith("adb -s S1")
+    finally:
+        monkeypatch.undo()
+
+
+def test_watch_action_reaches_an_ssh_mode_watch(monkeypatch):
+    """A watch in SSH mode is reachable — the command just has to go over the
+    link that is actually up. Before this it was fired at adb, which no longer
+    answers, so the caller waited on a state change that could never happen."""
+    t = _Ssh()
+    _action_env(monkeypatch, transport=t)
+    res = rpcops._watch_action("1-3", 1, "reboot", "reboot", "x",
+                               boots_os=True, ssh_cmd="reboot")
+    assert res["ok"] is True and res["via"] == "ssh (usb)"
+    assert t.sent == ["reboot"]
+
+
+def test_bootloader_on_an_ssh_watch_refuses_out_loud(monkeypatch):
+    """THE BUG mo reported: the 'boot to fastboot' button did nothing on an SSH
+    watch. Rebooting into the bootloader has no portable SSH equivalent, so the
+    honest answer is an actionable refusal — never a silent success, which
+    leaves the caller waiting on a watch that was never told anything."""
+    _action_env(monkeypatch, transport=_Ssh())
+    res = rpcops._watch_action("1-3", 1, "reboot bootloader", "reboot bootloader",
+                               "failed")          # no ssh_cmd
+    assert res["ok"] is False, "claimed success without delivering the command"
+    assert "adb" in res["error"].lower() and "ssh" in res["error"].lower()
+
+
+def test_watch_action_reports_when_nothing_can_reach_the_watch(monkeypatch):
+    _action_env(monkeypatch, transport=None)
+    res = rpcops._watch_action("1-3", 1, "reboot", "reboot", "x", ssh_cmd="reboot")
+    assert res["ok"] is False
+    assert "fastboot" in res["error"] and "adb" in res["error"]
+
+
+def test_ssh_delivery_distinguishes_a_dropped_link_from_never_arriving():
+    """A reboot kills the link it arrived on, so ssh exits non-zero on SUCCESS.
+    Only a failure to connect is a real failure — treating every non-zero exit
+    as failure would report every successful reboot as broken."""
+    assert rpcops._ssh_delivered(0, "")
+    assert rpcops._ssh_delivered(255, "Connection to 1.2.3.4 closed by remote host.")
+    for fatal in ("ssh: connect to host 1.2.3.4 port 22: Connection refused",
+                  "ssh: connect to host 1.2.3.4 port 22: No route to host",
+                  "ssh: connect to host 1.2.3.4 port 22: Connection timed out",
+                  "Host key verification failed."):
+        assert not rpcops._ssh_delivered(255, fatal), fatal
