@@ -10,11 +10,13 @@ import time
 
 from .util import log
 from .flap import flaps
+from . import oplock
 from . import wanze as wanze_mod
 from .adb import (_adb_state, _resolve_conn_state, adb_devices, adb_shell,
                   battery_and_screen, get_watch_codename)
 from .boottime import measure_boot
 from .config import (_config_lock, charge_config, find_codename_for_serial,
+                     find_serial_for_loc_port,
                      hub_name_entry_for, load_config, loc_port_for_serial,
                      orbit_members,
                      record_exact_codename, save_config, ssh_ip_for_serial,
@@ -97,6 +99,10 @@ def _maybe_self_heal_fake_power(slot: str, loc: str, port: int,
     Opt-in (charge.fake_power_self_heal); once per episode with a backoff; never
     during an active op; never blocks the status path (the cycle runs in a
     daemon thread)."""
+    if oplock.held(cfg, find_serial_for_loc_port(cfg, loc, port)):
+        # Cutting power to a held watch is worse than the wedge it would fix.
+        _fake_power_since.pop(slot, None)
+        return
     if not wedged or busy or not charge_config(cfg).fake_power_self_heal:
         _fake_power_since.pop(slot, None)
         _fake_power_cycles.pop(slot, None)   # episode over — reset the count
@@ -154,6 +160,10 @@ def _maybe_align_usb_mode(serial: "str | None", adb_state: "str | None",
     deliberately (switch_ssh allocates), so it is left alone, and a manual
     per-watch SSH switch is never undone. Guarded (per-serial backoff), runs in
     a daemon thread, never blocks the status path."""
+    if oplock.held(cfg, serial):
+        # A long operation owns this watch. Switching its USB mode underneath a
+        # running transfer is what produced a 0-byte dump on 2026-08-03.
+        return
     if adb_state != "ssh" or not serial:
         if serial:
             _ssh_align_attempt.pop(serial, None)
@@ -832,6 +842,7 @@ def _web_status_data(cfg: dict) -> list[dict]:
                 "wanze": wanze_here,
                 "wanze_known": wanze_mod.known(serial),
                 "wanze_probing": wanze_mod.probing(cfg, serial),
+                "held": oplock.held(cfg, serial),
                 "workbench": workbench,
                 "socket": sockets.get(port_str),
                 "excluded": excludes.get(port_str),

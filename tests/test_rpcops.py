@@ -91,7 +91,7 @@ def test_registered_ops_are_the_documented_contract():
     assert REGISTERED == {
         "status.get",
         "watch.cc", "watch.timeline", "watch.bootchart", "watch.diag", "watch.wake_set", "watch.locale_set",
-        "bench.app", "wanze.probe", "aod.check", "wifi.aps", "wifi.provision", "watch.session_restart", "watch.drainlog",
+        "bench.app", "wanze.probe", "oplock.set", "aod.check", "wifi.aps", "wifi.provision", "watch.session_restart", "watch.drainlog",
         "watch.settings_read", "watch.settings_write",
         "watch.quickpanel_set",
         "watch.toggle", "watch.settime", "watch.set_datetime", "watch.notify",

@@ -16,7 +16,7 @@ from .config import (ChargeConfig, FlashConfig, charge_config, find_codename_for
                      find_port_for_codename, find_serial_for_loc_port,
                      is_port_smart, is_slot_smart, load_config, orbit_members,
                      usb_mode_preference)
-from . import fastboot, orbit, usb
+from . import fastboot, oplock, orbit, usb
 from .registry import registry
 from .usb import (_SYSFS_USB, _port_device_present, _sysfs_get_power,
                   power_cache, uhubctl_get_power, uhubctl_set_power)
@@ -239,6 +239,12 @@ def _maybe_realign_stray_ssh(cfg: dict) -> None:
     serial = _stray_ssh_to_realign(links, cfg.get("ssh_ips", {}),
                                    _route_winner_iface(), _detect_rndis)
     if not serial:
+        return
+    if oplock.held(cfg, serial):
+        # THE 2026-08-03 REGRESSION: this peeler switched a watch to adb 45s
+        # before a 3.9 GB SSH dump started, and the dump wrote 0 bytes.
+        log.info("%s: stray SSH watch left alone — %s",
+                 serial, oplock.describe(oplock.held(cfg, serial)))
         return
     _last_ssh_realign = time.time()
     log.info("stray SSH watch %s on the shared default address — switching it "

@@ -29,7 +29,7 @@ from pathlib import Path
 import time
 
 from . import bench
-from . import wanze
+from . import oplock, wanze
 from . import aodcheck
 from .util import _run, log
 from .adb import _adb_state, adb_devices, get_watch_codename
@@ -821,6 +821,12 @@ def _op_owning(loc, port) -> "str | None":
 
 
 def _refuse_if_busy(loc, port) -> "dict | None":
+    cfg = load_config()
+    lock = oplock.held(cfg, find_serial_for_loc_port(cfg, loc, port))
+    if lock:
+        return {"ok": False, "busy": lock.get("kind"),
+                "error": f"this watch is held: {oplock.describe(lock)} — "
+                         f"release it first, or wait for it to expire"}
     kind = _op_owning(loc, port)
     if kind is None:
         return None
@@ -1384,6 +1390,23 @@ def _aod_check(argsd):
         return {"ok": True, "before_uptime": before.get("uptime"),
                 "after_uptime": after.get("uptime"),
                 **aodcheck.diff(before, after)}
+    return {"ok": False, "error": f"unknown action: {action}"}
+
+
+@DISPATCH.op("oplock.set")
+def _oplock_set(argsd):
+    """Claim or release a watch for a long operation.
+
+    Exposed as an op so a script driving a dump or a flash can take the lock
+    the same way the UI does — the collision this prevents came from a shell
+    script, not from a button."""
+    serial, action = argsd["serial"], argsd.get("action")
+    if action == "hold":
+        return oplock.hold(serial, argsd.get("kind") or "operation",
+                           argsd.get("note") or "",
+                           float(argsd.get("ttl") or oplock.DEFAULT_TTL_SEC))
+    if action == "release":
+        return oplock.release(serial)
     return {"ok": False, "error": f"unknown action: {action}"}
 
 
