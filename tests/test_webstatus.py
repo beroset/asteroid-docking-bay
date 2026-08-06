@@ -315,7 +315,10 @@ def test_align_usb_mode_only_touches_a_stray_and_backs_off(monkeypatch):
 
     class _T:
         def __init__(self, target=None, args=(), daemon=None):
-            spawned.append(args)
+            # Record WHICH worker, not just its arguments: an allocated watch
+            # and a stray now go to different ones, and the difference is the
+            # whole point of the test.
+            spawned.append((getattr(target, "__name__", target), args))
 
         def start(self):
             pass
@@ -325,13 +328,20 @@ def test_align_usb_mode_only_touches_a_stray_and_backs_off(monkeypatch):
     cfg = {"ssh_ips": {"S1": "192.168.13.40"}, "usb_mode_preference": "adb"}
 
     ws._maybe_align_usb_mode("S1", "ssh", cfg)          # allocated -> deliberate
-    assert spawned == [], "a watch with its own IP was disturbed"
+    # Its MODE is never touched — that is what "deliberate" protects. It does
+    # get a reachability probe, because an allocation is not proof the watch
+    # can be reached at it (see the allocated-but-unreachable tests below).
+    assert [n for n, _ in spawned] == ["_check_allocated_ssh_watch"], spawned
+    assert not any(n == "_align_usb_mode_worker" for n, _ in spawned), \
+        "a deliberately-switched watch was routed to the mode aligner"
+    spawned.clear()
     ws._maybe_align_usb_mode("S2", "device", cfg)       # not in SSH -> nothing
     assert spawned == []
     ws._maybe_align_usb_mode("S2", "ssh", cfg)          # stray -> align to pref
-    assert spawned == [("S2", "adb")], spawned
+    assert spawned == [("_align_usb_mode_worker", ("S2", "adb"))], spawned
     ws._maybe_align_usb_mode("S2", "ssh", cfg)          # backoff -> no re-fire
-    assert spawned == [("S2", "adb")], "re-fired inside the backoff window"
+    assert spawned == [("_align_usb_mode_worker", ("S2", "adb"))], \
+        "re-fired inside the backoff window"
 
 
 def test_align_worker_switches_to_adb_or_relocates_by_preference(monkeypatch):
@@ -581,3 +591,76 @@ def test_unreachable_stray_never_cycles_someone_elses_port(monkeypatch):
     ws._align_usb_mode_worker("S1", "ssh")
     ws._align_usb_mode_worker("S1", "ssh")
     assert cycles == [], "guessed a port from the codename and cut its power"
+
+
+def test_allocated_but_unreachable_ssh_watch_gets_the_same_recovery(monkeypatch):
+    """THE BLIND SPOT (found 2026-08-03): the aligner returned early whenever a
+    watch HAD an allocated SSH address, treating the allocation as proof of
+    health. nemo 604KPMZ003491 had 192.168.13.39 allocated and still could not
+    get a DHCP lease after a cold boot into developer mode — every op timed out,
+    and the one-shot power-cycle recovery never ran because the early return
+    fired first. An allocation is not reachability."""
+    from asteroid_docking_bay import webstatus as ws
+    import asteroid_docking_bay.fastboot as fb
+    import asteroid_docking_bay.usb as usb
+    cycles = []
+    cfg = {"ssh_ips": {"S1": "192.168.13.39"}, "usb_mode_preference": "ssh",
+           "hubs": [{"location": "1-3.4", "port_serials": {"4": "S1"}}]}
+    monkeypatch.setattr(ws, "load_config", lambda: cfg)
+    monkeypatch.setattr(ws, "uhubctl_cycle", lambda l, p: cycles.append((l, p)))
+    monkeypatch.setattr(usb, "_sysfs_serial_at", lambda l, p: "S1")
+    monkeypatch.setattr(ws, "_detect_rndis", lambda ip: False)   # does not answer
+    ws._ssh_align_fail.clear(); ws._ssh_align_cycled.clear()
+
+    ws._check_allocated_ssh_watch("S1", "192.168.13.39")
+    assert cycles == [], "cycled on the very first failed probe"
+    ws._check_allocated_ssh_watch("S1", "192.168.13.39")
+    assert cycles == [("1-3.4", 4)], "an allocated watch never got recovered"
+    ws._check_allocated_ssh_watch("S1", "192.168.13.39")
+    assert cycles == [("1-3.4", 4)], "kept cycling a watch one cycle did not fix"
+
+
+def test_an_allocated_watch_that_answers_is_left_completely_alone(monkeypatch):
+    """The whole point of an allocation is that the switch was deliberate. A
+    watch that answers at its own address must not be probed further, cycled,
+    or have its mode changed — and any earlier failure count must be cleared so
+    a later outage starts from zero."""
+    from asteroid_docking_bay import webstatus as ws
+    cycles = []
+    monkeypatch.setattr(ws, "uhubctl_cycle", lambda l, p: cycles.append((l, p)))
+    monkeypatch.setattr(ws, "_detect_rndis", lambda ip: True)     # answers
+    ws._ssh_align_fail.clear(); ws._ssh_align_cycled.clear()
+    ws._ssh_align_fail["S1"] = 1
+    ws._ssh_align_cycled.add("S1")
+
+    ws._check_allocated_ssh_watch("S1", "192.168.13.39")
+    assert cycles == []
+    assert "S1" not in ws._ssh_align_fail, "a healthy watch kept its failure count"
+    assert "S1" not in ws._ssh_align_cycled, "recovery stayed disarmed after recovery"
+
+
+def test_an_allocated_watch_is_probed_not_peeled(monkeypatch):
+    """An allocated watch must never be routed to the stray aligner: that would
+    switch its USB mode and undo a deliberate choice. It gets a reachability
+    probe instead."""
+    from asteroid_docking_bay import webstatus as ws
+    spawned = []
+
+    class _T:
+        def __init__(self, target=None, args=(), daemon=None):
+            spawned.append((getattr(target, "__name__", target), args))
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(ws.threading, "Thread", _T)
+    ws._ssh_align_attempt.clear()
+    cfg = {"ssh_ips": {"S1": "192.168.13.39"}, "usb_mode_preference": "adb"}
+    ws._maybe_align_usb_mode("S1", "ssh", cfg)
+    assert spawned == [("_check_allocated_ssh_watch", ("S1", "192.168.13.39"))], spawned
+
+    # A stray (no allocation) still goes to the aligner as before.
+    ws._ssh_align_attempt.clear()
+    spawned.clear()
+    ws._maybe_align_usb_mode("S2", "ssh", {"ssh_ips": {}, "usb_mode_preference": "adb"})
+    assert spawned == [("_align_usb_mode_worker", ("S2", "adb"))], spawned

@@ -25,7 +25,8 @@ from .usb import (_parse_hub_port_path, _port_device_present, _sysfs_hub_scan,
                   _sysfs_path_to_serial_map, _sysfs_usb_mode, adb_usb_paths,
                   uhubctl_cycle,
                   uhubctl_list)
-from .fastboot import _fastboot_getvar_product, _fastboot_list, ssh_reach_ip
+from .fastboot import (_detect_rndis, _fastboot_getvar_product,
+                       _fastboot_list, ssh_reach_ip)
 from .transport import SshTransport
 from .events import _latest_drain_summaries
 from .lastseen import last_seen
@@ -153,7 +154,7 @@ def _maybe_align_usb_mode(serial: "str | None", adb_state: "str | None",
     deliberately (switch_ssh allocates), so it is left alone, and a manual
     per-watch SSH switch is never undone. Guarded (per-serial backoff), runs in
     a daemon thread, never blocks the status path."""
-    if adb_state != "ssh" or not serial or ssh_ip_for_serial(cfg, serial):
+    if adb_state != "ssh" or not serial:
         if serial:
             _ssh_align_attempt.pop(serial, None)
             _ssh_align_fail.pop(serial, None)
@@ -163,11 +164,36 @@ def _maybe_align_usb_mode(serial: "str | None", adb_state: "str | None",
     if now - _ssh_align_attempt.get(serial, 0) < _SSH_ALIGN_BACKOFF_SEC:
         return
     _ssh_align_attempt[serial] = now
+    allocated = ssh_ip_for_serial(cfg, serial)
+    if allocated:
+        # A watch that was switched deliberately keeps its mode — but having an
+        # allocation is not proof it can be reached AT that allocation. Treating
+        # the two as the same thing is what left nemo 604KPMZ003491 sitting
+        # unreachable with a perfectly good address on 2026-08-03: it had no
+        # DHCP lease, every op timed out, and the recovery below never ran
+        # because the early return fired first. Probe, off the poll path.
+        threading.Thread(target=_check_allocated_ssh_watch,
+                         args=(serial, allocated), daemon=True).start()
+        return
     pref = usb_mode_preference(cfg)
     log.info("%s: stray SSH watch on the default IP — aligning to '%s'",
              serial, pref)
     threading.Thread(target=_align_usb_mode_worker, args=(serial, pref),
                      daemon=True).start()
+
+
+def _check_allocated_ssh_watch(serial: str, ip: str) -> None:
+    """A watch with its own SSH address should answer there. When it does not
+    it is in exactly the dead state a stray is in — no lease, no route, no
+    command can reach it — and it needs the same single power cycle. Its mode
+    is never changed: the switch was deliberate and stays honoured."""
+    if _detect_rndis(ip):
+        _ssh_align_fail.pop(serial, None)
+        _ssh_align_cycled.discard(serial)
+        return
+    log.warning("%s: does not answer at its own SSH address %s — "
+                "allocated but unreachable", serial, ip)
+    _recover_unreachable_ssh_watch(serial)
 
 
 def _align_usb_mode_worker(serial: str, pref: str) -> None:
@@ -180,7 +206,7 @@ def _align_usb_mode_worker(serial: str, pref: str) -> None:
     if not res.get("ok"):
         log.warning("%s: could not reach the stray SSH watch to align it: %s",
                     serial, res.get("error"))
-        _recover_unreachable_stray(serial)
+        _recover_unreachable_ssh_watch(serial)
         return
     _ssh_align_fail.pop(serial, None)
     _ssh_align_cycled.discard(serial)
@@ -212,8 +238,8 @@ def finish_ssh_relocation(serial: str) -> None:
         log.warning("%s: SSH IP relocation failed: %s", serial, out.get("error"))
 
 
-def _recover_unreachable_stray(serial: str) -> None:
-    """Power-cycle a stray that cannot be reached — ONCE.
+def _recover_unreachable_ssh_watch(serial: str) -> None:
+    """Power-cycle an SSH watch that cannot be reached — ONCE.
 
     Retrying the probe cannot work: a watch that cold-booted into developer
     mode gets no DHCP lease until it re-enumerates, so the same probe fails
@@ -244,7 +270,7 @@ def _recover_unreachable_stray(serial: str) -> None:
         log.warning("%s: not power-cycling %s:%s to recover it — a different "
                     "watch (%s) is seated there now", serial, loc, port, here)
         return
-    log.info("%s: stray SSH watch unreachable after %d attempts — power-cycling "
+    log.info("%s: SSH watch unreachable after %d attempts — power-cycling "
              "%s:%s once so it re-enumerates and can take a lease",
              serial, fails, loc, port)
     _ssh_align_cycled.add(serial)
