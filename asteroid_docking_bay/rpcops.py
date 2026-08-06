@@ -46,7 +46,8 @@ from . import drainlog, wifi
 from .watchctl import BACKUP_ROOT, DIAG_ROOT, Watch, _watch_os
 from .ops import ChargeOp, DrainOp, WorkbenchOp, _flash_one_watch
 from .fastboot import (_switch_ssh_to_adb, _usb_moded_switch_failed,
-                       _detect_rndis, _fastboot_list, fastboot_getvar_all,
+                       _detect_rndis, _fastboot_list, bootloader_unlocked,
+                       fastboot_getvar_all,
                        ssh_reach_ip)
 from .transport import SshTransport, USB_SSH_IP
 from .watchimg import watch_image_bytes
@@ -802,6 +803,13 @@ def _watch_fbreport(args):
     if not text or ":" not in text:
         return {"ok": False,
                 "error": "no fastboot device — put the watch in bootloader first"}
+    # The one capability in this dump worth keeping rather than filing: a
+    # locked bootloader refuses `fastboot boot`, so it decides whether this
+    # watch can ever be dumped by the clean debug-ramdisk method. Recording it
+    # per serial turns an hour of setup ending in a refusal into a question
+    # answered up front.
+    registry.note(serial, source="fastboot",
+                  bootloader_unlocked=bootloader_unlocked(text))
     codename = find_codename_for_loc_port(cfg, loc, port) or serial
     DIAG_ROOT.mkdir(parents=True, exist_ok=True)
     name = f"{codename}-{time.strftime('%Y%m%d-%H%M%S')}-fastboot.txt"

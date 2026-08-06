@@ -1158,3 +1158,24 @@ def test_os_family_is_blunt_on_purpose():
     assert rpcops._os_family("Android Wear (Android 7.1.1)") == "android"
     assert rpcops._os_family("") == "" and rpcops._os_family(None) == ""
     assert rpcops._os_family("SomeFutureOS 1.0") == ""
+
+
+def test_fbreport_records_the_unlock_state_against_the_watch(monkeypatch, tmp_path):
+    """The getvar dump is saved as a file, but one field in it is a durable
+    per-watch CAPABILITY rather than a report: a locked bootloader refuses
+    `fastboot boot`, so it decides whether this watch can ever be dumped by the
+    clean debug-ramdisk method. Filing it away in a text file leaves that
+    answer to be rediscovered by spending an hour and being refused."""
+    noted = {}
+    monkeypatch.setattr(rpcops, "load_config", lambda: {})
+    monkeypatch.setattr(rpcops, "find_serial_for_loc_port", lambda c, l, p: "S1")
+    monkeypatch.setattr(rpcops, "find_codename_for_loc_port", lambda c, l, p: "nemo")
+    monkeypatch.setattr(rpcops, "fastboot_getvar_all",
+                        lambda s: "product: nemo\nunlocked: no\n")
+    monkeypatch.setattr(rpcops, "DIAG_ROOT", tmp_path)
+    monkeypatch.setattr(rpcops.registry, "note",
+                        lambda serial, **kw: noted.update({serial: kw}))
+    res = rpcops.DISPATCH._data["watch.fbreport"]({"loc": "1-3", "port": 1})
+    assert res["ok"] is True
+    assert noted["S1"]["bootloader_unlocked"] is False, \
+        "the one durable capability in the dump was never recorded"

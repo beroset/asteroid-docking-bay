@@ -79,3 +79,48 @@ def test_stray_realign_picks_route_winner_and_skips_aligned():
     # No strays at all → None.
     assert _stray_ssh_to_realign(
         [LINKS[0]], {"A": "10.0.0.5"}, "ifA", up.__contains__) is None
+
+
+# ── bootloader unlock state: the capability that gates a clean dump ──────────
+
+_NEMO_GETVAR = """product: nemo
+serialno: 603KPVH000855
+unlocked: no
+secure: yes
+version-bootloader: LGE
+partition-size:boot: 0x1600000
+"""
+
+
+def test_parse_getvar_reads_the_dump_and_lets_later_lines_win():
+    from asteroid_docking_bay.fastboot import parse_getvar
+    kv = parse_getvar(_NEMO_GETVAR)
+    assert kv["product"] == "nemo" and kv["unlocked"] == "no"
+    assert kv["partition-size:boot"] == "0x1600000", "a key containing ':' was split wrong"
+    # fastboot repeats some keys; the settled value is the last one printed.
+    assert parse_getvar("unlocked: no\nunlocked: yes")["unlocked"] == "yes"
+    assert parse_getvar("") == {} and parse_getvar(None) == {}
+    assert parse_getvar("no colon here") == {}
+
+
+def test_bootloader_unlocked_decides_whether_a_clean_dump_is_even_possible():
+    """A locked bootloader refuses `fastboot boot` outright — verified on nemo
+    603KPVH000855 on 2026-08-03, which is where the whole debug-ramdisk dump
+    plan died. Knowing this per watch answers up front what otherwise costs an
+    hour of setup and a refusal."""
+    from asteroid_docking_bay.fastboot import bootloader_unlocked
+    assert bootloader_unlocked(_NEMO_GETVAR) is False
+    assert bootloader_unlocked("unlocked: yes") is True
+    assert bootloader_unlocked("device-unlocked: true") is True
+    # secure-boot reads the other way round.
+    assert bootloader_unlocked("secure-boot: yes") is False
+    assert bootloader_unlocked("secure-boot: no") is True
+
+
+def test_unknown_unlock_state_is_None_not_False():
+    """Absence of the field is not evidence of a lock. Reporting False would
+    quietly write off watches that are in fact dumpable."""
+    from asteroid_docking_bay.fastboot import bootloader_unlocked
+    assert bootloader_unlocked("product: nemo") is None
+    assert bootloader_unlocked("") is None
+    assert bootloader_unlocked("unlocked: maybe") is None

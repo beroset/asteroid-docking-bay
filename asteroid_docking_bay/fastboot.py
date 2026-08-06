@@ -95,6 +95,60 @@ def fastboot_getvar_all(serial: str) -> str:
     return "\n".join(lines)
 
 
+def parse_getvar(text: str) -> dict:
+    """`getvar all` as a dict. Pure — the report is already normalised text.
+
+    Later lines win: fastboot prints some keys more than once and the last
+    value is the settled one."""
+    out = {}
+    for line in (text or "").splitlines():
+        # Split on the LAST ": ", not the first colon: fastboot keys contain
+        # colons of their own ("partition-size:boot: 0x1600000"), and taking
+        # the first would file that under "partition-size" with the real key
+        # buried in the value.
+        key, sep, value = line.rpartition(": ")
+        if not sep:
+            key, sep, value = line.rpartition(":")
+        if not sep:
+            continue
+        key, value = key.strip(), value.strip()
+        if key:
+            out[key] = value
+    return out
+
+
+def bootloader_unlocked(text: str) -> "bool | None":
+    """Whether this watch's bootloader is unlocked, or None when it does not
+    say so.
+
+    This is the capability that decides whether a watch can be dumped cleanly
+    at all: the debug-ramdisk method needs `fastboot boot`, and a locked
+    bootloader refuses it outright ("not supported in locked device", nemo
+    603KPVH000855, 2026-08-03). Knowing it per watch turns an hour of setup
+    ending in a refusal into a question answered before starting.
+
+    None rather than False when unknown — absence of the field is not evidence
+    of a lock, and treating it as one would quietly write off dumpable watches.
+    """
+    kv = parse_getvar(text)
+    for key in ("unlocked", "device-unlocked", "secure-boot"):
+        raw = kv.get(key)
+        if raw is None:
+            continue
+        low = raw.lower()
+        if key == "secure-boot":          # inverted sense
+            if low in ("yes", "true", "1"):
+                return False
+            if low in ("no", "false", "0"):
+                return True
+            continue
+        if low in ("yes", "true", "1"):
+            return True
+        if low in ("no", "false", "0"):
+            return False
+    return None
+
+
 def _wait_for_fastboot(known_serials: set[str], timeout: int = 30) -> str | None:
     """Wait for a fastboot serial not present in known_serials."""
     deadline = time.monotonic() + timeout
