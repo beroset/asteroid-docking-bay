@@ -1179,3 +1179,28 @@ def test_fbreport_records_the_unlock_state_against_the_watch(monkeypatch, tmp_pa
     assert res["ok"] is True
     assert noted["S1"]["bootloader_unlocked"] is False, \
         "the one durable capability in the dump was never recorded"
+
+
+def test_op_args_take_the_body_but_never_let_it_override_the_url():
+    """Ops that take a body were silently receiving their defaults: the route
+    layer built args from URL params and static args only, and never read the
+    request body. wanze runs recorded an empty note for months, and an
+    operation lock came back labelled "operation" whatever the caller asked.
+    The call succeeded every time, which is why it went unnoticed.
+
+    Precedence is body < url < static, so a body cannot redirect a call at a
+    different watch by overriding the serial in the path."""
+    from asteroid_docking_bay.webapp import merge_op_args
+    args = merge_op_args({"kind": "dump", "note": "run 1", "serial": "ATTACKER"},
+                         {"serial": "REAL", "action": "hold"},
+                         {"forced": 1})
+    assert args["kind"] == "dump" and args["note"] == "run 1", \
+        "the request body never reached the op"
+    assert args["serial"] == "REAL", "a body overrode the serial in the URL"
+    assert args["forced"] == 1
+
+    # A static arg outranks a body trying to unset it.
+    assert merge_op_args({"stale": False}, {}, {"stale": True})["stale"] is True
+    # Absent or malformed body: still a usable arg dict, never a crash.
+    assert merge_op_args(None, {"serial": "S"}, None) == {"serial": "S"}
+    assert merge_op_args({}, {}, {}) == {}

@@ -44,7 +44,7 @@ _JSON_ROUTES = [
     ("POST", "/api/watch/<serial>/locale/<locale>",    "watch.locale_set", {},        False),
     ("POST", "/api/watch/<serial>/bench/app/<action>", "bench.app",      {},             False),
     ("POST", "/api/watch/<serial>/wanze/<action>",   "wanze.probe",     {},             False),
-    ("POST", "/api/watch/<serial>/hold/<action>",    "oplock.set",      {},             False),
+    ("POST", "/api/watch/<serial>/hold/<action>",    "oplock.set",      {},             True),
     ("POST", "/api/watch/<serial>/aod/<action>",     "aod.check",       {},             False),
     ("POST", "/api/watch/<serial>/session/restart",  "watch.session_restart", {},      False),
     ("POST", "/api/watch/<serial>/drainlog/<action>", "watch.drainlog",  {},             False),
@@ -88,6 +88,21 @@ _JSON_ROUTES = [
     ("POST", "/api/screen/release-all",            "screen.release_all", {},          True),
     ("GET",  "/api/drain/history",                 "drain.history",   {},             False),
 ]
+
+
+def merge_op_args(body: dict, url_args: dict, static: dict) -> dict:
+    """Arguments for an op call, from the request body, the URL and the route.
+
+    Precedence is body < url < static, and it is deliberate: a body must never
+    be able to redirect a call at a different watch by overriding the serial in
+    the path, and the static args are the server's own.
+
+    Bodies were not read at all until 2026-08-06, so every op expecting one
+    silently received its defaults — wanze runs recorded an empty note for
+    months, and an operation lock came back labelled "operation" whatever the
+    caller asked for. The call succeeded every time, which is why it went
+    unnoticed."""
+    return {**(body or {}), **(url_args or {}), **(static or {})}
 
 
 def serve(args, cfg: dict):
@@ -163,7 +178,22 @@ def serve(args, cfg: dict):
     def _register(method, path, op, static, bust):
         def handler(**url_args):
             resp.content_type = "application/json"
-            result = _call(op, {**url_args, **static})
+            # Merge the request BODY as well. Without this every op expecting
+            # one silently received its defaults instead — wanze runs recorded
+            # an empty note for months, and an operation lock came back labelled
+            # "operation" no matter what the caller asked for. A silent default
+            # is the hardest kind of wrong to notice, because the call succeeds.
+            #
+            # Precedence is deliberate and runs body < url < static: a body must
+            # never be able to redirect a call at another watch by overriding the
+            # serial in the path, and the static args are the server's own.
+            body = {}
+            try:
+                if request.json:
+                    body = dict(request.json)
+            except Exception:
+                body = {}          # malformed JSON is not a reason to 500
+            result = _call(op, merge_op_args(body, url_args, static))
             if bust:
                 _bust_status_cache()
             return json.dumps(result)
