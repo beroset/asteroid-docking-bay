@@ -43,7 +43,7 @@ from .usb import (_sysfs_hub_scan, _sysfs_path_to_serial_map, adb_usb_paths,
                   _sysfs_serial_at, xhci_slots,
                   test_port_power_switching, uhubctl_cycle, uhubctl_set_power)
 from . import drainlog, wifi
-from .watchctl import BACKUP_ROOT, DIAG_ROOT, Watch
+from .watchctl import BACKUP_ROOT, DIAG_ROOT, Watch, _watch_os
 from .ops import ChargeOp, DrainOp, WorkbenchOp, _flash_one_watch
 from .fastboot import (_switch_ssh_to_adb, _usb_moded_switch_failed,
                        _detect_rndis, _fastboot_list, fastboot_getvar_all,
@@ -136,12 +136,41 @@ def _prefs_set_usb_mode(args):
 
 # ── per-watch (Control Center) ──────────────────────────────────────────────
 
+def _os_family(text: str) -> str:
+    """Which OS a Control Center blob is describing, coarsely. Used only to
+    notice that a cached blob belongs to a DIFFERENT system than the watch is
+    running now, so the comparison wants to be blunt, not precise."""
+    low = (text or "").lower()
+    if "asteroid" in low:
+        return "asteroidos"
+    if "wear os" in low or "android wear" in low:
+        return "android"
+    return ""
+
+
 def _stale_cc(serial, standby):
     """The last-known Control Center blob for a watch, marked stale, or {} if
-    it was never seen. No device I/O — pure last_seen read, so it is instant."""
+    it was never seen. No device I/O — pure last_seen read, so it is instant.
+
+    A cached blob is dropped outright when we already know the watch is running
+    a DIFFERENT OS than the blob describes. That is not stale data, it is data
+    about another system: after beluga 22979c8c was restored to Wear OS its
+    panel went on reporting an AsteroidOS version, kernel and Qt build it no
+    longer had. Dimming that and calling it old would still be a false claim
+    about what the watch IS, which no age label can qualify."""
     cached = last_seen.get(serial)
     if not (cached and cached.get("cc")):
         return {}
+    # Only the in-memory detection cache — this path promises no device I/O.
+    detected = _watch_os.get(serial)
+    if detected:
+        was = _os_family(cached["cc"].get("os", ""))
+        now = _os_family(detected) or ("android" if detected in
+                                       ("WearOS", "AndroidWear") else "")
+        if was and now and was != now:
+            log.info("%s: dropping cached %s stats — the watch runs %s now",
+                     serial, was, now)
+            return {}
     blob = dict(cached["cc"])
     blob["stale"] = True
     blob["last_live_ts"] = cached.get("cc_ts")
@@ -231,7 +260,6 @@ def _watch_cc(args):
             extra["standby_measured"] = round(standby, 2)
         return {**data, **extra}
     return _stale_cc(serial, standby)
-    return {}
 
 
 @DISPATCH.op("watch.settings_read")

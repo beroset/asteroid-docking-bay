@@ -1103,3 +1103,58 @@ def test_ssh_delivery_distinguishes_a_dropped_link_from_never_arriving():
                   "ssh: connect to host 1.2.3.4 port 22: Connection timed out",
                   "Host key verification failed."):
         assert not rpcops._ssh_delivered(255, fatal), fatal
+
+
+# ── a cached Control Center blob for the WRONG OS ────────────────────────────
+
+def test_stale_cc_drops_a_blob_describing_a_different_os(monkeypatch):
+    """After beluga 22979c8c was restored to Wear OS its panel went on
+    reporting an AsteroidOS version, kernel and Qt build it no longer had.
+    That is not stale data — it is data about another system, and no age label
+    can qualify a false claim about what the watch IS."""
+    from asteroid_docking_bay.watchctl import _watch_os
+    monkeypatch.setitem(_watch_os, "S1", "WearOS")
+    monkeypatch.setattr(rpcops.last_seen, "get", lambda s: {
+        "cc": {"os": "AsteroidOS 2.2-nightly", "kernel": "4.9.112",
+               "bat_cap": "100"}, "cc_ts": 1000.0})
+    assert rpcops._stale_cc("S1", None) == {}, \
+        "served another OS's identity as this watch's own"
+
+
+def test_stale_cc_still_serves_a_blob_from_the_same_os(monkeypatch):
+    """The point is wrongness, not age. A watch that is merely off the bus must
+    still get its last-known values, dimmed and stamped — that behaviour is why
+    the cache exists."""
+    from asteroid_docking_bay.watchctl import _watch_os
+    monkeypatch.setitem(_watch_os, "S1", "asteroidos")
+    monkeypatch.setattr(rpcops.last_seen, "get", lambda s: {
+        "cc": {"os": "AsteroidOS 2.2-nightly", "bat_cap": "88"}, "cc_ts": 1000.0})
+    monkeypatch.setattr(rpcops, "ssh_ip_for_serial", lambda c, s: None)
+    monkeypatch.setattr(rpcops, "load_config", lambda: {})
+    blob = rpcops._stale_cc("S1", None)
+    assert blob["bat_cap"] == "88" and blob["stale"] is True
+    assert blob["last_live_ts"] == 1000.0
+
+
+def test_stale_cc_keeps_the_cache_when_the_os_is_not_known(monkeypatch):
+    """No detection cached (the watch has been offline since a restart) means
+    no evidence of a change — and absence of evidence must not throw away the
+    only data we have."""
+    from asteroid_docking_bay.watchctl import _watch_os
+    monkeypatch.delitem(_watch_os, "S1", raising=False)
+    monkeypatch.setattr(rpcops.last_seen, "get", lambda s: {
+        "cc": {"os": "AsteroidOS 2.2-nightly", "bat_cap": "77"}, "cc_ts": 1.0})
+    monkeypatch.setattr(rpcops, "ssh_ip_for_serial", lambda c, s: None)
+    monkeypatch.setattr(rpcops, "load_config", lambda: {})
+    assert rpcops._stale_cc("S1", None)["bat_cap"] == "77"
+
+
+def test_os_family_is_blunt_on_purpose():
+    """It only has to notice 'this is a different system', so an unrecognised
+    string must compare as unknown rather than as a mismatch — otherwise a new
+    OS name would silently start discarding good caches."""
+    assert rpcops._os_family("AsteroidOS 2.2-nightly") == "asteroidos"
+    assert rpcops._os_family("Wear OS (Android 9)") == "android"
+    assert rpcops._os_family("Android Wear (Android 7.1.1)") == "android"
+    assert rpcops._os_family("") == "" and rpcops._os_family(None) == ""
+    assert rpcops._os_family("SomeFutureOS 1.0") == ""
