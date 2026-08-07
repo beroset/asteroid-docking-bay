@@ -342,27 +342,38 @@ def known(serial: "str | None") -> bool:
     return bool(serial and _load_known().get(serial))
 
 
-def probing(cfg: dict, serial: "str | None") -> "dict | None":
-    """The marker for a measurement run in progress on this watch.
+# A wanze run is a long operation that must not be disturbed, which is exactly
+# what oplock exists for — so it IS an oplock, taken with kind="wanze". Keeping
+# a second marker meant a wanze run was invisible to the housekeeping that
+# oplock holds off, and two spellings of "leave this watch alone" is one too
+# many. The reads below still answer in wanze's own terms so callers and the UI
+# do not have to care.
+PROBING_KIND = "wanze"
+# A run spans hours or days and its whole point is to be left alone across
+# them, so it outlives oplock's default. It still expires: a marker with no end
+# would exempt a watch from housekeeping forever if a run were abandoned.
+PROBING_TTL_SEC = 14 * 24 * 3600
 
-    Persisted in the config, not held in memory like the drain task, because a
-    wanze run spans hours and a service restart mid-run must not quietly drop
-    the one indicator that says 'do not touch this watch'."""
-    if not serial:
+
+def probing(cfg: dict, serial: "str | None") -> "dict | None":
+    """The marker for a measurement run in progress on this watch, or None.
+
+    Persisted rather than held in memory like the drain task: a wanze run spans
+    hours and a service restart mid-run must not quietly drop the one indicator
+    that says 'do not touch this watch'."""
+    from . import oplock
+    lock = oplock.held(cfg, serial)
+    if not lock or lock.get("kind") != PROBING_KIND:
         return None
-    return (cfg.get("wanze_probing") or {}).get(serial)
+    return lock
 
 
 def probing_set(serial: str, on: bool, note: str = "") -> dict:
     """Start or clear the run marker."""
-    from .config import _config_lock, load_config, save_config
-    with _config_lock:
-        cfg = load_config()
-        runs = cfg.setdefault("wanze_probing", {})
-        if on:
-            runs[serial] = {"since": time.time(), "note": note}
-        else:
-            runs.pop(serial, None)
-        save_config(cfg)
+    from . import oplock
+    if on:
+        oplock.hold(serial, PROBING_KIND, note, PROBING_TTL_SEC)
+    else:
+        oplock.release(serial)
     log.info("%s: wanze probing %s", serial, "started" if on else "cleared")
     return {"ok": True, "probing": on}

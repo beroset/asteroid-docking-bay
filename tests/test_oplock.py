@@ -150,3 +150,49 @@ def test_ops_refuse_while_a_watch_is_held(monkeypatch):
     monkeypatch.setattr(rpcops, "find_serial_for_loc_port", lambda c, l, p: "OTHER")
     monkeypatch.setattr(rpcops, "_op_owning", lambda l, p: None)
     assert rpcops._refuse_if_busy("1-3", 1) is None
+
+
+# ── wanze's run marker IS an operation lock ──────────────────────────────────
+
+def test_a_wanze_run_is_an_operation_lock(monkeypatch):
+    """A wanze run is a long operation that must not be disturbed, which is
+    what oplock exists for. Keeping a second marker meant a wanze run was
+    INVISIBLE to the very housekeeping oplock holds off — a run could be
+    ended by the stray peeler that this whole mechanism exists to stop."""
+    from asteroid_docking_bay import wanze, oplock
+    now = time.time()
+    cfg = {"op_locks": {"S1": {"kind": wanze.PROBING_KIND, "note": "arm A",
+                               "since": now, "until": now + 600}}}
+    assert wanze.probing(cfg, "S1")["note"] == "arm A"
+    # And the housekeeping now sees it, which it could not before.
+    assert oplock.held(cfg, "S1")
+
+
+def test_probing_reports_only_wanze_runs_not_every_lock():
+    """A watch held for a dump is not 'wanze probing'. Reporting it as one
+    would put a false claim in the UI about what the watch is doing."""
+    from asteroid_docking_bay import wanze
+    now = time.time()
+    cfg = {"op_locks": {"S2": {"kind": "dump", "since": now, "until": now + 600}}}
+    assert wanze.probing(cfg, "S2") is None
+    assert wanze.probing(cfg, "MISSING") is None
+    assert wanze.probing({}, "S2") is None
+    assert wanze.probing(cfg, None) is None
+
+
+def test_a_wanze_run_still_expires_eventually():
+    """Its TTL is long because a run spans days and being left alone is the
+    point — but an abandoned run must not exempt a watch from housekeeping
+    forever, which a marker with no end would."""
+    from asteroid_docking_bay import wanze
+    assert wanze.PROBING_TTL_SEC > 24 * 3600, "too short for a real run"
+    # An ABSOLUTE upper bound, not one derived from the TTL itself: a test that
+    # computes its stale timestamp from PROBING_TTL_SEC passes for any value,
+    # including an effectively infinite one, which is the bug it exists to
+    # catch. A marker that cannot lapse within a month is not expiring.
+    assert wanze.PROBING_TTL_SEC <= 30 * 24 * 3600, \
+        "an abandoned run would exempt this watch from housekeeping ~forever"
+    stale = time.time() - wanze.PROBING_TTL_SEC - 60
+    cfg = {"op_locks": {"S1": {"kind": wanze.PROBING_KIND, "since": stale,
+                               "until": stale + wanze.PROBING_TTL_SEC}}}
+    assert wanze.probing(cfg, "S1") is None
