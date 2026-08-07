@@ -277,19 +277,39 @@ def dump_command(serial: str, ip: "str | None", dest: str) -> str:
             f'> {dest}')
 
 
-def disk_bytes(watch) -> "int | None":
-    """The watch's own idea of how big its disk is, in bytes.
+NO_ROOT_BLOCKER = (
+    "this watch answers, but will not let us read its disk. A stock Wear OS "
+    "build runs the shell unprivileged and denies even the disk size. Dumping "
+    "needs root: either AsteroidOS installed, or booted temporarily with "
+    "`fastboot boot` — which needs an unlocked bootloader.")
 
-    Asked BEFORE the copy so a truncated result can be recognised as one. A
-    short dump is the failure mode that hides best: it looks like a file.
+UNREACHABLE_BLOCKER = (
+    "cannot reach this watch to read its disk size — a dump that cannot be "
+    "size-checked is not a backup.")
+
+
+def disk_bytes(watch) -> "tuple[int | None, str | None]":
+    """(size in bytes, reason it could not be read).
+
+    Asked BEFORE the copy so a truncated result can be recognised as one: a
+    short dump is the failure that hides best, because it looks like a file.
+
+    The two failure modes are told apart deliberately. "Permission denied" and
+    "no answer" both used to surface as "cannot reach this watch", which sends
+    an operator chasing a connection problem that does not exist — measured on
+    beluga 22979c8c, a Wear OS watch that answers every other command happily
+    and refuses this one.
     """
-    rc, out, _ = watch.t.shell("cat /sys/class/block/mmcblk0/size", timeout=15)
-    if rc != 0:
-        return None
+    rc, out, err = watch.t.shell("cat /sys/class/block/mmcblk0/size", timeout=15)
+    text = f"{out} {err}".lower()
+    if "permission denied" in text or "denied" in text:
+        return None, NO_ROOT_BLOCKER
+    if rc != 0 or not out.strip():
+        return None, UNREACHABLE_BLOCKER
     try:
-        return int(out.strip()) * SECTOR
+        return int(out.strip()) * SECTOR, None
     except ValueError:
-        return None
+        return None, UNREACHABLE_BLOCKER
 
 
 def write_manifest(path: Path, **fields) -> None:

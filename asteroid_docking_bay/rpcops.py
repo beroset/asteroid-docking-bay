@@ -1484,11 +1484,9 @@ def _watch_dump(args):
 
     from . import stockrom
     w = _watch(serial)
-    expect = stockrom.disk_bytes(w)
-    if not expect:
-        return {"ok": False,
-                "error": "cannot reach this watch to read its disk size — "
-                         "a dump that cannot be size-checked is not a backup"}
+    expect, blocker = stockrom.disk_bytes(w)
+    if blocker:
+        return {"ok": False, "error": blocker}
     cfg = load_config()
     codename = (cfg.get("serials") or {}).get(serial) or serial
     stockrom.DUMP_ROOT.mkdir(parents=True, exist_ok=True)

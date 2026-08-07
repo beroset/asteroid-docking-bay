@@ -1215,7 +1215,7 @@ def test_a_dump_holds_the_watch_before_it_starts_copying(monkeypatch):
     after — a race the operator cannot see is the whole hazard."""
     from asteroid_docking_bay import stockrom, oplock
     order = []
-    monkeypatch.setattr(stockrom, "disk_bytes", lambda w: 4096)
+    monkeypatch.setattr(stockrom, "disk_bytes", lambda w: (4096, None))
     monkeypatch.setattr(rpcops, "_watch",
                         lambda s: type("W", (), {"t": object()})())
     monkeypatch.setattr(rpcops, "load_config", lambda: {"serials": {"S1": "nemo"}})
@@ -1242,12 +1242,16 @@ def test_a_dump_that_cannot_be_size_checked_is_refused(monkeypatch):
     backup from a truncated one, and a truncated backup looks exactly like a
     file. Refuse rather than produce something unverifiable."""
     from asteroid_docking_bay import stockrom
-    monkeypatch.setattr(stockrom, "disk_bytes", lambda w: None)
+    monkeypatch.setattr(stockrom, "disk_bytes",
+                        lambda w: (None, stockrom.NO_ROOT_BLOCKER))
     monkeypatch.setattr(rpcops, "_watch",
                         lambda s: type("W", (), {"t": object()})())
     rpcops._dump_runs.clear()
     res = rpcops.DISPATCH._data["watch.dump"]({"serial": "S1", "action": "start"})
-    assert res["ok"] is False and "size" in res["error"]
+    assert res["ok"] is False
+    # The reason reaches the operator verbatim, so a Wear OS watch says "needs
+    # root" rather than blaming a connection that is working fine.
+    assert res["error"] == stockrom.NO_ROOT_BLOCKER
 
 
 def test_a_truncated_dump_is_reported_as_failed_not_done(monkeypatch, tmp_path):

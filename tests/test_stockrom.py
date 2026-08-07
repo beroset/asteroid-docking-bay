@@ -212,21 +212,21 @@ def test_disk_size_is_asked_before_the_copy_so_truncation_is_detectable():
             def shell(cmd, timeout=None):
                 assert "/sys/class/block/mmcblk0/size" in cmd
                 return 0, "7634944\n", ""
-    assert sr.disk_bytes(_W) == 7634944 * 512     # nemo, measured 2026-08-03
+    assert sr.disk_bytes(_W) == (7634944 * 512, None)   # nemo, measured 2026-08-03
 
     class _Bad:
         class t:
             @staticmethod
             def shell(cmd, timeout=None):
                 return 1, "", "not found"
-    assert sr.disk_bytes(_Bad) is None
+    assert sr.disk_bytes(_Bad)[0] is None
 
     class _Junk:
         class t:
             @staticmethod
             def shell(cmd, timeout=None):
                 return 0, "not a number", ""
-    assert sr.disk_bytes(_Junk) is None, "a junk size would be compared against"
+    assert sr.disk_bytes(_Junk)[0] is None, "a junk size would be compared against"
 
 
 def test_manifest_records_what_a_filesystem_timestamp_cannot(tmp_path):
@@ -241,3 +241,30 @@ def test_manifest_records_what_a_filesystem_timestamp_cannot(tmp_path):
     assert "serial: S1" in text and "taken: 2026-08-07 10:00" in text
     assert "method: runtime" in text
     assert "note" not in text, "a None field was written as an empty claim"
+
+
+def test_no_root_is_told_apart_from_no_answer():
+    """A Wear OS watch answers every other command and refuses this one. Both
+    used to surface as "cannot reach this watch", which sends an operator
+    chasing a connection problem that does not exist — and hides the real fix,
+    which is that dumping needs root and therefore an unlocked bootloader.
+    Measured on beluga 22979c8c, 2026-08-07."""
+    class _Denied:
+        class t:
+            @staticmethod
+            def shell(cmd, timeout=None):
+                return 1, "", "cat: /sys/class/block/mmcblk0/size: Permission denied"
+
+    size, why = sr.disk_bytes(_Denied)
+    assert size is None
+    assert why == sr.NO_ROOT_BLOCKER
+    assert "root" in why and "bootloader" in why, "the real fix is not named"
+    assert "cannot reach" not in why, "still blames the connection"
+
+    class _Silent:
+        class t:
+            @staticmethod
+            def shell(cmd, timeout=None):
+                return 1, "", "device not found"
+
+    assert sr.disk_bytes(_Silent)[1] == sr.UNREACHABLE_BLOCKER
