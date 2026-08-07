@@ -1670,3 +1670,93 @@ def test_an_ssh_watch_without_an_allocation_reads_as_an_error(tmp_path):
     assert "unverified" in out["bad"], "the guess is not labelled as a guess"
     assert "192.168.2.15" not in out["bad"].split("onclick=")[1].split("title=")[0], \
         "an unverified address was passed to the Network Center as fact"
+
+
+# ── the Machine Room (icecc compile nodes) ───────────────────────────────────
+
+_MR_LIVE = ("{netname:'asteroid',scheduler:'192.168.176.164',reachable:true,"
+            "stale:false,building:false,slots:32,jobs_used:0,uptime_s:3602,"
+            "nodes:[{host:'mo-e15-eos',ip:'192.168.176.164',arch:'x86_64',"
+            "speed:0.0,jobs_used:0,jobs_max:14,load:118},"
+            "{host:'mo-w541-eos',ip:'192.168.176.21',arch:'x86_64',"
+            "speed:2.5,jobs_used:6,jobs_max:8,load:900}]}")
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_machine_room_is_completely_absent_without_a_cluster(tmp_path):
+    import json
+    """Most machines running a-d-b have never heard of icecream. A host that is
+    not a cluster member must render NOTHING — not an empty frame, not a
+    placeholder, not an error strip."""
+    h = tmp_path / "mr_absent.js"
+    h.write_text(_DOM_STUBS + JS +
+                 "\nconst rows=[];"
+                 "renderMachineRoom(null,rows);"
+                 "renderMachineRoom(undefined,rows);"
+                 "renderMachineRoom({nodes:[]},rows);"
+                 "console.log(JSON.stringify({n:rows.length}));"
+                 "\nprocess.exit(0);\n")
+    r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
+    assert r.returncode == 0, r.stderr[:400]
+    assert json.loads(r.stdout)["n"] == 0, "an empty Machine Room was rendered"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_machine_room_shows_busy_and_idle_nodes_differently(tmp_path):
+    import json
+    """A node doing work, a node deliberately idle and a node we cannot see are
+    three different things. Collapsing them into two is how a cluster that has
+    silently stopped distributing still looks fine."""
+    h = tmp_path / "mr_live.js"
+    h.write_text(_DOM_STUBS + JS +
+                 f"\nconst rows=[];renderMachineRoom({_MR_LIVE},rows);"
+                 "console.log(JSON.stringify(rows));"
+                 "\nprocess.exit(0);\n")
+    r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
+    assert r.returncode == 0, r.stderr[:400]
+    rows = json.loads(r.stdout)
+    html = "".join(rows)
+    assert len(rows) == 3, "expected a header plus one row per node"
+    assert "Machine Room" in rows[0] and "asteroid" in rows[0]
+    assert "mo-e15-eos" in html and "mo-w541-eos" in html
+    # the busy node is marked building; the idle one is not
+    assert "building 6" in html
+    assert "idlerow" in rows[1], "the idle node was not distinguished"
+    assert "idlerow" not in rows[2], "the working node was dimmed as idle"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_a_fresh_cluster_does_not_look_broken(tmp_path):
+    import json
+    """speed stays 0.00 until a node has completed real jobs, so a newly built
+    cluster reports zeros everywhere. Printing a bare 0.00 invites reading it
+    as a fault on day one."""
+    h = tmp_path / "mr_fresh.js"
+    h.write_text(_DOM_STUBS + JS +
+                 f"\nconst rows=[];renderMachineRoom({_MR_LIVE},rows);"
+                 "console.log(JSON.stringify(rows));"
+                 "\nprocess.exit(0);\n")
+    r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
+    rows = json.loads(r.stdout)
+    assert "not rated yet" in rows[1], "speed 0.00 shown bare"
+    assert "speed 2.50" in rows[2], "a rated node lost its score"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_an_unreachable_scheduler_still_shows_the_nodes(tmp_path):
+    import json
+    """THE STATE THAT MATTERS: unreachable means builds are running local right
+    now. Hiding the panel would remove the evidence at the moment it is most
+    worth having."""
+    h = tmp_path / "mr_dead.js"
+    dead = _MR_LIVE.replace("reachable:true", "reachable:false")
+    h.write_text(_DOM_STUBS + JS +
+                 f"\nconst rows=[];renderMachineRoom({dead},rows);"
+                 "console.log(JSON.stringify(rows));"
+                 "\nprocess.exit(0);\n")
+    r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
+    rows = json.loads(r.stdout)
+    assert len(rows) == 3, "the cluster vanished when the scheduler went away"
+    assert "unreachable" in rows[0]
+    assert "deadrow" in rows[1] and "deadrow" in rows[2]
+    assert "LOCAL" in "".join(rows), "the practical meaning is not stated"

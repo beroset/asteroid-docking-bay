@@ -29,7 +29,7 @@ from pathlib import Path
 import time
 
 from . import bench
-from . import oplock, wanze
+from . import icecc, oplock, wanze
 from . import aodcheck
 from .util import _run, log
 from .adb import _adb_state, adb_devices, get_watch_codename
@@ -114,6 +114,11 @@ def _status_get(args):
         "slots": {**xhci_slots(cfg.get("xhci_max_slots")),
                   "powered_ports": _powered_port_count(cfg),
                   "max_powered_ports": cfg.get("max_powered_ports")},
+        # The compile cluster this dock is part of, when it is part of one:
+        # None on any host without icecream, so the Machine Room renders
+        # nothing at all rather than an empty frame. Read from cache only —
+        # the scheduler is on another machine and must never stall this poll.
+        "machineroom": icecc.summary_cached(),
         # The version of the process running the ops — in split mode the
         # backend's, which is what an upgrade check cares about.
         "version": __version__,

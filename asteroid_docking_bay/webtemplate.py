@@ -281,6 +281,19 @@ _WEB_TEMPLATE = """\
     .cbadge.wifi{border-color:#39c5cf;color:#39c5cf}
     .cbadge.bat{border-color:#6e7681;color:#c9d1d9}
     .orbit-hint{color:#a78bfa;font-size:.85em;opacity:.85}
+    /* Machine Room — the compile cluster the dock itself runs on. Teal so it
+       reads as a sibling of Orbit (violet) rather than as another hub. */
+    .mroom-hdr .hl{color:#5ad1c3}
+    .mroom-row.idlerow{opacity:.7}
+    .mroom-row.deadrow{opacity:.45}
+    .mroom-host{font-size:11px;margin-left:6px}
+    /* Slot gauge: same visual idiom as the battery bar, so "how full is this
+       node" reads the same way as "how full is this watch". */
+    .slots{display:inline-block;width:74px;height:9px;border:1px solid #30363d;
+           border-radius:5px;overflow:hidden;vertical-align:-1px;background:#0d1117}
+    .slots i{display:block;height:100%;background:#3fb950}
+    .slots.hot i{background:#d29922}
+    .slots.idle i{background:#30363d}
     .drain-cfg{color:#a78bfa;font-size:10px;letter-spacing:.3px}
     .regmask{position:fixed;inset:0;background:rgba(2,6,14,.6);z-index:40}
     .regpanel{position:fixed;top:5vh;left:50%;transform:translateX(-50%);width:min(880px,94vw);max-height:88vh;z-index:41;background:rgba(13,20,32,.97);border:1px solid #30363d;border-radius:10px;box-shadow:0 12px 40px rgba(0,0,0,.5);display:flex;flex-direction:column}
@@ -896,6 +909,51 @@ function orbitBadge(p){
   const age=fmtAge(p.last_live_ts);
   return `<span class="dim" title="off WiFi — last live ${age||'unknown'} ago">offline${age?' &middot; '+age:''}</span>`;
 }
+function mroomState(n,reachable){
+  // Three states that must never collapse into two: a node doing work, a node
+  // deliberately idle, and a node we cannot see. Only the third is a problem.
+  if(!reachable) return {cls:'deadrow', badge:`<span class="cbadge err" title="the scheduler did not answer — builds are running LOCAL right now, not distributed">unreachable</span>`};
+  if(n.jobs_used>0) return {cls:'', badge:`<span class="cbadge ch" title="compiling ${n.jobs_used} of ${n.jobs_max} slots">building ${n.jobs_used}</span>`};
+  return {cls:'idlerow', badge:`<span class="dim" title="registered and healthy, no jobs assigned">idle</span>`};
+}
+function renderMachineRoom(mr,rows){
+  // Hidden ENTIRELY when this host is not part of a cluster: no empty frame,
+  // no error strip. Most machines running a-d-b have never heard of icecream.
+  if(!mr||!mr.nodes||!mr.nodes.length) return;
+  const live=!!mr.reachable;
+  const bits=[];
+  if(mr.netname) bits.push('net '+esc(mr.netname));
+  bits.push(mr.jobs_used+'/'+mr.slots+' slots busy');
+  if(mr.uptime_s) bits.push('scheduler up '+fmtAge(Date.now()/1000-mr.uptime_s));
+  if(!live) bits.push('scheduler unreachable');
+  else if(mr.building) bits.push('DISTRIBUTING');
+  rows.push(
+    `<tr class="hub-hdr mroom-hdr"><td colspan="8">`+
+    `<span class="hl">&#x2699; Machine Room</span>`+
+    `<span class="dim">${esc(bits.join(' \u00b7 '))}</span>`+
+    `</td></tr>`);
+  mr.nodes.forEach(n=>{
+    const st=mroomState(n,live);
+    const pct=n.jobs_max?Math.round(100*n.jobs_used/n.jobs_max):0;
+    const cls=!live?'idle':(n.jobs_used>0?(pct>80?'hot':''):'idle');
+    // speed is 0.00 until a node has completed real jobs, so a fresh cluster
+    // shows zeros everywhere. Say "not rated yet" rather than imply a fault.
+    const spd=n.speed>0?('speed '+n.speed.toFixed(2)):'not rated yet';
+    rows.push(
+      `<tr class="wr mroom-row ${st.cls}" id="wr-mroom-${esc(n.host)}">`+
+      `<td class="pcell"><span class="orbitglyph" title="compile node on the asteroid">&#x2699;</span></td>`+
+      `<td class="smtc"></td>`+
+      `<td class="connc">${st.badge}</td>`+
+      `<td class="thumb"></td>`+
+      `<td><b class="cn">${esc(n.host)}</b> <span class="dim mroom-host">${esc(n.ip)}</span></td>`+
+      `<td class="stats"><span class="dim">${esc(n.arch)} &middot; ${esc(spd)} &middot; load ${n.load}/1000</span></td>`+
+      `<td class="batc" title="${n.jobs_used} of ${n.jobs_max} compile slots in use">`+
+        `<span class="slots ${cls}"><i style="width:${pct}%"></i></span> `+
+        `<span class="dim">${n.jobs_used}/${n.jobs_max}</span></td>`+
+      `<td class="actc"></td>`+
+      `</tr>`);
+  });
+}
 function renderOrbit(hub,rows,lo,hi){
   // The Orbit section: a virtual hub of watches reached over the air. Same row
   // grammar as a physical hub minus power/port/smart, so it reads as one fleet.
@@ -1113,6 +1171,10 @@ function render(data){
       }
     });
   });
+  // The Machine Room sits below Orbit: physical hubs, then watches in orbit,
+  // then the compute the asteroid itself runs on. Renders nothing at all when
+  // this host is not part of a compile cluster.
+  renderMachineRoom(data&&data.machineroom, rows);
   reconcileRows(tb, rows);
   seenSerials=present; firstStatus=false;
   Object.keys(srcs).forEach(c=>{const b=document.getElementById('log-'+c);if(b)b.classList.add('show');});

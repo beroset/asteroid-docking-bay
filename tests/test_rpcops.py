@@ -1288,3 +1288,50 @@ def test_a_complete_dump_is_reported_done_and_releases_the_watch(monkeypatch, tm
     rpcops._dump_worker("S1", dest, tmp_path / "m.txt", "true", 4096, "nemo")
     assert rpcops._dump_runs["S1"]["state"] == "done"
     assert released == ["S1"], "the watch stayed held after the dump finished"
+
+
+def test_the_status_poll_never_waits_on_the_compile_scheduler(monkeypatch):
+    """THE HANDOVER'S CENTRAL WARNING. The scheduler lives on ANOTHER machine
+    and /api/status is polled continuously, so reading it inline would hand a
+    dead e15 or a dropped LAN link the power to stall the whole watch fleet UI
+    on a timer. The poll may only ever read the cache; refreshing happens on a
+    background thread. Watches are the primary function.
+
+    Driven through the REAL status op and timed, because the failure being
+    prevented is the delay itself — asserting which helper gets called would
+    pass just as happily with the blocking one wired in.
+    """
+    import time as _t
+    import types
+    from asteroid_docking_bay import icecc
+
+    monkeypatch.setattr(icecc, "configured",
+                        lambda *a, **k: {"scheduler": "10.255.255.1",
+                                         "netname": "asteroid", "max_jobs": "8"})
+
+    def _slow_query(*a, **k):
+        _t.sleep(3)                      # a scheduler that is up but wedged
+        return {"ok": False, "banner": "", "out": {}, "error": "timeout"}
+
+    monkeypatch.setattr(icecc, "query", _slow_query)
+    icecc._cache.update(ts=0.0, data=None)
+    icecc._refreshing.clear()
+
+    # Everything else in the status doc stubbed to nothing, so the only thing
+    # this measures is the compile-cluster read.
+    monkeypatch.setattr(rpcops, "load_config", lambda: {})
+    monkeypatch.setattr(rpcops, "_web_status_data", lambda cfg: [])
+    monkeypatch.setattr(rpcops, "charge_config",
+                        lambda c: types.SimpleNamespace(low_threshold=40,
+                                                        high_threshold=80))
+    monkeypatch.setattr(rpcops, "xhci_slots", lambda *a, **k: {})
+    monkeypatch.setattr(rpcops, "_powered_port_count", lambda cfg: 0)
+    monkeypatch.setattr(rpcops, "usb_mode_preference", lambda cfg: "adb")
+
+    start = _t.monotonic()
+    doc = rpcops.DISPATCH._data["status.get"]({})
+    elapsed = _t.monotonic() - start
+    assert "machineroom" in doc
+    assert elapsed < 1.0, (
+        f"/api/status waited {elapsed:.1f}s on another machine — a dead "
+        f"scheduler would freeze the fleet UI on a timer")
