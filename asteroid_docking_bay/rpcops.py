@@ -1429,6 +1429,84 @@ def _aod_check(argsd):
     return {"ok": False, "error": f"unknown action: {action}"}
 
 
+# Dump runs are tracked here rather than in tasks.py: they are per-SERIAL (a
+# watch can be dumped over WiFi with no port at all), while every task there is
+# keyed by a hub port.
+_dump_runs: dict = {}
+
+
+def _dump_worker(serial, dest, manifest, cmd, expect_bytes, codename):
+    import subprocess as sp
+    from . import stockrom
+    run = _dump_runs[serial]
+    try:
+        rc = sp.run(["bash", "-c", cmd], stdin=sp.DEVNULL,
+                    capture_output=True, timeout=4 * 3600).returncode
+        size = dest.stat().st_size if dest.exists() else 0
+        # A short dump is the failure that hides best: it looks like a file.
+        # Compare against what the WATCH said its disk was, asked before the
+        # copy started, and refuse to call a truncated result a backup.
+        complete = bool(expect_bytes) and size == expect_bytes
+        run.update(state="done" if complete else "failed", size=size,
+                   expect=expect_bytes, rc=rc,
+                   error=None if complete else
+                   (f"truncated: {size} of {expect_bytes} bytes — the link "
+                    f"dropped mid-copy" if expect_bytes else
+                    "could not read the watch's disk size to verify this dump"))
+        stockrom.write_manifest(
+            manifest, codename=codename, serial=serial,
+            taken=time.strftime("%Y-%m-%d %H:%M:%S"),
+            method="runtime (watch booted; userdata is NOT trustworthy)",
+            disk_bytes=expect_bytes, file_bytes=size,
+            complete=complete,
+            note=("Verify by taking a SECOND dump and comparing per partition: "
+                  "the quiescent partitions will match and userdata will not."))
+    except Exception as exc:                      # noqa: BLE001 - reported, not raised
+        run.update(state="failed", error=str(exc)[:200])
+    finally:
+        oplock.release(serial)
+        run["ended"] = time.time()
+
+
+@DISPATCH.op("watch.dump")
+def _watch_dump(args):
+    """Take a full-disk dump of a watch, in the background.
+
+    Held under an oplock for the duration, because a-d-b's own housekeeping
+    would otherwise switch the watch's USB mode mid-copy — which is exactly how
+    a 3.9 GB read produced a 0-byte file on 2026-08-03."""
+    serial = args["serial"]
+    if args.get("action") == "status":
+        return {"ok": True, "run": _dump_runs.get(serial)}
+    run = _dump_runs.get(serial)
+    if run and run.get("state") == "running":
+        return {"ok": False, "error": "a dump of this watch is already running"}
+
+    from . import stockrom
+    w = _watch(serial)
+    expect = stockrom.disk_bytes(w)
+    if not expect:
+        return {"ok": False,
+                "error": "cannot reach this watch to read its disk size — "
+                         "a dump that cannot be size-checked is not a backup"}
+    cfg = load_config()
+    codename = (cfg.get("serials") or {}).get(serial) or serial
+    stockrom.DUMP_ROOT.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    dest = stockrom.DUMP_ROOT / f"{codename}-{serial}-{stamp}.img"
+    manifest = stockrom.DUMP_ROOT / f"{codename}-{serial}-{stamp}.manifest.txt"
+    ip = ssh_ip_for_serial(cfg, serial) if isinstance(w.t, SshTransport) else None
+    cmd = stockrom.dump_command(serial, ip, str(dest))
+
+    oplock.hold(serial, "dump", f"full-disk dump to {dest.name}", 4 * 3600)
+    _dump_runs[serial] = {"state": "running", "started": time.time(),
+                          "dest": str(dest), "expect": expect, "size": 0}
+    threading.Thread(target=_dump_worker, daemon=True,
+                     args=(serial, dest, manifest, cmd, expect, codename)).start()
+    return {"ok": True, "started": True, "dest": dest.name,
+            "expect_bytes": expect}
+
+
 @DISPATCH.op("oplock.set")
 def _oplock_set(argsd):
     """Claim or release a watch for a long operation.

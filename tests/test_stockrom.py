@@ -185,3 +185,59 @@ def test_extract_refuses_an_unaligned_partition():
     would be silently written from the wrong offset."""
     with pytest.raises(ValueError, match="aligned"):
         sr.extract("cat x", sr.Partition("odd", 1, 100), "/dev/null")
+
+
+# ── taking a dump ────────────────────────────────────────────────────────────
+
+def test_dump_streams_over_whichever_link_is_up():
+    """One pipeline, not a buffered relay: holding 4 GB in the host process to
+    hand it along would be slower and would turn a link hiccup into a lost dump
+    rather than a short file. adb uses exec-out, the binary-safe channel —
+    `adb shell` mangles bytes on some hosts."""
+    ssh = sr.dump_command("S1", "192.168.13.39", "/tmp/x.img")
+    assert "ssh" in ssh and "192.168.13.39" in ssh and "dd if=/dev/mmcblk0" in ssh
+    assert "of=/tmp/x.img" in ssh
+
+    adb = sr.dump_command("S1", None, "/tmp/x.img")
+    assert "adb -s S1 exec-out" in adb, "adb shell mangles binary; exec-out does not"
+    assert "shell" not in adb.split("exec-out")[0]
+
+
+def test_disk_size_is_asked_before_the_copy_so_truncation_is_detectable():
+    """A short dump is the failure that hides best: it looks like a file. The
+    only way to know is to ask the WATCH how big its disk is, before starting."""
+    class _W:
+        class t:
+            @staticmethod
+            def shell(cmd, timeout=None):
+                assert "/sys/class/block/mmcblk0/size" in cmd
+                return 0, "7634944\n", ""
+    assert sr.disk_bytes(_W) == 7634944 * 512     # nemo, measured 2026-08-03
+
+    class _Bad:
+        class t:
+            @staticmethod
+            def shell(cmd, timeout=None):
+                return 1, "", "not found"
+    assert sr.disk_bytes(_Bad) is None
+
+    class _Junk:
+        class t:
+            @staticmethod
+            def shell(cmd, timeout=None):
+                return 0, "not a number", ""
+    assert sr.disk_bytes(_Junk) is None, "a junk size would be compared against"
+
+
+def test_manifest_records_what_a_filesystem_timestamp_cannot(tmp_path):
+    """A file's mtime is not a dump date — any copy resets it. That cost
+    several rounds of archaeology on 2026-08-03 to establish that an archive
+    dated June had been taken years earlier. The method matters just as much:
+    a runtime capture is trustworthy per partition and never for userdata."""
+    p = tmp_path / "m.txt"
+    sr.write_manifest(p, codename="nemo", serial="S1", taken="2026-08-07 10:00",
+                      method="runtime", disk_bytes=123, complete=True, note=None)
+    text = p.read_text()
+    assert "serial: S1" in text and "taken: 2026-08-07 10:00" in text
+    assert "method: runtime" in text
+    assert "note" not in text, "a None field was written as an empty claim"

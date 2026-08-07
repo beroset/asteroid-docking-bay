@@ -91,7 +91,7 @@ def test_registered_ops_are_the_documented_contract():
     assert REGISTERED == {
         "status.get",
         "watch.cc", "watch.timeline", "watch.bootchart", "watch.diag", "watch.wake_set", "watch.locale_set",
-        "bench.app", "wanze.probe", "oplock.set", "aod.check", "wifi.aps", "wifi.provision", "watch.session_restart", "watch.drainlog",
+        "bench.app", "wanze.probe", "oplock.set", "watch.dump", "aod.check", "wifi.aps", "wifi.provision", "watch.session_restart", "watch.drainlog",
         "watch.settings_read", "watch.settings_write",
         "watch.quickpanel_set",
         "watch.toggle", "watch.settime", "watch.set_datetime", "watch.notify",
@@ -1204,3 +1204,83 @@ def test_op_args_take_the_body_but_never_let_it_override_the_url():
     # Absent or malformed body: still a usable arg dict, never a crash.
     assert merge_op_args(None, {"serial": "S"}, None) == {"serial": "S"}
     assert merge_op_args({}, {}, {}) == {}
+
+
+# ── taking a dump: the two properties the feature exists for ─────────────────
+
+def test_a_dump_holds_the_watch_before_it_starts_copying(monkeypatch):
+    """THE 2026-08-03 FAILURE: a 3.9 GB read was starting over SSH when a-d-b's
+    own stray peeler switched the watch to adb 45 seconds ahead of it, and the
+    dump wrote 0 bytes. The lock must be taken BEFORE the copy begins, not
+    after — a race the operator cannot see is the whole hazard."""
+    from asteroid_docking_bay import stockrom, oplock
+    order = []
+    monkeypatch.setattr(stockrom, "disk_bytes", lambda w: 4096)
+    monkeypatch.setattr(rpcops, "_watch",
+                        lambda s: type("W", (), {"t": object()})())
+    monkeypatch.setattr(rpcops, "load_config", lambda: {"serials": {"S1": "nemo"}})
+    monkeypatch.setattr(rpcops, "ssh_ip_for_serial", lambda c, s: None)
+    monkeypatch.setattr(oplock, "hold",
+                        lambda *a, **k: order.append("hold") or {"ok": True})
+
+    class _T:
+        def __init__(self, *a, **k):
+            pass
+
+        def start(self):
+            order.append("copy")
+
+    monkeypatch.setattr(rpcops.threading, "Thread", _T)
+    rpcops._dump_runs.clear()
+    res = rpcops.DISPATCH._data["watch.dump"]({"serial": "S1", "action": "start"})
+    assert res["ok"] is True
+    assert order == ["hold", "copy"], f"lock not taken before the copy: {order}"
+
+
+def test_a_dump_that_cannot_be_size_checked_is_refused(monkeypatch):
+    """Without the watch's own disk size there is no way to tell a complete
+    backup from a truncated one, and a truncated backup looks exactly like a
+    file. Refuse rather than produce something unverifiable."""
+    from asteroid_docking_bay import stockrom
+    monkeypatch.setattr(stockrom, "disk_bytes", lambda w: None)
+    monkeypatch.setattr(rpcops, "_watch",
+                        lambda s: type("W", (), {"t": object()})())
+    rpcops._dump_runs.clear()
+    res = rpcops.DISPATCH._data["watch.dump"]({"serial": "S1", "action": "start"})
+    assert res["ok"] is False and "size" in res["error"]
+
+
+def test_a_truncated_dump_is_reported_as_failed_not_done(monkeypatch, tmp_path):
+    """A short dump is the failure that hides best. original-sprat.img is
+    0 bytes and sat in the backup directory looking present for months."""
+    from asteroid_docking_bay import oplock
+    dest = tmp_path / "short.img"
+    dest.write_bytes(b"x" * 100)                       # expected 4096
+    monkeypatch.setattr(oplock, "release", lambda s: None)
+
+    import subprocess as real_sp
+    monkeypatch.setattr(real_sp, "run",
+                        lambda *a, **k: type("R", (), {"returncode": 0})())
+    rpcops._dump_runs["S1"] = {"state": "running"}
+    rpcops._dump_worker("S1", dest, tmp_path / "m.txt", "true", 4096, "nemo")
+    run = rpcops._dump_runs["S1"]
+    assert run["state"] == "failed", "a truncated copy was called a backup"
+    assert "truncated" in run["error"] and "100" in run["error"]
+
+    # And the manifest says so too, since the file may outlive this process.
+    assert "complete: False" in (tmp_path / "m.txt").read_text()
+
+
+def test_a_complete_dump_is_reported_done_and_releases_the_watch(monkeypatch, tmp_path):
+    from asteroid_docking_bay import oplock
+    released = []
+    dest = tmp_path / "full.img"
+    dest.write_bytes(b"x" * 4096)
+    monkeypatch.setattr(oplock, "release", lambda s: released.append(s))
+    import subprocess as real_sp
+    monkeypatch.setattr(real_sp, "run",
+                        lambda *a, **k: type("R", (), {"returncode": 0})())
+    rpcops._dump_runs["S1"] = {"state": "running"}
+    rpcops._dump_worker("S1", dest, tmp_path / "m.txt", "true", 4096, "nemo")
+    assert rpcops._dump_runs["S1"]["state"] == "done"
+    assert released == ["S1"], "the watch stayed held after the dump finished"

@@ -26,6 +26,7 @@ from __future__ import annotations
 import re
 import struct
 import subprocess
+from pathlib import Path
 
 from .util import log
 
@@ -252,3 +253,53 @@ def extract(dump_cmd: str, part: Partition, dest: str, extra_mb: int = 0) -> int
                    stdin=subprocess.DEVNULL, timeout=3600)
     log.info("stockrom: extracted %s (%d MiB) -> %s", part.name, count, dest)
     return count
+
+
+# --- taking a dump ----------------------------------------------------------
+
+DUMP_ROOT = Path.home() / ".local/share/asteroid-docking-bay/dumps"
+
+
+def dump_command(serial: str, ip: "str | None", dest: str) -> str:
+    """The shell that streams a watch's whole disk into `dest`.
+
+    Built as a string rather than run piecemeal because the copy has to be ONE
+    pipeline: buffering 4 GB in the host process to hand it along would be
+    slower and would turn a link hiccup into a lost dump instead of a short
+    file. `ip` selects the link — SSH when the watch is in developer mode,
+    otherwise adb exec-out, which is the binary-safe channel (`adb shell`
+    mangles bytes on some hosts).
+    """
+    if ip:
+        return (f'ssh -o StrictHostKeyChecking=no -o ConnectTimeout=8 '
+                f'root@{ip} "dd if=/dev/mmcblk0" | dd of={dest} bs=4096')
+    return (f'adb -s {serial} exec-out "dd if=/dev/mmcblk0 2>/dev/null" '
+            f'> {dest}')
+
+
+def disk_bytes(watch) -> "int | None":
+    """The watch's own idea of how big its disk is, in bytes.
+
+    Asked BEFORE the copy so a truncated result can be recognised as one. A
+    short dump is the failure mode that hides best: it looks like a file.
+    """
+    rc, out, _ = watch.t.shell("cat /sys/class/block/mmcblk0/size", timeout=15)
+    if rc != 0:
+        return None
+    try:
+        return int(out.strip()) * SECTOR
+    except ValueError:
+        return None
+
+
+def write_manifest(path: Path, **fields) -> None:
+    """Record what this dump IS, beside it.
+
+    A filesystem timestamp is not a dump date — it is reset by any copy, which
+    cost several exchanges of archaeology on 2026-08-03 to work out that an
+    archive dated June had in fact been taken years earlier. The method matters
+    too: a runtime capture is trustworthy per partition and never for userdata,
+    and that distinction is lost the moment the file leaves this machine.
+    """
+    lines = [f"{k}: {v}" for k, v in fields.items() if v is not None]
+    path.write_text("\n".join(lines) + "\n")

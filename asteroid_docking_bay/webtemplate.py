@@ -1303,6 +1303,20 @@ function openControl(serial,name,ev,tab,sshIp,mode){
 // The row triggers still open the window on the tab that matches what was
 // clicked — codename→System, battery pill→Battery, network badge→Network.
 function openCC(s,n,ev){openControl(s,n,ev,'vit');}
+function doDump(serial){
+  if(!serial) return;
+  // The watch is held for the whole copy: a-d-b's own housekeeping would
+  // otherwise switch its USB mode mid-transfer, which is exactly how a 3.9 GB
+  // read once produced a 0-byte file.
+  if(!confirm('Take a full-disk backup of this watch? It runs in the background and can take many minutes. The watch is held until it finishes, so other actions on it will be refused.')) return;
+  fetch('/api/watch/'+encodeURIComponent(serial)+'/dump/start',{method:'POST'})
+    .then(r=>r.json()).then(d=>{
+      if(!d.ok){ toast(d.error||'could not start the dump'); return; }
+      toast('dump started: '+d.dest);
+      refresh();
+    });
+}
+
 function openNC(s,n,ev,sshIp,mode){openControl(s,n,ev,'net',sshIp,mode);}
 function openBI(s,n,ev){openControl(s,n,ev,'bat');}
 function ctlTabTo(tab){
@@ -2581,7 +2595,7 @@ function grpWorkbench(slot,serial,wb,mode,sshIp){
     mi('info','Test notification',`doNotify('${serial}')`,!online)+
     mi('info','Collect diagnostics',`doDiag('${slot}')`,!online);
 }
-function grpFlash(slot){
+function grpFlash(slot,serial){
   return mi('','Backup data',`doBackup('${slot}')`)+
     mi('','Restore data',`doRestore('${slot}')`)+
     mi('info','Fastboot report',`doFbReport('${slot}')`)+
@@ -2590,14 +2604,14 @@ function grpFlash(slot){
     mi('',"Flash 2.1",`doFlV('${slot}','2.1')`)+
     mi('',"Flash 2.0",`doFlV('${slot}','2.0')`)+
     '<div class="menu-sep"></div>'+
-    mi('','Dump mmcblk0',`doDump('${slot}')`,true,'not yet implemented')+
+    mi('','Dump mmcblk0',`doDump('${serial||''}')`,!serial,'takes a full-disk backup in the background; the watch is held for the duration so nothing else disturbs the copy')+
     mi('','Restore from dump',`doRestoreDump('${slot}')`,true,'not yet implemented');
 }
 function menuExecute(ev,slot,isFb,charging,draining,powered,noSw,serial,wb,mode,sshIp,wear,needPwr){
   openMenu(ev,
     (!isFb&&serial?grpHd('Wear')+grpBox(wearItem(slot,wear)):'')+
     grpHd('Power')+grpBox(isFb?grpPowerFb(slot,powered):grpPower(slot,charging,draining,powered,noSw))+
-    grpHd('Flashing')+grpBox(grpFlash(slot))+
+    grpHd('Flashing')+grpBox(grpFlash(slot,serial))+
     (!isFb?grpHd('Workbench')+grpBox(grpWorkbench(slot,serial,wb,mode,sshIp)):'')+
     grpHd('Refresh')+grpBox(mi('','Re-identify / power on',`doRemap('${slot}')`)));
 }

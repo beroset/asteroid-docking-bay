@@ -124,6 +124,7 @@ Deliberately mirrors the existing `/api/*` routes and module seams — the
 | `bench.restore` | put a watch's own watchface back after an interrupted run |
 | `bench.app` | benchymark app lifecycle: install/start/stop/remove/results |
 | `aod.check` | capture a watch's AoD state (MCE + dconf) and diff two captures; read-only, safe to run before anything touches the UI |
+| `watch.dump` | take a full-disk backup of a watch in the background. Held under an oplock for the duration so a-d-b's own housekeeping cannot switch its USB mode mid-copy; the result is size-checked against the watch's own reported disk size and a short file is reported FAILED, never as a backup; a manifest beside it records the date taken, the method and whether it completed |
 | `oplock.set` | claim or release a watch for a long operation (dump, flash). While held, a-d-b's own housekeeping — the stray-SSH peeler, the USB-mode aligner, the fake-power self-heal — leaves it alone, and per-port ops refuse. Persisted so it survives a service restart, and EXPIRING so a crashed holder cannot exempt a watch forever |
 | `wanze.probe` | wanze telemetry probe: install/stop/harvest. Reads a trace the watch recorded while undocked; `harvest` only clears the on-watch buffer when explicitly asked, since it is the only copy |
 
