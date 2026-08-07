@@ -293,6 +293,10 @@ _WEB_TEMPLATE = """\
            border-radius:5px;overflow:hidden;vertical-align:-1px;background:#0d1117}
     .slots i{display:block;height:100%;background:#3fb950}
     .slots.hot i{background:#d29922}
+    /* over-subscribed: the scheduler is pushing MORE jobs than this node
+       advertises. Normal under load, but it must not render as merely full. */
+    .slots.over{border-color:#d29922}
+    .slots.over i{background:repeating-linear-gradient(90deg,#d29922 0 6px,#8a6410 6px 10px)}
     .slots.idle i{background:#30363d}
     .drain-cfg{color:#a78bfa;font-size:10px;letter-spacing:.3px}
     .regmask{position:fixed;inset:0;background:rgba(2,6,14,.6);z-index:40}
@@ -934,8 +938,14 @@ function renderMachineRoom(mr,rows){
     `</td></tr>`);
   mr.nodes.forEach(n=>{
     const st=mroomState(n,live);
-    const pct=n.jobs_max?Math.round(100*n.jobs_used/n.jobs_max):0;
-    const cls=!live?'idle':(n.jobs_used>0?(pct>80?'hot':''):'idle');
+    // Clamp the BAR, never the number: a node can be handed more jobs than it
+    // advertises, and an unclamped width would make 15/14 and 8/8 look
+    // identical once the overflow is clipped. The raw count still tells the
+    // truth beside it.
+    const raw=n.jobs_max?Math.round(100*n.jobs_used/n.jobs_max):0;
+    const pct=Math.min(100,raw);
+    const over=n.jobs_used>n.jobs_max;
+    const cls=!live?'idle':(n.jobs_used>0?(over?'hot over':(raw>80?'hot':'')):'idle');
     // speed is 0.00 until a node has completed real jobs, so a fresh cluster
     // shows zeros everywhere. Say "not rated yet" rather than imply a fault.
     const spd=n.speed>0?('speed '+n.speed.toFixed(2)):'not rated yet';
@@ -947,7 +957,7 @@ function renderMachineRoom(mr,rows){
       `<td class="thumb"></td>`+
       `<td><b class="cn">${esc(n.host)}</b> <span class="dim mroom-host">${esc(n.ip)}</span></td>`+
       `<td class="stats"><span class="dim">${esc(n.arch)} &middot; ${esc(spd)} &middot; load ${n.load}/1000</span></td>`+
-      `<td class="batc" title="${n.jobs_used} of ${n.jobs_max} compile slots in use">`+
+      `<td class="batc" title="${n.jobs_used} of ${n.jobs_max} compile slots in use${over?' \u2014 over-subscribed: the scheduler is pushing more jobs than this node advertises, which is normal under load':''}">`+
         `<span class="slots ${cls}"><i style="width:${pct}%"></i></span> `+
         `<span class="dim">${n.jobs_used}/${n.jobs_max}</span></td>`+
       `<td class="actc"></td>`+

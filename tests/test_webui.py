@@ -1760,3 +1760,31 @@ def test_an_unreachable_scheduler_still_shows_the_nodes(tmp_path):
     assert "unreachable" in rows[0]
     assert "deadrow" in rows[1] and "deadrow" in rows[2]
     assert "LOCAL" in "".join(rows), "the practical meaning is not stated"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_an_over_subscribed_node_does_not_look_merely_full(tmp_path):
+    """Observed live on 2026-08-08: under load the scheduler hands nodes MORE
+    jobs than they advertise — 15/14, 11/10. Computing the bar width as
+    used/max overflows, gets clipped, and makes 15/14 render identically to
+    8/8. Two different states, one picture."""
+    import json
+    mr = ("{netname:'asteroid',reachable:true,building:true,slots:22,jobs_used:23,"
+          "nodes:[{host:'full',ip:'1.1.1.1',arch:'x86_64',speed:33.1,"
+          "jobs_used:8,jobs_max:8,load:485},"
+          "{host:'over',ip:'1.1.1.2',arch:'x86_64',speed:46.05,"
+          "jobs_used:15,jobs_max:14,load:276}]}")
+    h = tmp_path / "mr_over.js"
+    h.write_text(_DOM_STUBS + JS +
+                 f"\nconst rows=[];renderMachineRoom({mr},rows);"
+                 "console.log(JSON.stringify(rows));\nprocess.exit(0);\n")
+    r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
+    assert r.returncode == 0, r.stderr[:400]
+    rows = json.loads(r.stdout)
+    full, over = rows[1], rows[2]
+    assert "over" not in full.split('class="slots')[1][:20], "a full node was flagged over"
+    assert "over" in over.split('class="slots')[1][:20], "over-subscription not shown"
+    # the bar is clamped, so no width above 100% leaks into the markup
+    assert "width:100%" in over and "width:107%" not in over
+    # and the honest raw count survives
+    assert "15/14" in over
