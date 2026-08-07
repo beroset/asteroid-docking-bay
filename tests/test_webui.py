@@ -1788,3 +1788,40 @@ def test_an_over_subscribed_node_does_not_look_merely_full(tmp_path):
     assert "width:100%" in over and "width:107%" not in over
     # and the honest raw count survives
     assert "15/14" in over
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_an_intermittently_fed_node_does_not_strobe(tmp_path):
+    """Measured live 2026-08-08: 45 one-second samples with the cluster busy in
+    every single one, while the w541 alternated 0/1 jobs throughout. Rendering
+    each sample literally makes a working node flicker between green and idle,
+    which reads as a fault and buries the state that matters.
+
+    Smoothing, not lying: a node that genuinely stops must still go idle."""
+    import json
+    def mr(jobs):
+        return ("{netname:'asteroid',reachable:true,building:true,slots:8,jobs_used:%d,"
+                "nodes:[{host:'w541',ip:'1.1.1.1',arch:'x86_64',speed:33.9,"
+                "jobs_used:%d,jobs_max:8,load:485}]}" % (jobs, jobs))
+    h = tmp_path / "mr_strobe.js"
+    h.write_text(_DOM_STUBS + JS + f"""
+const out=[];
+let rows=[];renderMachineRoom({mr(1)},rows);out.push(rows[1]);   // has a job
+rows=[];renderMachineRoom({mr(0)},rows);out.push(rows[1]);       // gap
+rows=[];renderMachineRoom({mr(1)},rows);out.push(rows[1]);       // job again
+// a node that really stopped: push the remembered time far into the past
+mroomLastBusy['w541']=Date.now()-60000;
+rows=[];renderMachineRoom({mr(0)},rows);out.push(rows[1]);
+console.log(JSON.stringify(out));
+process.exit(0);
+""")
+    r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
+    assert r.returncode == 0, r.stderr[:400]
+    busy1, gap, busy2, stopped = json.loads(r.stdout)
+    assert "building" in busy1
+    assert "idlerow" not in gap, "a one-poll gap strobed the node to idle"
+    assert "building" in gap
+    assert "building" in busy2
+    assert "idlerow" in stopped, "a node that genuinely stopped never went idle"
+    # the live count is always the current sample, never the smoothed one
+    assert "0/8" in gap

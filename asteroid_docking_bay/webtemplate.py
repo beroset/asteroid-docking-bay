@@ -913,11 +913,28 @@ function orbitBadge(p){
   const age=fmtAge(p.last_live_ts);
   return `<span class="dim" title="off WiFi — last live ${age||'unknown'} ago">offline${age?' &middot; '+age:''}</span>`;
 }
-function mroomState(n,reachable){
+// A node that is fed work intermittently flips between 0 and 1 jobs from one
+// poll to the next. Measured on the live cluster: 45 samples, one per second,
+// the w541 alternating 0/1 the whole time while the cluster never once went
+// idle. Rendering each sample literally makes a working node strobe, which
+// reads as a fault and hides the state that actually matters.
+//
+// So remember when each node last held a job and keep calling it busy for a
+// short grace. This is smoothing, not lying: the slot count beside it is always
+// the current sample, and a node that genuinely stops goes idle within seconds.
+const MROOM_BUSY_GRACE_MS=12000;
+let mroomLastBusy={};
+function mroomBusy(n,now){
+  if(n.jobs_used>0){mroomLastBusy[n.host]=now;return true;}
+  const t=mroomLastBusy[n.host];
+  return !!t && (now-t)<MROOM_BUSY_GRACE_MS;
+}
+function mroomState(n,reachable,recentlyBusy){
   // Three states that must never collapse into two: a node doing work, a node
   // deliberately idle, and a node we cannot see. Only the third is a problem.
   if(!reachable) return {cls:'deadrow', badge:`<span class="cbadge err" title="the scheduler did not answer — builds are running LOCAL right now, not distributed">unreachable</span>`};
   if(n.jobs_used>0) return {cls:'', badge:`<span class="cbadge ch" title="compiling ${n.jobs_used} of ${n.jobs_max} slots">building ${n.jobs_used}</span>`};
+  if(recentlyBusy) return {cls:'', badge:`<span class="cbadge ch" title="fed work intermittently — held as working for a few seconds so an active node does not strobe between polls">building</span>`};
   return {cls:'idlerow', badge:`<span class="dim" title="registered and healthy, no jobs assigned">idle</span>`};
 }
 function renderMachineRoom(mr,rows){
@@ -925,6 +942,7 @@ function renderMachineRoom(mr,rows){
   // no error strip. Most machines running a-d-b have never heard of icecream.
   if(!mr||!mr.nodes||!mr.nodes.length) return;
   const live=!!mr.reachable;
+  const now=Date.now();
   const bits=[];
   if(mr.netname) bits.push('net '+esc(mr.netname));
   bits.push(mr.jobs_used+'/'+mr.slots+' slots busy');
@@ -937,7 +955,7 @@ function renderMachineRoom(mr,rows){
     `<span class="dim">${esc(bits.join(' \u00b7 '))}</span>`+
     `</td></tr>`);
   mr.nodes.forEach(n=>{
-    const st=mroomState(n,live);
+    const st=mroomState(n,live,mroomBusy(n,now));
     // Clamp the BAR, never the number: a node can be handed more jobs than it
     // advertises, and an unclamped width would make 15/14 and 8/8 look
     // identical once the overflow is clipped. The raw count still tells the
