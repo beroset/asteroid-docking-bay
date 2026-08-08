@@ -1501,7 +1501,15 @@ def _watch_dump(args):
     ip = ssh_ip_for_serial(cfg, serial) if isinstance(w.t, SshTransport) else None
     cmd = stockrom.dump_command(serial, ip, str(dest))
 
-    oplock.hold(serial, "dump", f"full-disk dump to {dest.name}", 4 * 3600)
+    lock = oplock.hold(serial, "dump", f"full-disk dump to {dest.name}", 4 * 3600)
+    if not lock.get("ok"):
+        # The watch is already held for something else (a wanze run, a flash).
+        # Starting a dump would have overwritten that lock and deleted it on
+        # release; refuse instead of stamping over it.
+        note = f" — {lock['note']}" if lock.get("note") else ""
+        return {"ok": False,
+                "error": f"watch is held for '{lock.get('kind')}'{note}; "
+                         "not starting a dump over it"}
     _dump_runs[serial] = {"state": "running", "started": time.time(),
                           "dest": str(dest), "expect": expect, "size": 0}
     threading.Thread(target=_dump_worker, daemon=True,

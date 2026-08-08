@@ -62,12 +62,34 @@ def held(cfg: dict, serial: "str | None") -> "dict | None":
 
 def hold(serial: str, kind: str, note: str = "",
          ttl: float = DEFAULT_TTL_SEC) -> dict:
-    """Claim a watch for a long operation."""
+    """Claim a watch for a long operation.
+
+    Refuses to displace a LIVE lock of a DIFFERENT kind. Without this a dump
+    started on a watch already running a wanze probe silently overwrote the
+    wanze lock, and its release deleted it outright — leaving the run
+    unprotected from the housekeeping this exists to hold off, and, because
+    probing() keys on the kind, invisible in the UI as well. The whole point of
+    the marker is defeated if the next operation may quietly stamp over it.
+
+    Re-holding the SAME kind is a renewal, not a collision: it refreshes the
+    expiry, which is what a caller extending its own claim wants. An EXPIRED
+    lock does not block anyone. The check and the write share `_config_lock`,
+    so two callers cannot both pass the test and one clobber the other.
+    """
     from .config import _config_lock, load_config, save_config
     now = time.time()
     with _config_lock:
         cfg = load_config()
         locks = cfg.setdefault(_KEY, {})
+        existing = locks.get(serial)
+        if existing and existing.get("kind") != kind:
+            until = existing.get("until") or 0
+            if not until or now <= until:            # still live → do not displace
+                log.info("%s: refused '%s' — already held for '%s'",
+                         serial, kind, existing.get("kind"))
+                return {"ok": False, "held": True, "conflict": True,
+                        "kind": existing.get("kind"),
+                        "note": existing.get("note", "")}
         locks[serial] = {"kind": kind, "note": note,
                          "since": now, "until": now + ttl}
         save_config(cfg)

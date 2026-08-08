@@ -40,6 +40,77 @@ def test_all_held_reports_only_live_locks():
     assert list(oplock.all_held(cfg)) == ["LIVE"]
 
 
+def _dict_config(monkeypatch):
+    """Back hold()/release() with an in-memory store shaped like the real
+    config file: every load() is an independent copy, save() persists it — so
+    the check-and-write atomicity inside _config_lock is actually exercised."""
+    import copy
+    from asteroid_docking_bay import config
+    store = {"op_locks": {}}
+    monkeypatch.setattr(config, "load_config", lambda: copy.deepcopy(store))
+    monkeypatch.setattr(config, "save_config",
+                        lambda c: (store.clear(), store.update(copy.deepcopy(c))))
+    return store
+
+
+def test_hold_will_not_overwrite_a_live_lock_of_another_kind(monkeypatch):
+    """THE bug behind the wanze/dump collision: hold() overwrote whatever was
+    there. A dump taken on a watch mid-wanze-run replaced the wanze lock and
+    then deleted it on release — the run left unprotected and, because probing()
+    keys on kind, invisible. A marker the next operation may stamp over is no
+    marker at all."""
+    from asteroid_docking_bay import oplock, wanze
+    store = _dict_config(monkeypatch)
+
+    assert oplock.hold("S1", wanze.PROBING_KIND, "arm A", ttl=600)["ok"]
+    r = oplock.hold("S1", "dump", "full-disk dump", ttl=600)
+    assert r["ok"] is False and r.get("conflict") and r["kind"] == wanze.PROBING_KIND
+    assert oplock.held(store, "S1")["kind"] == wanze.PROBING_KIND, \
+        "the wanze run lost its lock to the dump"
+    assert oplock.held(store, "S1")["note"] == "arm A", "even the note was replaced"
+
+
+def test_hold_renews_its_own_kind_and_can_take_an_expired_slot(monkeypatch):
+    """Re-holding the same kind is a caller extending its own claim, not a
+    collision — it must refresh the expiry. And an EXPIRED lock blocks nobody,
+    or a crashed holder would wedge the slot until someone noticed by hand."""
+    from asteroid_docking_bay import oplock
+    store = _dict_config(monkeypatch)
+
+    assert oplock.hold("S1", "wanze", "arm A", ttl=600)["ok"]
+    assert oplock.hold("S1", "wanze", "arm B", ttl=900)["ok"], "a renewal was refused"
+    assert oplock.held(store, "S1")["note"] == "arm B"
+
+    store["op_locks"]["S1"]["until"] = time.time() - 1      # expire it
+    assert oplock.hold("S1", "dump", "later", ttl=600)["ok"], \
+        "an expired lock still blocked a new holder"
+    assert oplock.held(store, "S1")["kind"] == "dump"
+
+
+def test_a_dump_refuses_to_start_over_a_held_watch(monkeypatch):
+    """The overwrite bug seen from the dump op: it must decline, not clobber."""
+    from asteroid_docking_bay import rpcops, wanze, stockrom
+    store = _dict_config(monkeypatch)
+    assert wanze.probing_set("S1", True, "arm A")["ok"]     # a run is live
+
+    class _W:
+        t = object()
+    monkeypatch.setattr(rpcops, "_watch", lambda s: _W())
+    monkeypatch.setattr(stockrom, "disk_bytes", lambda w: (7634944 * 512, None))
+    r = rpcops._watch_dump({"serial": "S1"})
+    assert r["ok"] is False and "held" in r["error"] and "wanze" in r["error"]
+    assert "S1" not in rpcops._dump_runs, "a run record was created for a refused dump"
+
+
+def test_a_wanze_run_refuses_to_start_over_a_held_watch(monkeypatch):
+    """And the symmetric case: a wanze run must not stamp over a live dump."""
+    from asteroid_docking_bay import oplock, wanze
+    _dict_config(monkeypatch)
+    assert oplock.hold("S1", "dump", "full-disk dump", ttl=600)["ok"]
+    r = wanze.probing_set("S1", True, "arm A")
+    assert r["ok"] is False and "dump" in r["error"]
+
+
 def test_describe_says_how_long_it_has_been_held():
     """A lock sitting for hours is usually a crashed holder. Saying so beats
     making a human work it out from a timestamp."""

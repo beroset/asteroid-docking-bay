@@ -372,7 +372,11 @@ def probing_set(serial: str, on: bool, note: str = "") -> dict:
     """Start or clear the run marker."""
     from . import oplock
     if on:
-        oplock.hold(serial, PROBING_KIND, note, PROBING_TTL_SEC)
+        lock = oplock.hold(serial, PROBING_KIND, note, PROBING_TTL_SEC)
+        if not lock.get("ok"):
+            # Held for something else (a dump, a flash). Do not overwrite it.
+            return {"ok": False, "probing": False,
+                    "error": f"watch is held for '{lock.get('kind')}'"}
     else:
         oplock.release(serial)
     log.info("%s: wanze probing %s", serial, "started" if on else "cleared")
