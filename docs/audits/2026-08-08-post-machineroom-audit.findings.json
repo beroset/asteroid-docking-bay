@@ -136,18 +136,18 @@
         "4cd1f5c"
       ],
       "still_open": "The onboarding sweep (oplock F4) is deliberately NOT guarded - see the sweep entry in `open`."
+    },
+    {
+      "id": "oplock-onboard-sweep",
+      "area": "rpcops.py sweep_prepare / sweep_run + webtemplate.py",
+      "severity": "medium",
+      "agent_ref": "oplock F4",
+      "mechanism": "sweep_prepare cuts VBUS on EVERY leaf port unconditionally and _sweep_one_port powers watches off, with no oplock check. A sweep run while a wanze probe or a dump is live anywhere on the rig ends it. Unlike the other actuators this is explicitly operator-confirmed ('I will power ALL sockets OFF now'), so refusing or skipping changes what the operator asked for.",
+      "fix": "Skips held sockets rather than refusing the sweep (the operator did ask to power everything down): _sweep_held_ports is consulted by both halves, the held socket is left powered and untouched, and the skip is announced — prepare returns held/held_detail, the run stream names them at the start and in the summary, and the confirm dialog shows them before the operator equips sockets. moWerk's call, taken 2026-08-08.",
+      "commit": "db3eba0"
     }
   ],
   "open": [
-    {
-      "id": "oplock-onboard-sweep",
-      "area": "rpcops.py onboard.sweep_prepare / _sweep_one_port / _onboard_stream",
-      "severity": "medium",
-      "agent_ref": "oplock F4",
-      "status": "surfaced - needs moWerk's call (changes bulk-operation semantics)",
-      "mechanism": "sweep_prepare cuts VBUS on EVERY leaf port unconditionally and _sweep_one_port powers watches off, with no oplock check. A sweep run while a wanze probe or a dump is live anywhere on the rig ends it. Unlike the other actuators this is explicitly operator-confirmed ('I will power ALL sockets OFF now'), so refusing or skipping changes what the operator asked for.",
-      "recommendation": "Skip held ports and report them in the sweep log, rather than refusing the whole sweep - a watch under a 14-day wanze run is exactly the one not to power off, and the operator may not know it is running. Left for moWerk because it alters a bulk operation's contract."
-    },
     {
       "id": "ui-esc-injection",
       "area": "webtemplate.py esc()",

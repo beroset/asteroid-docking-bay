@@ -103,13 +103,14 @@ onto the rig itself:
   `wear.set` / `ssh.switch_adb` / `watch.switch_ssh`. Guarding the last of
   those also closed the aligner's own TOCTOU in `finish_ssh_relocation`.
 
-**One half deliberately left open:** the onboarding sweep (`oplock F4`). It
-cuts VBUS on every leaf port, but unlike the others it is explicitly
-operator-confirmed, so skipping or refusing changes what was asked for. The
-recommendation is to skip held ports and report them — a watch under a 14-day
-wanze run is exactly the one not to power off, and the operator may not know it
-is running. That is a contract change for a bulk operation, so it stays moWerk's
-call.
+- **The onboarding sweep steps around held watches** (`db3eba0`). This half was
+  held back for moWerk because it changes a bulk operation's contract; he took
+  the recommended option the same day. The sweep does not refuse — the operator
+  did ask to power everything down — it leaves a held socket powered and
+  untouched, sweeps the rest, and never skips silently: `sweep_prepare` reports
+  what it left alone, the run stream names it at the start and in the summary,
+  and the confirm dialog shows it *before* the operator starts equipping
+  sockets. With this, every actuator on the rig honours the lock.
 
 ## Left for mo to decide
 
