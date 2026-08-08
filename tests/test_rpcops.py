@@ -366,8 +366,15 @@ def _cap_cmd(monkeypatch, in_fastboot):
     # "not in fastboot" no longer implies "on adb" — a watch can also be in
     # SSH mode, which is the case the routing fix exists for. These cases are
     # the booted-on-adb ones, so state that rather than leaving it implied.
+    #
+    # And a watch in the BOOTLOADER has no adb at all: reporting "device" for
+    # it modelled a state that cannot exist on real hardware. That mattered
+    # once routing started trusting live adb over the warmer's fastboot cache
+    # (so a watch that just left fastboot is not sent to a serial that is gone)
+    # — the impossible fixture then looked like the stale-cache case.
     monkeypatch.setattr(ro, "adb_devices", lambda: {})
-    monkeypatch.setattr(ro, "_adb_state", lambda d, s: "device")
+    monkeypatch.setattr(ro, "_adb_state",
+                        lambda d, s: None if in_fastboot else "device")
     return ro, seen
 
 
@@ -385,6 +392,35 @@ def test_power_actions_use_fastboot_when_watch_is_in_bootloader(monkeypatch):
 
     ro.DISPATCH._data["port.recovery"]({"loc": "1-2", "port": 1})
     assert seen["cmd"] == "fastboot -s S1 reboot recovery", seen["cmd"]
+
+
+def test_a_stale_fastboot_cache_does_not_swallow_the_action(monkeypatch):
+    """The fastboot list comes from a background warmer and can be a cycle out
+    of date; `adb devices` is read live. A watch that just LEFT the bootloader
+    is therefore still in the cache — and was commanded at a fastboot serial
+    that no longer exists, hanging until the 20s timeout and turning a working
+    button into a dead one.
+
+    A watch cannot be adb-online and in the bootloader at once, so live adb
+    evidence wins. The inverse is unaffected: a watch genuinely in fastboot has
+    no adb, so it keeps the fastboot route (covered by the test above)."""
+    import asteroid_docking_bay.rpcops as ro
+    seen = {}
+    monkeypatch.setattr(ro, "_run",
+                        lambda cmd, **k: (seen.setdefault("cmd", cmd), (0, "", ""))[1])
+    monkeypatch.setattr(ro, "find_serial_for_loc_port", lambda *a, **k: "S1")
+    monkeypatch.setattr(ro, "load_config", lambda: {"hubs": []})
+    monkeypatch.setattr(ro, "_refuse_if_busy", lambda l, p: None)
+    # Stale: the warmer still lists it in fastboot...
+    monkeypatch.setattr(ro, "_fastboot_list", lambda: {"S1": "1-2.1"})
+    # ...but it is live on adb right now.
+    monkeypatch.setattr(ro, "adb_devices", lambda: {"S1": {"status": "device"}})
+    monkeypatch.setattr(ro, "_adb_state", lambda d, s: "device")
+
+    res = ro.DISPATCH._data["port.reboot"]({"loc": "1-2", "port": 1})
+    assert res["ok"] and res["via"] == "adb", \
+        f"routed on a stale fastboot cache instead of live adb: {res}"
+    assert seen["cmd"] == "adb -s S1 reboot", seen["cmd"]
 
 
 def test_power_actions_use_adb_when_watch_is_booted(monkeypatch):
@@ -756,7 +792,12 @@ def test_reboot_and_continue_track_the_boot_but_bootloader_does_not(monkeypatch)
     ro.DISPATCH._data["port.bootloader"]({"loc": "1-2", "port": 1})
     assert marks == [], "reboot-to-bootloader must not claim an OS boot"
 
-    monkeypatch.setattr(ro, "_fastboot_list", lambda: {"S9": "1-2.1"})   # continue is fb-only (path = port 1-2:1)
+    # continue is fastboot-only (path = port 1-2:1). Move the watch into the
+    # bootloader properly: adb must stop reporting it, because a watch in
+    # fastboot has no adb, and routing now trusts live adb over the warmer's
+    # fastboot cache.
+    monkeypatch.setattr(ro, "_fastboot_list", lambda: {"S9": "1-2.1"})
+    monkeypatch.setattr(ro, "_adb_state", lambda d, s: None)
     marks.clear()
     ro.DISPATCH._data["port.continue"]({"loc": "1-2", "port": 1})
     assert marks and "booting_since" in marks[-1][1]

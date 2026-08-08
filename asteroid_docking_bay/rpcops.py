@@ -1167,12 +1167,21 @@ def _watch_action(loc, port, adb_cmd, fb_cmd, fail_msg, boots_os=False,
     if busy:
         return busy
     serial = find_serial_for_loc_port(load_config(), loc, port)
+    # Fresh evidence beats a cached guess. The fastboot list comes from a
+    # background warmer and can be up to a warmer cycle out of date, while
+    # `adb devices` is read live here — and a watch cannot be adb-online and in
+    # the bootloader at once. Checking adb first means a watch that just LEFT
+    # fastboot is commanded over adb immediately, instead of being sent to a
+    # fastboot serial that is no longer there and hanging until the 20s timeout
+    # turns a working button into a dead one. A watch genuinely in fastboot has
+    # no adb, so this never steals the fastboot route from it.
+    adb_live = bool(serial) and _adb_state(adb_devices(), serial) == "device"
     # Fastboot presence is resolved by PORT PATH, not by the mapped serial: a
     # watch's fastboot serial differs from its adb serial, so `serial in
     # _fastboot_list()` misses it and the action wrongly routes to a dead adb
     # link (the bootloader has no adb). Command the fastboot device bound to
     # THIS port by its own fastboot serial.
-    fb_serial = _fastboot_serial_for_port(loc, port)
+    fb_serial = None if adb_live else _fastboot_serial_for_port(loc, port)
     if fb_serial is not None:
         if fb_cmd is None:
             return {"ok": False, "error": "action not available over fastboot"}
@@ -1190,7 +1199,7 @@ def _watch_action(loc, port, adb_cmd, fb_cmd, fail_msg, boots_os=False,
     # Only reach for adb when adb can actually answer. Firing the command at a
     # watch that is in SSH mode used to leave the caller waiting on a state
     # change that was never coming — the button appeared to do nothing at all.
-    if _adb_state(adb_devices(), serial) == "device":
+    if adb_live:
         if adb_cmd is None:
             return {"ok": False, "error": "action not available over adb"}
         rc, _, err = _run(f"adb -s {serial} {adb_cmd}", check=False, timeout=20)
