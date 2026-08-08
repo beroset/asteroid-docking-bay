@@ -15,6 +15,8 @@ _DOC = {"hubs": [{"location": "1-2", "ports": [
     {"port": 4, "workbench": {"active": True}},
     {"port": 5, "flashing": True},
     {"port": 6, "drain": {"active": False}},        # a finished drain → not busy
+    {"port": 7, "held": {"kind": "dump", "note": "full-disk dump"}},
+    {"port": 8, "held": None},                      # no lock → not busy
 ]}]}
 
 
@@ -28,7 +30,19 @@ class _Ctx:
 
 def test_busy_slots_parsed(monkeypatch):
     monkeypatch.setattr(urllib.request, "urlopen", lambda u, timeout=0: _Ctx())
-    assert _web_busy_slots() == {"1-2:1", "1-2:2", "1-2:4", "1-2:5"}
+    assert _web_busy_slots() == {"1-2:1", "1-2:2", "1-2:4", "1-2:5", "1-2:7"}
+
+
+def test_an_operation_lock_makes_a_slot_busy_for_the_timer(monkeypatch):
+    """This timer is a SEPARATE process fired by systemd, unattended, and it
+    powers ports on and cuts them off again. The web service's in-process oplock
+    guards cannot see it, so without reading `held` a periodic check would cut
+    VBUS underneath a running 4 GB dump — the one continuously-running way left
+    to break a long transfer."""
+    monkeypatch.setattr(urllib.request, "urlopen", lambda u, timeout=0: _Ctx())
+    busy = _web_busy_slots()
+    assert "1-2:7" in busy, "the timer would act on a watch held for a dump"
+    assert "1-2:8" not in busy, "a watch with no lock was treated as busy"
 
 
 def test_busy_slots_empty_when_web_down(monkeypatch):

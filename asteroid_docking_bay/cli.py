@@ -373,10 +373,17 @@ def _charge_one(
 
 def _web_busy_slots(host: str = "127.0.0.1", port: int = 8080) -> set:
     """Slots the running web service is actively operating on (charge / drain /
-    workbench / flash), read from its /api/status. Empty when the web service
-    isn't up — then the timer runs standalone as before. This is the decision-
-    level handoff: flock serialises bus access, but only this stops the timer
-    from waking a watch the web service is mid-drain on."""
+    workbench / flash) or holding under an operation lock, read from its
+    /api/status. Empty when the web service isn't up — then the timer runs
+    standalone as before. This is the decision-level handoff: flock serialises
+    bus access, but only this stops the timer from waking a watch the web
+    service is mid-drain on.
+
+    The operation lock matters most here, and it is the reason this reads
+    `held`: this timer is a SEPARATE process fired by systemd, unattended, and
+    it powers ports on and cuts them off again. The in-process guards in the web
+    service cannot see it, so without this a periodic check would happily cut
+    VBUS underneath a running 4 GB dump."""
     import json as _json
     import urllib.request
     try:
@@ -389,6 +396,7 @@ def _web_busy_slots(host: str = "127.0.0.1", port: int = 8080) -> set:
     for hub in data.get("hubs", []):
         for p in hub.get("ports", []):
             if (p.get("charging_active") or p.get("flashing")
+                    or p.get("held")
                     or (p.get("drain") or {}).get("active")
                     or (p.get("workbench") or {}).get("active")):
                 busy.add(f"{hub['location']}:{p['port']}")
