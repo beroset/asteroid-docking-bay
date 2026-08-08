@@ -1,0 +1,233 @@
+{
+  "audit": "post-Machine-Room deep audit",
+  "date": "2026-08-08",
+  "auditor": "Claude (Fable 5) under moWerk's direction",
+  "method": "six parallel review agents over the diff since the last audit baseline (19f54bd, 2026-07-25), each finding verified against source and, where it actuates hardware, against the live rig; every fix validated by planting the bug its test exists to catch; full suite green on the w541 (731 passed) and deployed.",
+  "scope_baseline": "19f54bda",
+  "surface_reviewed": [
+    "icecc.py (Machine Room backend)",
+    "oplock.py + every guard call site",
+    "stockrom.py dump path + rpcops dump worker",
+    "rpcops.py routing rework + webapp body parsing",
+    "webstatus.py recovery/housekeeping loop",
+    "webtemplate.py UI wiring"
+  ],
+  "fixed": [
+    {
+      "id": "icecc-clock",
+      "area": "icecc.py",
+      "severity": "low",
+      "agent_ref": "icecc F6, F8",
+      "mechanism": "Cache TTL compared wall-clock time (frozen panel across an NTP step-back) and stamped the cache BEFORE the refresh ran (a slow refresh wrote an already-part-expired entry, churning back-to-back refreshes).",
+      "fix": "time.monotonic() throughout; stamp at the end of the refresh.",
+      "commit": "3966355"
+    },
+    {
+      "id": "icecc-spawn-wedge",
+      "area": "icecc.py",
+      "severity": "medium",
+      "agent_ref": "icecc F1, F2",
+      "mechanism": "_refreshing event was set before Thread.start(); a start() failure (thread exhaustion) left it set forever, freezing the panel unmarked-stale until restart. The check-and-set was also unlocked on a threaded server, double-spawning workers.",
+      "fix": "Clear the event on a failed spawn; check-and-set under _lock.",
+      "commit": "0f40de0"
+    },
+    {
+      "id": "icecc-byte-framing",
+      "area": "icecc.py",
+      "severity": "low",
+      "agent_ref": "icecc F7",
+      "mechanism": "read_until decoded each recv() chunk separately; a multibyte UTF-8 char split across a 4096-byte boundary became U+FFFD. Markers are ASCII so framing survived; only field content (a non-ASCII hostname) mangled.",
+      "fix": "Buffer raw bytes, decode once the ASCII marker is found.",
+      "commit": "125762d"
+    },
+    {
+      "id": "icecc-test-hygiene",
+      "area": "tests/test_icecc.py",
+      "severity": "high (test quality)",
+      "agent_ref": "icecc F4, F5",
+      "mechanism": "The unit suite's node fixtures carried the real cluster IPs and summary() ran the SSH temp sweep against them, so the suite logged into the e15/p14s/w541. Module-global cache/temp state was never reset, making results order-dependent. The shell-agnostic-probe test asserted only on the _TEMP_INNER constant, never that node_temp wraps it in sh -c.",
+      "fix": "autouse reset of module state; stub refresh_temps where fixture IPs are live; assert the constructed remote command is sh -c wrapped.",
+      "commit": "1e3273b"
+    },
+    {
+      "id": "ui-log-row-dropped",
+      "area": "webtemplate.py reconcileRows",
+      "severity": "high",
+      "agent_ref": "webtemplate F2",
+      "mechanism": "Each watch entry is two <tr>s in one html string (the visible row and a hidden <tr class=lr> carrying id=log-<slot>). reconcileRows kept only tmp.firstElementChild, dropping every log row. With no log-<slot> in the DOM, doFl/doRemap/_openOnboard all hit `if(!box)return` — flash and single-port onboarding did nothing from the UI, silently, since 2026-07-22.",
+      "fix": "Keep each key's whole group of nodes; new test runs the real reconcileRows under a DOM shim.",
+      "commit": "6e5d0db"
+    },
+    {
+      "id": "ui-dodump-shadow",
+      "area": "webtemplate.py",
+      "severity": "high",
+      "agent_ref": "webtemplate F1",
+      "mechanism": "An empty `function doDump(s){}` sat below the real doDump; JS hoists the last declaration, so the stub won and the Dump mmcblk0 menu item did nothing. DEFINED_FUNCS is a set, so the handler test could not see the duplicate.",
+      "fix": "Remove the stub (keep the deliberately-disabled doRestoreDump stub); new static test rejects any function declared twice.",
+      "commit": "51bc32c-then-split-into 6e5d0db+dodump"
+    },
+    {
+      "id": "oplock-overwrite",
+      "area": "oplock.py + rpcops.py + wanze.py",
+      "severity": "high",
+      "agent_ref": "oplock F10, rpcops F1",
+      "mechanism": "hold() overwrote any existing lock and release() popped it. A dump on a watch mid-wanze-run replaced the 14-day wanze lock and deleted it on release, leaving the run exposed to housekeeping and, because probing() keys on kind, invisible in the UI.",
+      "fix": "Refuse to displace a live lock of a different kind (checked and written under _config_lock); watch.dump and probing_set surface the refusal. Same-kind re-hold still renews; expired locks block nobody.",
+      "commit": "877d67d"
+    },
+    {
+      "id": "stockrom-shell-injection",
+      "area": "stockrom.py dump_command",
+      "severity": "high",
+      "agent_ref": "stockrom F1",
+      "mechanism": "serial (device-supplied ro.serialno / USB iSerial) and dest were interpolated raw into a `bash -c` string; a metacharacter would break the dd redirect or inject a command running as the service user.",
+      "fix": "shlex.quote serial and dest, the pattern already used elsewhere.",
+      "commit": "f481950"
+    },
+    {
+      "id": "webstatus-cycle-rearm",
+      "area": "webstatus.py _maybe_align_usb_mode",
+      "severity": "high",
+      "agent_ref": "webstatus F1",
+      "mechanism": "The one-shot _ssh_align_cycled marker was cleared on ANY non-ssh state. The recovery cycle itself drops the watch to adb_state=None for seconds and busts the status cache, so a poll ran in that window and re-armed the marker — a dead SSH stray then cycled VBUS every few minutes forever.",
+      "fix": "Re-arm only on positive recovery (adb_state == 'device'); absence is not recovery. SSH-side recovery re-arms on its own positive evidence.",
+      "commit": "d3ca8b8"
+    },
+    {
+      "id": "dump-wrong-link",
+      "area": "rpcops.py watch.dump",
+      "severity": "medium",
+      "agent_ref": "rpcops F5",
+      "mechanism": "The size preflight reads over w.t (the live transport) but the copy command re-derived the address from cfg via ssh_ip_for_serial. An orbit/WiFi watch reaches a-d-b on an SshTransport with no ssh_ips allocation, so the copy fell back to an adb command against a watch not on adb — 0 bytes after a preflight that passed.",
+      "fix": "Take the ip from w.t, the transport that answered the preflight.",
+      "commit": "db931cb"
+    },
+    {
+      "id": "dump-partial-marker",
+      "area": "rpcops.py _dump_worker",
+      "severity": "medium",
+      "agent_ref": "stockrom F3",
+      "mechanism": "A truncated or crashed dump left its bytes as <name>.img, indistinguishable from a complete one in a directory listing; the only completeness marker was the sidecar manifest, which can be lost — the original-sprat.img failure one step later.",
+      "fix": "Rename an incomplete image to <name>.img.partial on both the truncated and exception paths.",
+      "commit": "8502b55"
+    }
+  ],
+  "open": [
+    {
+      "id": "webstatus-concurrent-cycles",
+      "area": "webstatus.py recovery + fake-power heal",
+      "severity": "high",
+      "agent_ref": "webstatus F2",
+      "status": "surfaced — needs moWerk's call (actuates hardware, design decision)",
+      "mechanism": "There is no cross-port serialization of healing actuations. When N strays or N fake-power-wedged ports cross their thresholds in one pass (fleet cold-boot into developer mode with no leases; ~60s after a restart), one daemon thread per port is spawned within milliseconds and uhubctl_cycle fires N ports near-simultaneously — the adb-crash/brownout the binding 'never many ports at once' rule exists to prevent.",
+      "recommendation": "A global one-healing-actuation-per-pass budget, mirroring the existing _SOFT_REMAP_IDENTIFY_PER_PASS on the adb side. Recommend fixing, but it changes recovery timing on the live rig so wanted your eyes first."
+    },
+    {
+      "id": "oplock-guard-coverage",
+      "area": "ops.py, rpcops.py, cli.py",
+      "severity": "high",
+      "agent_ref": "oplock F1-F7, rpcops F2",
+      "status": "surfaced — recommend wiring the clear-consistency ones",
+      "mechanism": "The oplock protects against the three automatic housekeepers (peeler, aligner, fake-power heal — all guarded and tested) but NOT: the CLI check-charge timer (separate systemd-timer process, cuts VBUS unattended, F1); flash.start (F2); charge/drain/workbench Operation.start (F3); the onboarding sweep (F4); the manual mode-switch ops ssh.switch_adb / watch.switch_ssh (F5); maybe_heal_wedged_adb's kill-server (F6); wear.set (F7). port.set already refuses a held watch; a charge that does strictly more does not — the guard is inconsistent at the same API surface. The dump feature is unproven on hardware so most are latent, but the CLI timer runs continuously.",
+      "recommendation": "Wire the existing _refuse_if_busy (or an oplock.held check) into Operation.start, flash.start and the CLI check-charge busy predicate (the status doc already carries `held`). The onboarding-sweep and manual-switch guards are judgment calls about whether those operator-initiated actions should skip a held watch — your call."
+    },
+    {
+      "id": "ui-esc-injection",
+      "area": "webtemplate.py esc()",
+      "severity": "medium",
+      "agent_ref": "webtemplate F3",
+      "status": "surfaced — contained fix, needs UI regression testing",
+      "mechanism": "esc() escapes only & and <, not \" or '. Several values interpolate into attribute values and single-quoted onclick JS strings: icecc node hostname (from the remote scheduler), watch serial/codename (device-supplied, several sites raw with no esc), and the Bluetooth advertised device name (attacker-controlled by any nearby radio, in btPair). A crafted BT name or hostname with a quote breaks out into markup or the JS string and runs on click.",
+      "recommendation": "Extend esc() to also escape \" and ' (an attribute-safe superset, harmless in text nodes) and esc the currently-raw serial/codename onclick sites, or move onclicks to data-attributes + delegated listeners. Test all UI render paths after — it touches many interpolation sites."
+    },
+    {
+      "id": "rpcops-stale-fastboot-route",
+      "area": "rpcops.py _watch_action",
+      "severity": "medium",
+      "agent_ref": "rpcops F7",
+      "status": "surfaced — pre-existing, not from this sprint",
+      "mechanism": "Transport routing consults the warmer's fastboot cache (refreshed only when >60s old, skipped while the bus is busy). A watch that just left fastboot is still routed there — `fastboot -s` hangs to a 20s timeout while the watch is live on adb; a watch that just entered fastboot isn't listed yet and reads as unreachable. Window up to one warmer cycle."
+    },
+    {
+      "id": "rpcops-wrong-os-panel",
+      "area": "rpcops.py _stale_cc / webstatus eviction",
+      "severity": "medium",
+      "agent_ref": "rpcops F8",
+      "status": "surfaced",
+      "mechanism": "webstatus evicts every _watch_os entry whose serial is not currently adb-'device' on each status build, so for an offline watch `detected` is None and _stale_cc keeps the cache. A beluga restored to Wear OS then shelved still shows its old AsteroidOS kernel/Qt/version blob (stale-dimmed) — the exact false claim commit 494c9ad set out to eliminate, for offline watches.",
+      "recommendation": "Persist the detected OS family alongside the cached blob so an offline watch's panel reflects its last known real OS."
+    },
+    {
+      "id": "oplock-config-persistence",
+      "area": "config.py + oplock.py",
+      "severity": "medium",
+      "agent_ref": "oplock F8, F9",
+      "status": "surfaced",
+      "mechanism": "_config_lock is a threading.Lock (in-process only), but the CLI is a separate process doing read-modify-write save_config — a cross-process lost update can drop a live op_lock. And ConfigManager.save truncate-writes in place with no tmp+rename, so a crash mid-write leaves invalid JSON that makes load raise everywhere (fails closed — housekeeping also stops — but the whole service and status page break with no recovery path).",
+      "recommendation": "Atomic config write (tmp + os.replace); consider a flock or moving op_locks to their own atomically-written file."
+    },
+    {
+      "id": "dump-freespace",
+      "area": "rpcops.py _watch_dump",
+      "severity": "low-medium",
+      "agent_ref": "stockrom F4",
+      "status": "surfaced",
+      "mechanism": "No host free-space check before starting an ~8 GB write; a full disk yields a short dump (now caught and marked .partial) and can starve other services sharing the disk.",
+      "recommendation": "shutil.disk_usage(DUMP_ROOT).free >= expect guard before taking the lock."
+    },
+    {
+      "id": "dump-claim-race",
+      "area": "rpcops.py _watch_dump",
+      "severity": "medium",
+      "agent_ref": "rpcops F6",
+      "status": "surfaced",
+      "mechanism": "The _dump_runs running-check and the assignment are unlocked on a threaded server. Two starts within one second both pass and get the same second-granular dest; interleaved dd writes can still total expect_bytes and be manifested complete.",
+      "recommendation": "A lock around the check-and-claim; the oplock same-kind rule does not stop a second dump because both are kind 'dump'."
+    },
+    {
+      "id": "webstatus-no-row-isolation",
+      "area": "webstatus.py status build",
+      "severity": "low-medium",
+      "agent_ref": "webstatus F5",
+      "status": "surfaced",
+      "mechanism": "The per-port status loop has no try/except; a pure-Python raise inside it (registry.note / save_config on a full disk) escapes to the dispatcher backstop and the whole status document becomes an error — every watch disappears from the UI, recurring every 2s while the cause persists.",
+      "recommendation": "try/except per port row (log + degrade the row) or around the registry/cache writes on the status path."
+    },
+    {
+      "id": "ui-held-badge-missing",
+      "area": "webtemplate.py",
+      "severity": "medium",
+      "agent_ref": "webtemplate F4",
+      "status": "surfaced — likely the unfinished half of the dump/oplock UI",
+      "mechanism": "webstatus emits `held` per port but the UI never reads p.held; a watch held for a dump shows a normal row and every action is refused by the backend with no advance indication. Pairs with the (now-fixed) dead doDump as the unfinished dump UI.",
+      "recommendation": "Render a held badge from p.held, describing kind + age."
+    },
+    {
+      "id": "test-wiring-gaps",
+      "area": "tests/",
+      "severity": "medium (test quality)",
+      "agent_ref": "oplock F13, webstatus F4, rpcops F12",
+      "status": "surfaced",
+      "mechanism": "No test asserts that the power-affecting ops actually CALL _refuse_if_busy (deleting the call fails nothing — the same shape as the flash gap). fb_draining's test asserts a LastSeen round-trip, not the flag condition, so any clause inversion passes. No test drives a request through the bottle handler, so the body-reading layer that failed on hardware is still only tested around.",
+      "recommendation": "An op-table-driven wiring test (every power-affecting op refuses on a held fixture); extract fb_draining into a testable helper; a WSGI-level request test for merge_op_args and malformed-body handling."
+    },
+    {
+      "id": "misc-low",
+      "area": "several",
+      "severity": "low",
+      "agent_ref": "icecc/oplock/webtemplate/rpcops assorted",
+      "status": "surfaced — cosmetic or narrow",
+      "mechanism": "icecc: stale-served slot numbers unmarked; torn cache read (benign). oplock: wall-clock TTL (NTP step can expire/extend a live lock); a falsy `until` reads as immortal (only via a hand-edited entry). webtemplate: literal \\n in the sweep-log header; mroomTemp label rounds while the colour class uses the raw value (99.5C shows '100C' in warm colour); two hubs renamed identically drop a header row; dead code (needPwr arg, mkpwr). rpcops: a recovery-mode watch is refused with a false 'not reachable' message; oplock.set accepts an unbounded ttl and ttl:0 silently becomes the default; watch.dump treats any non-'status' action as 'start'. stockrom: disk_bytes matches NO_ROOT on any 'denied' substring."
+    }
+  ],
+  "dropped_suspicions": [
+    "icecc SSH command injection via node ip — ip is regex-constrained to [0-9.]; _TEMP_INNER!r is valid single-quoted shell.",
+    "icecc _refreshing stuck after a worker EXCEPTION — the worker's try/finally clears it correctly; only the pre-start window leaked (fixed).",
+    "stockrom restore gates reaching a flash — gpt_gate/fingerprint_gate/restore_plan are sound but have no executor wired yet; refusal paths verified.",
+    "merge_op_args precedence redirecting a serial — URL serial/action are authoritative and test-pinned; the real gap was malformed-body handling.",
+    "_ssh_delivered miscounting a poweroff that drops the link — deliberate and test-pinned; the gap is the port.poweroff SSH path that does not call it (folded into guard-coverage).",
+    "machine-room hidden-contract for null vs [] vs missing — correct and tested.",
+    "fake-power oplock guard test being decoration — it now arms every precondition with a positive control; the historical defect is fixed."
+  ]
+}
