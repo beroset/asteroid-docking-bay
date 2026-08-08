@@ -166,6 +166,7 @@ _WEB_TEMPLATE = """\
     .cbadge.ssh.noaddr{border-color:#f85149;color:#f85149}
     .sdot.wanze{border-color:#d29922;color:#d29922}
     .cbadge.wanze{border-color:#8957e5;color:#d2a8ff;animation:drainpulse 1.4s ease-in-out infinite}
+    .cbadge.held{border-color:#d29922;color:#e3b341;margin-left:6px}
     .sdot[onclick]{cursor:pointer}
     .sdot.spark:hover,.sdot[onclick]:hover{background:rgba(88,166,255,.12)}
     @keyframes drainpulse{0%,100%{opacity:.3}50%{opacity:.85}}
@@ -618,6 +619,18 @@ function pdot(p){
   const slot=p.slot_loc+':'+p.port;
   const clk=`menuPwr(event,'${slot}',${p.adb==='fastboot'},${!!p.charging_active},${!!(p.drain&&p.drain.active)},${p.power===true},${p.smart===false})`;
   return sdot(st==='on'?'on':st==='down'?'dim':'warn',POWERSVG,tip,clk);
+}
+// A watch under an operation lock: a long transfer owns it, and every action on
+// it is refused until the lock releases or expires. Without this the row looks
+// completely ordinary and the refusals only arrive after something is clicked —
+// which reads as the UI being broken rather than the watch being busy.
+// A wanze run renders its own pill in the connection column, so it is not
+// repeated here.
+function mkheld(p){
+  if(!p.held||p.held.kind==='wanze')return '';
+  const since=p.held.since?` since ${fmtAge(p.held.since)} ago`:'';
+  const note=p.held.note?` — ${esc(p.held.note)}`:'';
+  return `<span class="cbadge held" title="held for ${esc(p.held.kind)}${since}${note}; actions on this watch are refused until it is released or expires">held: ${esc(p.held.kind)}</span>`;
 }
 function mklife(p){
   // Worn (off-rig via the wear toggle) is a marker on the name, so it keeps its
@@ -1234,7 +1247,7 @@ function render(data){
           `<td class="thumb">${mkthumb(p)}</td>` +
           `<td>`+(p.serial
             ?`<b class="cn${p.adb?'':' offname'}" onclick="openCC('${jsq(p.serial)}','${jsq(p.codename)}',event)" title="open Control Center (stale if offline)">${esc(p.codename)}</b>`
-            :`<b class="${p.adb?'':'offname'}">${esc(p.codename)}</b>`)+mklife(p)+(p.screen_forced?`<span class="scrn" onclick="releaseScreen('${jsq(p.serial)}')" title="screen forced ON (draining) — click to release">screen</span>`:'')+`</td>` +
+            :`<b class="${p.adb?'':'offname'}">${esc(p.codename)}</b>`)+mklife(p)+mkheld(p)+(p.screen_forced?`<span class="scrn" onclick="releaseScreen('${jsq(p.serial)}')" title="screen forced ON (draining) — click to release">screen</span>`:'')+`</td>` +
           `<td class="stats">${mkstrip(p,wearH)}</td>` +
           `<td class="batc" id="bat-${slot}">${bat}</td>` +
           `<td class="actc" id="act-${slot}">` +

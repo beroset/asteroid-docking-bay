@@ -244,6 +244,46 @@ global.document.createElement=()=>_node();
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_a_held_watch_says_so_in_its_row(tmp_path):
+    """The status document has carried `held` per port since the operation lock
+    landed, and nothing rendered it: a watch held for a 4-hour dump looked
+    completely ordinary, and every action on it was refused only after the
+    click — which reads as the UI being broken rather than the watch being busy.
+
+    A wanze run keeps its own pill in the connection column, so it must not be
+    doubled up here."""
+    import json
+    h = tmp_path / "held.js"
+    cases = {
+        "dump": {"held": {"kind": "dump", "note": "full-disk dump",
+                          "since": 1783900000}},
+        "wanze": {"held": {"kind": "wanze", "since": 1783900000}},
+        "free": {"held": None},
+    }
+    h.write_text(
+        _DOM_STUBS + JS +
+        f"\nconst cases={json.dumps(cases)};"
+        "\nconst out={};for(const k in cases)out[k]=mkheld(cases[k]);"
+        "\nconsole.log(JSON.stringify(out));\nprocess.exit(0);\n")
+    r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
+    assert r.returncode == 0, f"harness failed:\n{r.stderr[:600]}"
+    out = json.loads(r.stdout.strip().splitlines()[-1])
+
+    assert "held" in out["dump"] and "dump" in out["dump"], \
+        f"a watch held for a dump renders no marker: {out['dump']!r}"
+    assert "full-disk dump" in out["dump"], "the reason is not shown to the user"
+    assert out["wanze"] == "", "the wanze pill was duplicated by the held badge"
+    assert out["free"] == "", "an unheld watch was marked held"
+
+    # And it is actually CALLED from the row, not merely defined — matching
+    # "mkheld(p)" alone also matches `function mkheld(p){`, which would let an
+    # unwired badge pass. Require a call site outside the definition.
+    assert JS.count("mkheld(") >= 2, \
+        "mkheld is defined but never called — the badge renders nowhere"
+    assert "+mkheld(p)+" in JS, "mkheld is not concatenated into the watch row"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
 def test_hostile_values_cannot_break_out_of_markup_or_a_click_handler(tmp_path):
     """Not every value rendered here is ours. A watch supplies its own USB
     serial, the icecc scheduler supplies node hostnames, and a Bluetooth device
