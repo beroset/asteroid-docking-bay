@@ -270,11 +270,17 @@ def dump_command(serial: str, ip: "str | None", dest: str) -> str:
     otherwise adb exec-out, which is the binary-safe channel (`adb shell`
     mangles bytes on some hosts).
     """
+    # serial is the device's own ro.serialno / USB iSerial — untrusted input on
+    # a modded watch — and dest is a host path that may hold spaces; both land
+    # in a `bash -c` string, so quote them. ip is internally allocated
+    # (192.168.13.x) and constrained upstream.
+    import shlex
+    q_dest = shlex.quote(dest)
     if ip:
         return (f'ssh -o StrictHostKeyChecking=no -o ConnectTimeout=8 '
-                f'root@{ip} "dd if=/dev/mmcblk0" | dd of={dest} bs=4096')
-    return (f'adb -s {serial} exec-out "dd if=/dev/mmcblk0 2>/dev/null" '
-            f'> {dest}')
+                f'root@{ip} "dd if=/dev/mmcblk0" | dd of={q_dest} bs=4096')
+    return (f'adb -s {shlex.quote(serial)} exec-out "dd if=/dev/mmcblk0 2>/dev/null" '
+            f'> {q_dest}')
 
 
 NO_ROOT_BLOCKER = (

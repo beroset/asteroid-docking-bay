@@ -203,6 +203,22 @@ def test_dump_streams_over_whichever_link_is_up():
     assert "shell" not in adb.split("exec-out")[0]
 
 
+def test_dump_command_quotes_a_device_supplied_serial_and_path():
+    """The serial is the watch's own ro.serialno / USB iSerial — arbitrary on a
+    modded watch — and dest is a host path that can hold spaces. Both land in a
+    `bash -c` string, so a metacharacter would break the redirect or inject a
+    command. Quote them."""
+    import shlex
+    evil = "a;touch /tmp/pwn;b"
+    adb = sr.dump_command(evil, None, "/tmp/o u.img")
+    assert shlex.quote(evil) in adb, "a hostile serial reached the shell unquoted"
+    assert "a;touch /tmp/pwn;b exec-out" not in adb, "serial split into shell words"
+    assert shlex.quote("/tmp/o u.img") in adb, "a path with a space broke the redirect"
+
+    ssh = sr.dump_command("S1", "192.168.13.9", "/tmp/o u.img")
+    assert shlex.quote("/tmp/o u.img") in ssh
+
+
 def test_disk_size_is_asked_before_the_copy_so_truncation_is_detectable():
     """A short dump is the failure that hides best: it looks like a file. The
     only way to know is to ask the WATCH how big its disk is, before starting."""
