@@ -31,7 +31,37 @@ def _fastboot_devices() -> dict[str, str]:
     return result
 
 
-_fb_list_cache: dict = {"ts": 0.0, "val": {}}
+_fb_list_cache: dict = {"ts": 0.0, "val": {}, "due": False}
+
+# How stale the fastboot list may get with nothing happening on the bus. It is
+# long because `fastboot devices` is a libusb sweep that races enumeration and
+# can wedge these hubs (audit B9) — it must not run on a short timer.
+FB_LIST_MAX_AGE = 60.0
+# ...but when udev says the bus actually CHANGED, waiting out that ceiling is
+# pointless: a watch entering the bootloader re-enumerates in 1-2s and then sat
+# unrecognised for over a minute, because the status cache was busted promptly
+# and simply re-read this stale list. An event can bring the next scan forward
+# to this floor, which still bounds how often the sweep can run when a port is
+# flapping or a cycle produces a burst.
+FB_LIST_MIN_INTERVAL = 8.0
+
+
+def invalidate_list_cache() -> None:
+    """Note that the bus changed, so the list is worth re-reading sooner.
+
+    Only marks it due — it never scans. The scan stays on the warmer thread,
+    off the status and event paths, which is the property that keeps a noisy
+    bus from turning into a storm of libusb sweeps.
+    """
+    _fb_list_cache["due"] = True
+
+
+def _fb_list_due(now: "float | None" = None) -> bool:
+    """Whether the warmer should re-read the fastboot list this tick."""
+    age = (now or time.time()) - _fb_list_cache["ts"]
+    if age >= FB_LIST_MAX_AGE:
+        return True
+    return bool(_fb_list_cache["due"]) and age >= FB_LIST_MIN_INTERVAL
 
 
 def _fastboot_list() -> dict[str, str | None]:
@@ -58,6 +88,7 @@ def _fastboot_poll() -> None:
         result = {serial: path_by_serial.get(serial) for serial in serials}
     _fb_list_cache["ts"] = time.time()
     _fb_list_cache["val"] = result
+    _fb_list_cache["due"] = False
 
 
 def _fastboot_getvar_product(serial: str) -> str | None:

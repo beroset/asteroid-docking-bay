@@ -275,7 +275,7 @@ def _background_warmer() -> None:
             # bus: the fastboot scan is a libusb sweep that races enumeration and
             # can wedge the bus (audit B9). It just runs a cycle later.
             bus_busy = _bus_read_active > 0
-            if not bus_busy and time.time() - fastboot._fb_list_cache["ts"] > 60:
+            if not bus_busy and fastboot._fb_list_due():
                 fastboot._fastboot_poll()
             # Recover a wedged adb server (lists nothing though watches are on
             # the bus) — the whole rig looks dead otherwise (audit A2).

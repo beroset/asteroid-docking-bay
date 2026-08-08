@@ -20,6 +20,7 @@ import time
 from socketserver import ThreadingMixIn
 from wsgiref.simple_server import WSGIServer, WSGIRequestHandler, make_server
 
+from . import fastboot
 from .util import log
 from .config import _config_lock, load_config, save_config, seed_hub_names
 from .usb import _sysfs_switch_mode, hub_vendors, usb_topology_fingerprint
@@ -157,10 +158,20 @@ def serve(args, cfg: dict):
         status_cache["ts"] = 0.0
 
     # udev tells us about a docking watch in milliseconds; polling can sit a
-    # whole interval behind it. The monitor only busts this cache — it never
-    # drives an operation, so a noisy bus cannot turn into a storm of actions.
+    # whole interval behind it. The monitor only busts caches — it never drives
+    # an operation, so a noisy bus cannot turn into a storm of actions.
+    def _on_usb_change():
+        _bust_status_cache()
+        # Busting the status cache alone was not enough for a watch entering the
+        # BOOTLOADER: the rebuilt status re-read a fastboot device list that is
+        # cached separately and only refreshed once a minute, so a watch that
+        # re-enumerated in 1-2s went unrecognised for over a minute. This marks
+        # that list due; the warmer still owns the scan and still rate-limits
+        # it, because the sweep itself is what can wedge these hubs.
+        fastboot.invalidate_list_cache()
+
     from .usbevents import UsbEventMonitor
-    _usb_monitor = UsbEventMonitor(_bust_status_cache)
+    _usb_monitor = UsbEventMonitor(_on_usb_change)
     _usb_monitor.start()
 
     from .rpc import LocalCaller, RpcClient, RpcError, load_token

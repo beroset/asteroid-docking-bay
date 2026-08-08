@@ -124,3 +124,73 @@ def test_unknown_unlock_state_is_None_not_False():
     assert bootloader_unlocked("product: nemo") is None
     assert bootloader_unlocked("") is None
     assert bootloader_unlocked("unlocked: maybe") is None
+
+
+# ── how quickly a watch entering the bootloader is noticed ───────────────────
+
+def test_a_bus_event_brings_the_fastboot_scan_forward(monkeypatch):
+    """A watch entering the bootloader re-enumerates in 1-2s, but the pill took
+    over a minute to appear (sawfish, 2026-08-08). The status cache was busted
+    promptly by udev and then simply re-read a fastboot device list that is
+    cached separately on a 60s ceiling.
+
+    udev already knows. An event marks the list due so the warmer's next tick
+    re-reads it, instead of waiting out a ceiling that exists for a quiet bus."""
+    from asteroid_docking_bay import fastboot as fb
+    now = 1000.0
+    monkeypatch.setitem(fb._fb_list_cache, "ts", now)      # just scanned
+    monkeypatch.setitem(fb._fb_list_cache, "due", False)
+
+    assert fb._fb_list_due(now + 1) is False, "scanning again immediately"
+    # Nothing happened on the bus: it waits out the full ceiling.
+    assert fb._fb_list_due(now + 30) is False
+    assert fb._fb_list_due(now + fb.FB_LIST_MAX_AGE) is True
+
+    # The bus changed — the watch just entered fastboot.
+    fb.invalidate_list_cache()
+    assert fb._fb_list_due(now + fb.FB_LIST_MIN_INTERVAL) is True, \
+        "an event did not bring the scan forward — the pill waits out the TTL"
+    assert fb._fb_list_due(now + 30) is True
+
+
+def test_an_event_cannot_make_the_scan_run_continuously(monkeypatch):
+    """`fastboot devices` is a libusb sweep that races enumeration and can wedge
+    these hubs (audit B9), which is why it is not on a short timer. An event may
+    bring it forward but must never remove the floor: a flapping port or a power
+    cycle emits a burst, and a scan per event is exactly the storm to avoid."""
+    from asteroid_docking_bay import fastboot as fb
+    now = 1000.0
+    monkeypatch.setitem(fb._fb_list_cache, "ts", now)
+    monkeypatch.setitem(fb._fb_list_cache, "due", False)
+
+    for _ in range(20):                       # a burst of events
+        fb.invalidate_list_cache()
+    assert fb._fb_list_due(now + 1) is False, \
+        "a burst of bus events could trigger back-to-back libusb sweeps"
+    assert fb._fb_list_due(now + fb.FB_LIST_MIN_INTERVAL - 0.1) is False
+    assert fb.FB_LIST_MIN_INTERVAL >= 5, "the floor is too low to protect the bus"
+
+
+def test_a_scan_clears_the_due_flag(monkeypatch):
+    """Otherwise the list would re-scan every tick forever after one event."""
+    from asteroid_docking_bay import fastboot as fb
+    monkeypatch.setattr(fb, "_run", lambda *a, **k: (0, "", ""))
+    fb.invalidate_list_cache()
+    fb._fastboot_poll()
+    assert fb._fb_list_cache["due"] is False
+    assert fb._fb_list_due(fb._fb_list_cache["ts"] + 1) is False
+
+
+def test_the_usb_monitor_actually_invalidates_the_fastboot_list():
+    """The mechanism only helps if the udev callback is wired to it. Busting the
+    status cache alone was the original bug: the rebuilt status re-read the same
+    stale fastboot list, so the pill still waited out the ceiling."""
+    import inspect
+
+    from asteroid_docking_bay import webapp
+    src = inspect.getsource(webapp.serve)
+    assert "invalidate_list_cache()" in src, \
+        "a bus event no longer marks the fastboot list due — a watch entering " \
+        "the bootloader goes unrecognised until the 60s ceiling lapses"
+    assert "UsbEventMonitor(_on_usb_change)" in src, \
+        "the monitor is not wired to the combined callback"
