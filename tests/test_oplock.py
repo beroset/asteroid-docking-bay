@@ -204,6 +204,37 @@ def test_the_fake_power_self_heal_leaves_a_held_watch_alone(monkeypatch):
     assert spawned == [("1-3", 1)], spawned
 
 
+def test_charge_drain_and_workbench_refuse_a_held_watch(monkeypatch):
+    """Every long op actuates the port — charge powers it on, drain cuts VBUS
+    and poweroffs at the end, workbench cycles it continuously — so starting one
+    over a running dump or wanze run breaks it. The guard was inconsistent at the
+    same API: port.set refused a held watch while a charge, which does strictly
+    more, started happily."""
+    from asteroid_docking_bay import ops
+    now = time.time()
+    cfg = {"op_locks": {"S1": {"kind": "dump", "note": "full-disk dump",
+                               "since": now, "until": now + 600}},
+           "hubs": [{"location": "1-2", "port_serials": {"1": "S1"}}]}
+    monkeypatch.setattr(ops, "active_op_on_slot", lambda slot: None)
+    monkeypatch.setattr(ops, "is_slot_smart", lambda c, l, p: True)
+    started = []
+    monkeypatch.setattr(ops.threading, "Thread",
+                        lambda *a, **k: type("T", (), {
+                            "start": lambda self: started.append(1)})())
+
+    for op_cls in (ops.ChargeOp, ops.DrainOp, ops.WorkbenchOp):
+        op_cls.tasks.pop("1-2:1", None)
+        err = op_cls.start("1-2", 1, cfg)
+        assert err and "held" in err, \
+            f"{op_cls.kind} started on a watch held for a dump: {err!r}"
+    assert not started, "an op thread was launched for a held watch"
+
+    # And the guard must not disable the ops: an unheld watch still starts.
+    ops.ChargeOp.tasks.pop("1-2:1", None)
+    assert ops.ChargeOp.start("1-2", 1, {"hubs": cfg["hubs"]}) is None
+    ops.ChargeOp.tasks.pop("1-2:1", None)
+
+
 def test_ops_refuse_while_a_watch_is_held(monkeypatch):
     """The guard also faces the human: a person clicking Reboot mid-dump makes
     the same collision, just slower."""

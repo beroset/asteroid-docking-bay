@@ -369,6 +369,17 @@ class Operation:
             return f"a {owner_kind} operation owns this port"
         if slot in _flash_tasks and not _flash_tasks[slot].get("done", True):
             return "flash in progress"
+        # An operation lock means a long transfer owns this watch. Every op here
+        # actuates its port — charge powers it on, drain cuts VBUS at the start
+        # and poweroffs at the end, workbench cycles it continuously — so any of
+        # them would break a dump or a wanze run mid-flight. Enforced HERE for
+        # the same reason as the op-ownership check above: one symmetric place,
+        # not three subclasses. The guard was inconsistent at the same API
+        # before this — port.set already refused a held watch while a charge,
+        # which does strictly more, started happily.
+        lock = oplock.held(cfg, find_serial_for_loc_port(cfg, loc, port))
+        if lock:
+            return f"this watch is held: {oplock.describe(lock)}"
         err = cls.conflict(slot)
         if err:
             return err
