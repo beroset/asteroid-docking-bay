@@ -1825,3 +1825,44 @@ process.exit(0);
     assert "idlerow" in stopped, "a node that genuinely stopped never went idle"
     # the live count is always the current sample, never the smoothed one
     assert "0/8" in gap
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_node_temperature_only_alarms_at_the_thermal_limit(tmp_path):
+    """These are LAPTOPS. mo's own figures: the e15 is fine below ~98C, the
+    older w541 is spec'd to 100C, and the p14s drops to 60C on full load once
+    its fans engage. A conventional 80C threshold would sit permanently red on
+    two of three nodes and never flag the third — an alarm that is always on is
+    not an alarm. Only the limit itself, where throttling starts, is coloured."""
+    import json
+    def node(c):
+        return ("{host:'n',ip:'1.1.1.1',arch:'x86_64',speed:40,jobs_used:1,"
+                "jobs_max:8,load:300,temp_c:%s,temp_sensor:'coretemp'}" % c)
+    h = tmp_path / "mr_temp.js"
+    h.write_text(_DOM_STUBS + JS + """
+const out=[];
+[60,88,97,98,101].forEach(c=>{
+  const rows=[];
+  renderMachineRoom({netname:'a',reachable:true,building:true,slots:8,jobs_used:1,
+                     nodes:[%s]},rows);
+  out.push(rows[1]);
+});
+// a node with no SSH access has no temperature at all
+const rows=[];
+renderMachineRoom({netname:'a',reachable:true,building:true,slots:8,jobs_used:1,
+  nodes:[{host:'n',ip:'1.1.1.1',arch:'x86_64',speed:40,jobs_used:1,jobs_max:8,load:300}]},rows);
+out.push(rows[1]);
+console.log(JSON.stringify(out));
+process.exit(0);
+""".replace("%s", "Object.assign({},JSON.parse(JSON.stringify(" + node("c") .replace("temp_c:c","temp_c:0") + ")),{temp_c:c})"))
+    r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
+    assert r.returncode == 0, r.stderr[:400]
+    cool, warmish, busy97, near98, over101, nossh = json.loads(r.stdout)
+    for row in (cool, warmish, busy97):
+        assert "mtemp warm" not in row and "mtemp hot" not in row, \
+            "a normal laptop compile temperature was coloured as a problem"
+    assert "60&deg;C" in cool or "60°C" in cool
+    assert "mtemp warm" in near98, "98C did not read as near the limit"
+    assert "mtemp hot" in over101, "101C did not read as throttling"
+    assert "throttling" in over101
+    assert "mtemp" not in nossh, "a node without SSH invented a temperature"

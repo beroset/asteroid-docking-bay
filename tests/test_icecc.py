@@ -199,3 +199,109 @@ def test_summary_is_none_on_a_host_without_icecream(monkeypatch):
     monkeypatch.setattr(icecc, "configured", lambda *a, **k: None)
     icecc._cache.update(ts=0.0, data=None)
     assert icecc.summary() is None
+
+
+# ── node temperature: strictly optional ──────────────────────────────────────
+
+_HWMON = """/sys/class/hwmon/hwmon0/name:AC
+/sys/class/hwmon/hwmon1/name:acpitz
+/sys/class/hwmon/hwmon2/name:BAT0
+/sys/class/hwmon/hwmon4/name:coretemp
+/sys/class/hwmon/hwmon1/temp1_input:96000
+/sys/class/hwmon/hwmon4/temp1_input:97000
+/sys/class/thermal/thermal_zone1/type:x86_pkg_temp
+/sys/class/thermal/thermal_zone1/temp:95000
+"""
+
+
+def test_sensors_pair_by_directory_not_by_order():
+    """hwmon3/name goes with hwmon3/temp1_input, and the two greps interleave
+    arbitrarily. Pairing by position would attach a CPU temperature to the
+    battery."""
+    t = icecc.parse_temps(_HWMON)
+    assert t["coretemp"] == 97.0
+    assert t["acpitz"] == 96.0
+    assert t["x86_pkg_temp"] == 95.0
+    assert "AC" not in t and "BAT0" not in t, "a sensor with no reading appeared"
+    assert icecc.parse_temps("") == {}
+    assert icecc.parse_temps("garbage with no colon") == {}
+
+
+def test_the_cpu_sensor_wins_over_the_dozen_others():
+    """A laptop reports battery, wifi, nvme and GPU zones. The one that answers
+    'is this node cooking' is the CPU package."""
+    assert icecc.best_temp(icecc.parse_temps(_HWMON)) == (97.0, "coretemp")
+    # No CPU sensor at all: surface the hottest thing rather than nothing —
+    # an unknown but alarming reading still matters.
+    assert icecc.best_temp({"nvme": 40.0, "amdgpu": 78.0}) == (78.0, "amdgpu")
+    assert icecc.best_temp({}) is None
+    # Values some hwmon entries report as constants must not be believed.
+    assert icecc.best_temp({"weird": 0.0, "coretemp": 55.0}) == (55.0, "coretemp")
+    assert icecc.best_temp({"weird": 3000.0}) is None
+
+
+def test_the_probe_is_shell_agnostic():
+    """Measured across this cluster: the three nodes run zsh, fish and bash, and
+    zsh ABORTS the whole command on an unmatched glob — an unguarded
+    /sys/class/thermal/* returned nothing at all from the e15. Wrapping in sh -c
+    lets a POSIX shell do the globbing whatever the login shell is."""
+    assert "sh -c" not in icecc._TEMP_INNER, "the wrapper belongs at the call site"
+    inner = icecc._TEMP_INNER
+    assert "$(" not in inner and "`" not in inner, "command substitution is not portable here"
+    assert "=" not in inner.replace("2>/dev/null", ""), "shell variables break under fish"
+
+
+def test_a_node_without_ssh_access_simply_has_no_temperature(monkeypatch):
+    """Optional throughout. A node we cannot log into shows nothing — never an
+    error, never a nag. The cluster panel must not become an SSH-access prompt
+    on somebody's laptop."""
+    import subprocess as sp
+
+    def refused(*a, **k):
+        raise OSError("no route to host")
+
+    monkeypatch.setattr(sp, "run", refused)
+    assert icecc.node_temp("10.255.255.1") is None
+
+    monkeypatch.setattr(sp, "run",
+                        lambda *a, **k: type("P", (), {"returncode": 255,
+                                                       "stdout": ""})())
+    assert icecc.node_temp("10.255.255.1") is None
+
+
+def test_temperatures_are_probed_in_parallel(monkeypatch):
+    """Serially, three SSH handshakes sit inside a refresh that also talks to
+    the scheduler, and one unreachable node delays every node behind it."""
+    import time as _t
+    monkeypatch.setattr(icecc, "node_temp",
+                        lambda ip, *a, **k: (_t.sleep(1), (50.0, "coretemp"))[1])
+    nodes = [{"ip": f"10.0.0.{i}"} for i in range(4)]
+    start = _t.monotonic()
+    got = icecc.refresh_temps(nodes)
+    elapsed = _t.monotonic() - start
+    assert len(got) == 4
+    assert elapsed < 2.5, f"probed serially: {elapsed:.1f}s for 4 nodes"
+
+
+def test_a_reading_survives_a_non_zero_exit(monkeypatch):
+    """MEASURED on the e15, 2026-08-08: it has no /sys/class/thermal tree at
+    all, so the probe's second grep finds nothing, exits 2, and takes the whole
+    `sh -c` with it — while stdout carries a perfectly good k10temp reading.
+    Gating on the exit status threw that away and the node showed no
+    temperature at all. Partial success is the normal case; the output is the
+    signal, not the return code."""
+    import subprocess as sp
+    e15 = ("/sys/class/hwmon/hwmon3/name:k10temp\n"
+           "/sys/class/hwmon/hwmon3/temp1_input:45375\n")
+    monkeypatch.setattr(sp, "run",
+                        lambda *a, **k: type("P", (), {"returncode": 2,
+                                                       "stdout": e15})())
+    got = icecc.node_temp("192.168.176.164")
+    assert got is not None, "a good reading was discarded because grep exited 2"
+    assert round(got[0], 1) == 45.4 and got[1] == "k10temp"
+
+    # But genuinely empty output still yields nothing rather than a fake zero.
+    monkeypatch.setattr(sp, "run",
+                        lambda *a, **k: type("P", (), {"returncode": 2,
+                                                       "stdout": ""})())
+    assert icecc.node_temp("192.168.176.164") is None

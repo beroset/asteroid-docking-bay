@@ -245,3 +245,41 @@ the cluster is never idle for a second. Rendering each sample literally makes a
 working node flicker green/idle, which reads as a fault. a-d-b holds a node
 "busy" for a short grace after its last seen job; the slot count beside it stays
 the current sample.
+
+## Node temperature (added 2026-08-08)
+
+Polled over SSH, and strictly optional: a node without key access simply shows
+no temperature, never an error. The panel must not become an SSH-access nag.
+
+Three things this cost to get right, all found on the live cluster:
+
+**The login shell is not a given.** These three nodes run zsh, fish and bash.
+Plain `n=$(...)` fails under fish, and zsh ABORTS the whole command on an
+unmatched glob — an unguarded `/sys/class/thermal/*` returned nothing at all
+from the e15. Wrap the probe in `sh -c` and let a POSIX shell do the globbing.
+
+**Do not gate on the exit status.** The probe is two greps and a node
+legitimately has only one of the two sensor trees: the e15 has no
+`/sys/class/thermal` whatsoever, so its second grep exits 2 and takes the whole
+`sh -c` with it, while stdout carries a perfectly good k10temp reading. Judge by
+what came back, not by the return code.
+
+**Sensors pair by directory.** `hwmon3/name` goes with `hwmon3/temp1_input`, and
+the greps interleave. Pairing by position attaches a CPU temperature to a
+battery.
+
+### Thresholds: these are all laptops
+
+moWerk's own figures, and they rule out a conventional limit:
+
+| node | normal under sustained compile load |
+|---|---|
+| mo-e15-eos | fine below ~98 C |
+| mo-w541-eos | older, spec'd to 100 C |
+| mo-p14s-omarchy | thermal monster — drops to ~60 C at full load once fans engage |
+
+A typical 80 C warning would sit permanently red on two of three nodes and never
+flag the third. Nothing is coloured until 98 C, red at 100 C, where the node is
+throttling and the cluster quietly loses advertised capacity. Note also that a
+LOW temperature says nothing about load: the p14s is coolest precisely when it
+is working hardest.

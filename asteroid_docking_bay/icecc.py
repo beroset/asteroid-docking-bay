@@ -242,6 +242,16 @@ def summary(force: bool = False) -> "dict | None":
             return _cache["data"]
     answer = query(conf["scheduler"])
     data = build_summary(conf, answer)
+    # Temperatures ride the same background refresh, on their own slower clock.
+    # Optional throughout: a node we cannot reach simply has none.
+    now_t = time.time()
+    if data["nodes"] and now_t - _temps["ts"] >= TEMP_TTL:
+        _temps.update(ts=now_t, by_ip=refresh_temps(data["nodes"]))
+    for n in data["nodes"]:
+        got = _temps["by_ip"].get(n["ip"])
+        if got:
+            n["temp_c"] = got["c"]
+            n["temp_sensor"] = got["sensor"]
     with _lock:
         if not data["reachable"] and _cache["data"]:
             prev = dict(_cache["data"])
@@ -287,3 +297,120 @@ def summary_cached() -> "dict | None":
             _refreshing.set()
             threading.Thread(target=_refresh_worker, daemon=True).start()
     return data
+
+
+# ── node temperature, when SSH happens to be available ───────────────────────
+#
+# The vital worth having: a build node throttling or cooking is invisible in job
+# counts. Strictly OPTIONAL — a node we cannot log into simply shows no
+# temperature, never an error. The cluster panel must not become an SSH-access
+# nag on somebody's laptop.
+#
+# One command, wrapped in `sh -c`, because the login shell on these nodes is not
+# a given: measured across this cluster the three hosts run zsh, fish and bash,
+# and zsh ABORTS the whole command on an unmatched glob, so an unguarded
+# /sys/class/thermal/* returned nothing at all from the e15. Letting a POSIX
+# shell do the globbing makes the probe shell-agnostic.
+_TEMP_INNER = ("grep -H . /sys/class/hwmon/hwmon*/name "
+               "/sys/class/hwmon/hwmon*/temp1_input 2>/dev/null; "
+               "grep -H . /sys/class/thermal/thermal_zone*/type "
+               "/sys/class/thermal/thermal_zone*/temp 2>/dev/null")
+
+# CPU package sensors, best first. A laptop reports a dozen zones — battery,
+# wifi, nvme, GPU — and the one that answers "is this node cooking" is the CPU.
+CPU_SENSORS = ("k10temp", "coretemp", "zenpower", "x86_pkg_temp")
+SSH_TIMEOUT = 4.0
+TEMP_TTL = 25.0                # temperatures do not need 6-second resolution
+
+
+def parse_temps(text: str) -> dict:
+    """{sensor name: degrees C} from the probe output.
+
+    Values pair by DIRECTORY, not by order: hwmon3/name goes with
+    hwmon3/temp1_input, and the two greps interleave arbitrarily.
+    """
+    names, temps = {}, {}
+    for line in (text or "").splitlines():
+        path, _, value = line.partition(":")
+        if not value:
+            continue
+        base = path.rsplit("/", 1)[0]
+        leaf = path.rsplit("/", 1)[-1]
+        if leaf in ("name", "type"):
+            names[base] = value.strip()
+        elif leaf in ("temp1_input", "temp"):
+            try:
+                temps[base] = int(value.strip()) / 1000.0
+            except ValueError:
+                pass
+    return {names[b]: t for b, t in temps.items() if b in names}
+
+
+def best_temp(temps: dict) -> "tuple[float, str] | None":
+    """The one number worth showing, and which sensor it came from.
+
+    Prefers a CPU package sensor; falls back to the hottest thing reported,
+    because an unknown-but-alarming reading is still worth surfacing. Rejects
+    obviously bogus values — some hwmon entries report constants.
+    """
+    usable = {k: v for k, v in (temps or {}).items() if 0 < v < 150}
+    if not usable:
+        return None
+    for want in CPU_SENSORS:
+        if want in usable:
+            return usable[want], want
+    hottest = max(usable.items(), key=lambda kv: kv[1])
+    return hottest[1], hottest[0]
+
+
+def node_temp(ip: str, user: "str | None" = None,
+              timeout: float = SSH_TIMEOUT) -> "tuple[float, str] | None":
+    """This node's CPU temperature over SSH, or None if we cannot get it.
+
+    BatchMode so a node without a key fails immediately instead of hanging on a
+    password prompt — the whole point is that missing access costs nothing.
+    """
+    import getpass
+    import subprocess
+    who = user or getpass.getuser()
+    cmd = ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no",
+           "-o", f"ConnectTimeout={int(timeout)}", f"{who}@{ip}",
+           f"sh -c {_TEMP_INNER!r}"]
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True,
+                           stdin=subprocess.DEVNULL, timeout=timeout + 2)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    # Deliberately NOT gated on the exit status. The probe is two greps and a
+    # node legitimately has only one of the two sensor trees — the e15 has no
+    # /sys/class/thermal at all, so its second grep exits 2 and takes the whole
+    # `sh -c` with it, while stdout carries a perfectly good k10temp reading.
+    # What came back is the signal; the exit code describes the last grep.
+    return best_temp(parse_temps(p.stdout))
+
+
+_temps: dict = {"ts": 0.0, "by_ip": {}}
+
+
+def refresh_temps(nodes: list) -> dict:
+    """Temperatures for every node, probed in PARALLEL.
+
+    Serially this would be three SSH handshakes deep in a refresh that also
+    talks to the scheduler; a single unreachable node would then delay every
+    node behind it.
+    """
+    out: dict = {}
+    threads = []
+
+    def one(ip):
+        got = node_temp(ip)
+        if got:
+            out[ip] = {"c": round(got[0], 1), "sensor": got[1]}
+
+    for n in nodes:
+        t = threading.Thread(target=one, args=(n["ip"],), daemon=True)
+        t.start()
+        threads.append(t)
+    for t in threads:
+        t.join(timeout=SSH_TIMEOUT + 3)
+    return out

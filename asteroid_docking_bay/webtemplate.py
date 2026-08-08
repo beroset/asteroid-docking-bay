@@ -287,6 +287,14 @@ _WEB_TEMPLATE = """\
     .mroom-row.idlerow{opacity:.7}
     .mroom-row.deadrow{opacity:.45}
     .mroom-host{font-size:11px;margin-left:6px}
+    /* Temperature. These are LAPTOPS: under sustained compile load they sit
+       near their silicon limit by design, and moWerk's own figures put the e15
+       fine below ~98C and the w541 spec'd to 100C. So nothing is coloured until
+       the limit itself, where throttling starts — a lower threshold would cry
+       wolf on two of three nodes permanently. */
+    .mtemp{margin-left:6px}
+    .mtemp.warm{color:#d29922}
+    .mtemp.hot{color:#f85149}
     /* Slot gauge: same visual idiom as the battery bar, so "how full is this
        node" reads the same way as "how full is this watch". */
     .slots{display:inline-block;width:74px;height:9px;border:1px solid #30363d;
@@ -937,6 +945,18 @@ function mroomState(n,reachable,recentlyBusy){
   if(recentlyBusy) return {cls:'', badge:`<span class="cbadge ch" title="fed work intermittently — held as working for a few seconds so an active node does not strobe between polls">building</span>`};
   return {cls:'idlerow', badge:`<span class="dim" title="registered and healthy, no jobs assigned">idle</span>`};
 }
+function mroomTemp(n){
+  // Optional throughout: a node we cannot SSH into simply shows no temperature.
+  if(typeof n.temp_c!=='number') return '';
+  // Laptops run hot under sustained compile load and that is not news. Only
+  // the thermal limit is worth colouring, because that is where the node
+  // starts throttling and the cluster quietly loses the capacity it advertises.
+  const c=n.temp_c;
+  const cls=c>=100?'hot':(c>=98?'warm':'');
+  const why=c>=100?'at the thermal limit — this node is very likely throttling'
+        :(c>=98?'close to the thermal limit':'normal for a laptop under compile load');
+  return `<span class="mtemp ${cls}" title="${esc(n.temp_sensor||'cpu')}: ${why}">${c.toFixed(0)}\u00b0C</span>`;
+}
 function renderMachineRoom(mr,rows){
   // Hidden ENTIRELY when this host is not part of a cluster: no empty frame,
   // no error strip. Most machines running a-d-b have never heard of icecream.
@@ -974,7 +994,7 @@ function renderMachineRoom(mr,rows){
       `<td class="connc">${st.badge}</td>`+
       `<td class="thumb"></td>`+
       `<td><b class="cn">${esc(n.host)}</b> <span class="dim mroom-host">${esc(n.ip)}</span></td>`+
-      `<td class="stats"><span class="dim">${esc(n.arch)} &middot; ${esc(spd)} &middot; load ${n.load}/1000</span></td>`+
+      `<td class="stats"><span class="dim">${esc(n.arch)} &middot; ${esc(spd)} &middot; load ${n.load}/1000</span>${mroomTemp(n)}</td>`+
       `<td class="batc" title="${n.jobs_used} of ${n.jobs_max} compile slots in use${over?' \u2014 over-subscribed: the scheduler is pushing more jobs than this node advertises, which is normal under load':''}">`+
         `<span class="slots ${cls}"><i style="width:${pct}%"></i></span> `+
         `<span class="dim">${n.jobs_used}/${n.jobs_max}</span></td>`+
