@@ -586,7 +586,26 @@ def test_reaching_the_stray_again_rearms_the_recovery(monkeypatch):
     assert len(cycles) == 2, "a later outage could never be recovered"
 
 
-def test_automatic_recovery_cycles_run_one_at_a_time(monkeypatch):
+def test_a_full_disk_does_not_blank_the_whole_fleet_view(monkeypatch):
+    """Persisting a learned exact codename is bookkeeping; the fleet view is the
+    product. It runs at the very END of building the status document, so an
+    OSError there threw away a complete, correct answer and blanked every watch
+    in the UI — recurring on every 2s refresh for as long as the disk stayed
+    full, which is exactly when an operator most needs to see the rig."""
+    from asteroid_docking_bay import webstatus as ws
+
+    def full_disk(cfg):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(ws, "load_config", lambda: {})
+    monkeypatch.setattr(ws, "record_exact_codename", lambda c, s, e: True)
+    monkeypatch.setattr(ws, "save_config", full_disk)
+
+    ws._persist_exact_codenames({"S1": "tunny"})      # must not raise
+
+    # The soft-remap write is the same shape and must degrade the same way.
+    monkeypatch.setattr(ws, "registry", type("R", (), {"note": staticmethod(lambda *a, **k: None)})())
+    assert ws._soft_remap({"hubs": []}, {}) is None
     """Several ports crossing their recovery thresholds in one status pass used
     to fire uhubctl_cycle simultaneously — the inrush brownout + adb-server
     crash the 'never power many ports at once' rule forbids. Every automatic

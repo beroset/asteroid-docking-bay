@@ -404,7 +404,15 @@ def _soft_remap(cfg: dict, online_by_path: dict[str, str]) -> "dict | None":
                      codename, serial, loc, port_str,
                      f" (replacing {prev})" if prev and prev != codename else "")
         if changed:
-            save_config(cfg)
+            try:
+                save_config(cfg)
+            except OSError as exc:
+                # Same reasoning as _persist_exact_codenames: the remap is
+                # re-derived from live sysfs every pass, so losing the write
+                # costs one pass of persistence, while raising costs the whole
+                # fleet view.
+                log.warning("soft-remap could not be persisted: %s", exc)
+                return None
             return cfg
     return None
 
@@ -1029,12 +1037,21 @@ def _persist_exact_codenames(detected: dict) -> None:
     changed this pass."""
     if not detected:
         return
-    with _config_lock:
-        cfg = load_config()
-        changed = False
-        for serial, exact in detected.items():
-            changed = record_exact_codename(cfg, serial, exact) or changed
-        if changed:
-            save_config(cfg)
+    try:
+        with _config_lock:
+            cfg = load_config()
+            changed = False
+            for serial, exact in detected.items():
+                changed = record_exact_codename(cfg, serial, exact) or changed
+            if changed:
+                save_config(cfg)
+    except OSError as exc:
+        # Learning an exact codename is bookkeeping; the fleet view is the
+        # product. This runs at the very END of building the status document,
+        # so a full disk here used to throw away a complete, correct answer and
+        # blank every watch in the UI — recurring on every 2s refresh for as
+        # long as the disk stayed full, which is exactly when an operator most
+        # needs to see the rig.
+        log.warning("could not persist exact codenames: %s", exc)
 
 
