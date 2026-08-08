@@ -111,26 +111,42 @@
       "mechanism": "A truncated or crashed dump left its bytes as <name>.img, indistinguishable from a complete one in a directory listing; the only completeness marker was the sidecar manifest, which can be lost — the original-sprat.img failure one step later.",
       "fix": "Rename an incomplete image to <name>.img.partial on both the truncated and exception paths.",
       "commit": "8502b55"
+    },
+    {
+      "id": "webstatus-concurrent-cycles",
+      "area": "usb.py + webstatus.py + adb.py",
+      "severity": "high",
+      "agent_ref": "webstatus F2",
+      "mechanism": "There is no cross-port serialization of healing actuations. When N strays or N fake-power-wedged ports cross their thresholds in one pass (fleet cold-boot into developer mode with no leases; ~60s after a restart), one daemon thread per port is spawned within milliseconds and uhubctl_cycle fires N ports near-simultaneously — the adb-crash/brownout the binding 'never many ports at once' rule exists to prevent.",
+      "fix": "One shared usb.recovery_cycle_lock held for the whole off->on by every AUTOMATIC recovery cycle (fake-power heal, SSH-stray recovery, adb's wait_serial_online recovery), so they actuate strictly one at a time. Deliberately NOT held by uhubctl_cycle itself, so an operator cycle or onboarding sweep stays immediate. Concurrency test asserts peak overlap of 1; a wiring test pins that adb shares the same lock.",
+      "commit": "4a22555"
+    },
+    {
+      "id": "oplock-guard-coverage",
+      "area": "ops.py, rpcops.py, cli.py, adb.py",
+      "severity": "high",
+      "agent_ref": "oplock F1,F2,F3,F5,F6,F7 / rpcops F2",
+      "mechanism": "The oplock protects against the three automatic housekeepers (peeler, aligner, fake-power heal — all guarded and tested) but NOT: the CLI check-charge timer (separate systemd-timer process, cuts VBUS unattended, F1); flash.start (F2); charge/drain/workbench Operation.start (F3); the onboarding sweep (F4); the manual mode-switch ops ssh.switch_adb / watch.switch_ssh (F5); maybe_heal_wedged_adb's kill-server (F6); wear.set (F7). port.set already refuses a held watch; a charge that does strictly more does not — the guard is inconsistent at the same API surface. The dump feature is unproven on hardware so most are latent, but the CLI timer runs continuously.",
+      "fix": "Wired the lock into every remaining actuator: Operation.start (charge/drain/workbench, one symmetric place for all three), flash.start (via _refuse_if_busy, which also gave it the cross-op check it lacked), the CLI check-charge timer (reads `held` from /api/status - it is a separate unattended process the in-process guards cannot see), the adb wedge self-heal (defers kill-server, which severs an exec-out dump), and wear.set / ssh.switch_adb / watch.switch_ssh. Guarding watch.switch_ssh also closed the aligner's own TOCTOU in finish_ssh_relocation. Each guard has a planted-bug-validated test with a positive control.",
+      "commits": [
+        "2ddceed",
+        "ecc9fba",
+        "7b3b04d",
+        "32cc3ed",
+        "4cd1f5c"
+      ],
+      "still_open": "The onboarding sweep (oplock F4) is deliberately NOT guarded - see the sweep entry in `open`."
     }
   ],
   "open": [
     {
-      "id": "webstatus-concurrent-cycles",
-      "area": "webstatus.py recovery + fake-power heal",
-      "severity": "high",
-      "agent_ref": "webstatus F2",
-      "status": "surfaced — needs moWerk's call (actuates hardware, design decision)",
-      "mechanism": "There is no cross-port serialization of healing actuations. When N strays or N fake-power-wedged ports cross their thresholds in one pass (fleet cold-boot into developer mode with no leases; ~60s after a restart), one daemon thread per port is spawned within milliseconds and uhubctl_cycle fires N ports near-simultaneously — the adb-crash/brownout the binding 'never many ports at once' rule exists to prevent.",
-      "recommendation": "A global one-healing-actuation-per-pass budget, mirroring the existing _SOFT_REMAP_IDENTIFY_PER_PASS on the adb side. Recommend fixing, but it changes recovery timing on the live rig so wanted your eyes first."
-    },
-    {
-      "id": "oplock-guard-coverage",
-      "area": "ops.py, rpcops.py, cli.py",
-      "severity": "high",
-      "agent_ref": "oplock F1-F7, rpcops F2",
-      "status": "surfaced — recommend wiring the clear-consistency ones",
-      "mechanism": "The oplock protects against the three automatic housekeepers (peeler, aligner, fake-power heal — all guarded and tested) but NOT: the CLI check-charge timer (separate systemd-timer process, cuts VBUS unattended, F1); flash.start (F2); charge/drain/workbench Operation.start (F3); the onboarding sweep (F4); the manual mode-switch ops ssh.switch_adb / watch.switch_ssh (F5); maybe_heal_wedged_adb's kill-server (F6); wear.set (F7). port.set already refuses a held watch; a charge that does strictly more does not — the guard is inconsistent at the same API surface. The dump feature is unproven on hardware so most are latent, but the CLI timer runs continuously.",
-      "recommendation": "Wire the existing _refuse_if_busy (or an oplock.held check) into Operation.start, flash.start and the CLI check-charge busy predicate (the status doc already carries `held`). The onboarding-sweep and manual-switch guards are judgment calls about whether those operator-initiated actions should skip a held watch — your call."
+      "id": "oplock-onboard-sweep",
+      "area": "rpcops.py onboard.sweep_prepare / _sweep_one_port / _onboard_stream",
+      "severity": "medium",
+      "agent_ref": "oplock F4",
+      "status": "surfaced - needs moWerk's call (changes bulk-operation semantics)",
+      "mechanism": "sweep_prepare cuts VBUS on EVERY leaf port unconditionally and _sweep_one_port powers watches off, with no oplock check. A sweep run while a wanze probe or a dump is live anywhere on the rig ends it. Unlike the other actuators this is explicitly operator-confirmed ('I will power ALL sockets OFF now'), so refusing or skipping changes what the operator asked for.",
+      "recommendation": "Skip held ports and report them in the sweep log, rather than refusing the whole sweep - a watch under a 14-day wanze run is exactly the one not to power off, and the operator may not know it is running. Left for moWerk because it alters a bulk operation's contract."
     },
     {
       "id": "ui-esc-injection",

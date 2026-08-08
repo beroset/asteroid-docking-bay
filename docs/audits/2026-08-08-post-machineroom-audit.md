@@ -85,6 +85,32 @@ no-duplicate-declaration guard).
   re-enumeration creates (which had it cycling a dead watch every few minutes
   forever).
 
+## Follow-up: the two HIGH items are now fixed (2026-08-08, later)
+
+Both were surfaced rather than applied during the overnight run because they
+actuate hardware. moWerk took them next, in order, once the session had moved
+onto the rig itself:
+
+- **Recovery cycles are serialized** (`4a22555`). One shared
+  `usb.recovery_cycle_lock`, held for the whole off→on by every automatic
+  recovery cycle — the fake-power heal, the SSH-stray recovery and adb's
+  not-enumerating recovery — so they can never actuate together. Operator
+  cycles and onboarding sweeps deliberately stay immediate.
+- **The oplock now guards every remaining actuator** (`2ddceed`, `ecc9fba`,
+  `7b3b04d`, `32cc3ed`, `4cd1f5c`): charge/drain/workbench via one check in
+  `Operation.start`, `flash.start` (which also gained the cross-op check it
+  lacked), the CLI check-charge timer, the adb wedge self-heal, and
+  `wear.set` / `ssh.switch_adb` / `watch.switch_ssh`. Guarding the last of
+  those also closed the aligner's own TOCTOU in `finish_ssh_relocation`.
+
+**One half deliberately left open:** the onboarding sweep (`oplock F4`). It
+cuts VBUS on every leaf port, but unlike the others it is explicitly
+operator-confirmed, so skipping or refusing changes what was asked for. The
+recommendation is to skip held ports and report them — a watch under a 14-day
+wanze run is exactly the one not to power off, and the operator may not know it
+is running. That is a contract change for a bulk operation, so it stays moWerk's
+call.
+
 ## Left for mo to decide
 
 These are real and verified, but each is either hardware-actuating, a design
