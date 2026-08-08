@@ -530,6 +530,32 @@ def test_unreachable_stray_is_power_cycled_once(monkeypatch):
     assert cycles == [("1-3.4", 2)], "kept cycling a watch the cycle did not fix"
 
 
+def test_the_cycle_once_marker_survives_the_cycles_own_blip(monkeypatch):
+    """_recover cycles a dead SSH stray ONCE — but uhubctl_cycle drops the watch
+    to adb_state=None for several seconds while it re-enumerates, and a status
+    pass runs in that window (the cycle busts the status cache). _maybe_align
+    cleared the one-shot marker on ANY non-ssh state, so the cycle's own blip
+    re-armed it and the watch cycled every few minutes forever. Only a watch
+    genuinely back on adb ('device') re-arms; a transient absence must not.
+
+    This exercises _maybe_align_usb_mode directly — the once-cycle tests drive
+    _align_usb_mode_worker and never touch the clearing path where this lived."""
+    from asteroid_docking_bay import webstatus as ws
+    ws._ssh_align_cycled.clear()
+    ws._ssh_align_fail.clear()
+    ws._ssh_align_attempt.clear()
+    ws._ssh_align_cycled.add("S1")                 # already cycled this episode
+    cfg = {}                                        # no oplock on S1
+
+    ws._maybe_align_usb_mode("S1", None, cfg)       # the re-enumeration blip
+    assert "S1" in ws._ssh_align_cycled, \
+        "the cycle's own re-enumeration blip re-armed the one-shot cycle"
+
+    ws._maybe_align_usb_mode("S1", "device", cfg)   # genuinely back on adb
+    assert "S1" not in ws._ssh_align_cycled, \
+        "a watch actually recovered onto adb must re-arm for a later outage"
+
+
 def test_reaching_the_stray_again_rearms_the_recovery(monkeypatch):
     """The one-cycle limit is per run of failures, not per process lifetime —
     once a watch is reachable again, a LATER outage must be recoverable too."""

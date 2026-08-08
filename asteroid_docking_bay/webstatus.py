@@ -168,7 +168,16 @@ def _maybe_align_usb_mode(serial: "str | None", adb_state: "str | None",
         if serial:
             _ssh_align_attempt.pop(serial, None)
             _ssh_align_fail.pop(serial, None)
-            _ssh_align_cycled.discard(serial)
+            # Re-arm the one-shot cycle only on POSITIVE recovery. adb_state is
+            # None for several seconds during the cycle's own re-enumeration,
+            # and clearing the marker on that absence let the watch's own
+            # recovery blip re-arm it — a dead SSH stray then cycled every few
+            # minutes forever. A watch back on adb ('device') has genuinely
+            # recovered; being briefly absent has not. Recovery via SSH is
+            # re-armed on its own positive evidence in _check_allocated_ssh_watch
+            # and _align_usb_mode_worker.
+            if adb_state == "device":
+                _ssh_align_cycled.discard(serial)
         return
     now = time.time()
     if now - _ssh_align_attempt.get(serial, 0) < _SSH_ALIGN_BACKOFF_SEC:
