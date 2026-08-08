@@ -156,24 +156,29 @@ def query(host: str, commands: "tuple[str, ...]" = SAFE_COMMANDS,
         return result
     try:
         sock.settimeout(timeout)
-        buf = ""
+        buf = b""
 
         def read_until(marker: str) -> str:
+            # Buffer BYTES and decode once complete: decoding each recv()
+            # chunk separately mangles a multibyte character that straddles a
+            # chunk boundary into U+FFFD. The markers are ASCII, so framing
+            # on the byte level is safe whatever the field content holds.
             nonlocal buf
+            mark = marker.encode()
             deadline = time.monotonic() + timeout
-            while marker not in buf:
+            while mark not in buf:
                 if time.monotonic() > deadline:
                     raise TimeoutError("scheduler accepted the connection but "
                                        "did not answer")
                 chunk = sock.recv(4096)
                 if not chunk:
                     raise ConnectionError("scheduler closed the connection")
-                buf += chunk.decode("utf-8", "replace")
-            text, _, buf = buf.partition(marker)
-            return text
+                buf += chunk
+            raw, _, buf = buf.partition(mark)
+            return raw.decode("utf-8", "replace")
 
         result["banner"] = read_until("Use 'help' for help")
-        buf = ""
+        buf = b""
         for cmd in commands:
             sock.sendall((cmd + "\n").encode())
             result["out"][cmd] = read_until("200 done")
