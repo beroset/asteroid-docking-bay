@@ -1498,7 +1498,12 @@ def _watch_dump(args):
     stamp = time.strftime("%Y%m%d-%H%M%S")
     dest = stockrom.DUMP_ROOT / f"{codename}-{serial}-{stamp}.img"
     manifest = stockrom.DUMP_ROOT / f"{codename}-{serial}-{stamp}.manifest.txt"
-    ip = ssh_ip_for_serial(cfg, serial) if isinstance(w.t, SshTransport) else None
+    # Use the address of the transport the size preflight just succeeded over,
+    # not a re-derivation from cfg. An orbit/WiFi watch reaches us on an
+    # SshTransport whose ip is its WiFi address, and it often has no ssh_ips
+    # allocation — re-deriving gave None and fell back to an adb command against
+    # a watch that is not on adb, dumping 0 bytes after a preflight that passed.
+    ip = w.t.ip if isinstance(w.t, SshTransport) else None
     cmd = stockrom.dump_command(serial, ip, str(dest))
 
     lock = oplock.hold(serial, "dump", f"full-disk dump to {dest.name}", 4 * 3600)

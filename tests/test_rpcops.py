@@ -1254,6 +1254,32 @@ def test_a_dump_that_cannot_be_size_checked_is_refused(monkeypatch):
     assert res["error"] == stockrom.NO_ROOT_BLOCKER
 
 
+def test_a_dump_targets_the_link_the_preflight_used(monkeypatch):
+    """The size preflight reads over the watch's actual transport, but the copy
+    command re-derived the address from cfg. An orbit/WiFi watch reaches us on
+    an SshTransport with no ssh_ips allocation, so the re-derivation returned
+    None and built an ADB command against a watch that is not on adb — a 0-byte
+    dump after a preflight that passed. Build for the transport that answered."""
+    from asteroid_docking_bay import stockrom, oplock
+    from asteroid_docking_bay.transport import SshTransport
+    seen = {}
+    monkeypatch.setattr(stockrom, "disk_bytes", lambda w: (4096, None))
+    monkeypatch.setattr(rpcops, "_watch",
+                        lambda s: type("W", (), {"t": SshTransport("10.0.0.9")})())
+    monkeypatch.setattr(rpcops, "load_config", lambda: {"serials": {"S1": "skipjack"}})
+    monkeypatch.setattr(rpcops, "ssh_ip_for_serial", lambda c, s: None)   # no allocation
+    monkeypatch.setattr(stockrom, "dump_command",
+                        lambda serial, ip, dest: seen.setdefault("ip", ip) or "cmd")
+    monkeypatch.setattr(oplock, "hold", lambda *a, **k: {"ok": True})
+    monkeypatch.setattr(rpcops.threading, "Thread",
+                        lambda *a, **k: type("T", (), {"start": lambda self: None})())
+    rpcops._dump_runs.clear()
+    res = rpcops.DISPATCH._data["watch.dump"]({"serial": "S1", "action": "start"})
+    assert res["ok"] is True
+    assert seen["ip"] == "10.0.0.9", \
+        f"dump built for the wrong link: ip={seen['ip']} (should be the SSH address)"
+
+
 def test_a_truncated_dump_is_reported_as_failed_not_done(monkeypatch, tmp_path):
     """A short dump is the failure that hides best. original-sprat.img is
     0 bytes and sat in the backup directory looking present for months."""
