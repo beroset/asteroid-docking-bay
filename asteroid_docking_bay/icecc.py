@@ -235,18 +235,20 @@ def summary(force: bool = False) -> "dict | None":
     conf = configured()
     if not conf:
         return None
-    now = time.time()
+    # The monotonic clock, throughout: an NTP step-back on the wall clock would
+    # otherwise make the cache "fresh" until real time re-passed the old stamp.
     with _lock:
-        fresh = _cache["data"] is not None and now - _cache["ts"] < CACHE_TTL
+        fresh = (_cache["data"] is not None
+                 and time.monotonic() - _cache["ts"] < CACHE_TTL)
         if fresh and not force:
             return _cache["data"]
     answer = query(conf["scheduler"])
     data = build_summary(conf, answer)
     # Temperatures ride the same background refresh, on their own slower clock.
     # Optional throughout: a node we cannot reach simply has none.
-    now_t = time.time()
-    if data["nodes"] and now_t - _temps["ts"] >= TEMP_TTL:
-        _temps.update(ts=now_t, by_ip=refresh_temps(data["nodes"]))
+    if data["nodes"] and time.monotonic() - _temps["ts"] >= TEMP_TTL:
+        by_ip = refresh_temps(data["nodes"])
+        _temps.update(ts=time.monotonic(), by_ip=by_ip)
     for n in data["nodes"]:
         got = _temps["by_ip"].get(n["ip"])
         if got:
@@ -259,7 +261,11 @@ def summary(force: bool = False) -> "dict | None":
             data = prev
         else:
             data["stale"] = False
-        _cache.update(ts=now, data=data)
+        # Stamped at the END of the refresh, not the start: a refresh that
+        # takes several seconds (wedged scheduler, dead SSH nodes) would
+        # otherwise write a cache that is already part-expired, and a slow
+        # enough one would churn back-to-back refreshes forever.
+        _cache.update(ts=time.monotonic(), data=data)
     if not data.get("reachable"):
         log.debug("icecc: scheduler %s unreachable: %s",
                   conf["scheduler"], data.get("error"))
@@ -292,7 +298,7 @@ def summary_cached() -> "dict | None":
     if configured() is None:
         return None
     data = _cache["data"]
-    if data is None or time.time() - _cache["ts"] >= CACHE_TTL:
+    if data is None or time.monotonic() - _cache["ts"] >= CACHE_TTL:
         if not _refreshing.is_set():
             _refreshing.set()
             threading.Thread(target=_refresh_worker, daemon=True).start()
