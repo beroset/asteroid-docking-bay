@@ -591,6 +591,12 @@ def _wear_set(args):
     serial = find_serial_for_loc_port(load_config(), loc, port)
     if not serial:
         return {"ok": False, "error": "no watch mapped to this port"}
+    # Both branches actuate the port — on powers it up, off can cut VBUS on a
+    # watch that has left — so this is the same hazard port.set is guarded
+    # against, and it was the odd one out.
+    busy = _refuse_if_busy(loc, port)
+    if busy:
+        return busy
     if on:
         try:
             uhubctl_set_power(loc, port, True)
@@ -741,6 +747,15 @@ def _ssh_switch_adb(args):
     means nothing was reachable there, or a broken usb-moded refused it."""
     serial = args.get("serial")
     cfg = load_config()
+    # Switching USB mode under a running transfer IS the 2026-08-03 regression
+    # that produced a 0-byte dump, and the oplock docstring names a shell script
+    # calling exactly this op as the threat model. The automatic peeler and
+    # aligner have been guarded since; the manual/scripted entry point had not.
+    lock = oplock.held(cfg, serial)
+    if lock:
+        return {"ok": False, "busy": lock.get("kind"),
+                "error": f"this watch is held: {oplock.describe(lock)} — "
+                         f"switching its USB mode would break that operation"}
     # Prefer the address the watch demonstrably answers on (allocated, or the
     # shared default when its link wins the route); fall back to the assigned
     # address so an unreachable watch still yields the helper's clean error.
@@ -761,6 +776,15 @@ def _watch_switch_ssh(args):
     serial = args.get("serial")
     if not serial:
         return {"ok": False, "error": "no serial for this port"}
+    # Same hazard as ssh.switch_adb, from the other direction. This also closes
+    # the aligner's own gap: finish_ssh_relocation calls this op up to a minute
+    # after the pass that checked the lock, so a hold taken in between was
+    # invisible until the switch had already fired.
+    lock = oplock.held(load_config(), serial)
+    if lock:
+        return {"ok": False, "busy": lock.get("kind"),
+                "error": f"this watch is held: {oplock.describe(lock)} — "
+                         f"switching its USB mode would break that operation"}
     # Give this watch its own SSH-mode IP before switching, so two watches sent
     # to SSH on the same rig never both land on the default 192.168.2.15. The
     # assignment is sticky and persisted, so the watch keeps this address.

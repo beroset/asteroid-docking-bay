@@ -275,6 +275,53 @@ def test_flash_refuses_a_held_watch_and_a_busy_port(monkeypatch):
     assert reached, "the guard blocked a flash on a free port"
 
 
+def test_the_manual_mode_switch_ops_refuse_a_held_watch(monkeypatch):
+    """Switching USB mode under a running transfer IS the 2026-08-03 regression
+    that produced a 0-byte dump, and the oplock docstring names a shell script
+    calling exactly these ops as the threat model. The automatic peeler and
+    aligner were guarded; the manual entry points were not.
+
+    Guarding watch.switch_ssh also closes the aligner's own gap:
+    finish_ssh_relocation calls it up to a minute after the pass that checked
+    the lock, so a hold taken in between was invisible until it had fired."""
+    from asteroid_docking_bay import rpcops
+    now = time.time()
+    cfg = {"op_locks": {"S1": {"kind": "dump", "note": "full-disk dump",
+                               "since": now, "until": now + 600}}}
+    monkeypatch.setattr(rpcops, "load_config", lambda: cfg)
+    switched = []
+    monkeypatch.setattr(rpcops, "_switch_ssh_to_adb",
+                        lambda ip: switched.append(ip) or {"ok": True})
+    monkeypatch.setattr(rpcops, "_run",
+                        lambda *a, **k: switched.append(a) or (0, "", ""))
+
+    r = rpcops.DISPATCH._data["ssh.switch_adb"]({"serial": "S1"})
+    assert r["ok"] is False and "held" in r["error"]
+    r = rpcops.DISPATCH._data["watch.switch_ssh"]({"serial": "S1"})
+    assert r["ok"] is False and "held" in r["error"]
+    assert switched == [], "a held watch had its USB mode switched"
+
+
+def test_wear_set_refuses_a_held_watch(monkeypatch):
+    """Both branches actuate the port — on powers it up, off can cut VBUS on a
+    watch that has left — so it carries the same hazard port.set is guarded
+    against, and it was the odd one out."""
+    from asteroid_docking_bay import rpcops
+    now = time.time()
+    cfg = {"op_locks": {"S1": {"kind": "wanze", "note": "arm A",
+                               "since": now, "until": now + 600}}}
+    monkeypatch.setattr(rpcops, "load_config", lambda: cfg)
+    monkeypatch.setattr(rpcops, "find_serial_for_loc_port", lambda c, l, p: "S1")
+    monkeypatch.setattr(rpcops, "_op_owning", lambda l, p: None)
+    powered = []
+    monkeypatch.setattr(rpcops, "uhubctl_set_power",
+                        lambda l, p, on: powered.append((l, p, on)))
+
+    r = rpcops.DISPATCH._data["wear.set"]({"loc": "1-2", "port": 1, "on": True})
+    assert r["ok"] is False and "held" in r["error"]
+    assert powered == [], "powered the port of a watch mid-wanze-run"
+
+
 def test_ops_refuse_while_a_watch_is_held(monkeypatch):
     """The guard also faces the human: a person clicking Reboot mid-dump makes
     the same collision, just slower."""
