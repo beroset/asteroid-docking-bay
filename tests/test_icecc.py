@@ -26,6 +26,17 @@ LISTCS = (
 )
 
 
+@pytest.fixture(autouse=True)
+def _fresh_module_state():
+    """The cache and the temperature sweep are module-global. Without a reset,
+    whichever test touches them first decides what every later test exercises —
+    the temp TTL is 25 s, longer than the whole suite."""
+    icecc._cache.update(ts=0.0, data=None)
+    icecc._temps.update(ts=0.0, by_ip={})
+    icecc._refreshing.clear()
+    yield
+
+
 # ── detection: must degrade to nothing ───────────────────────────────────────
 
 def test_a_host_that_is_not_a_cluster_member_renders_nothing(tmp_path):
@@ -181,7 +192,10 @@ def test_an_unreachable_refresh_keeps_the_last_known_nodes(monkeypatch):
     monkeypatch.setattr(icecc, "query",
                         lambda *a, **k: {"ok": True, "banner": BANNER,
                                          "out": {"listcs": LISTCS, "listjobs": ""}})
-    icecc._cache.update(ts=0.0, data=None)
+    # The fixture IPs are the real cluster's. Unstubbed, summary() would run
+    # the SSH temperature sweep against them — a unit suite must never log
+    # into the fleet's machines (and on the rig itself, it silently did).
+    monkeypatch.setattr(icecc, "refresh_temps", lambda nodes: {})
     first = icecc.summary()
     assert first["reachable"] and len(first["nodes"]) == 3
 
@@ -197,7 +211,6 @@ def test_an_unreachable_refresh_keeps_the_last_known_nodes(monkeypatch):
 
 def test_summary_is_none_on_a_host_without_icecream(monkeypatch):
     monkeypatch.setattr(icecc, "configured", lambda *a, **k: None)
-    icecc._cache.update(ts=0.0, data=None)
     assert icecc.summary() is None
 
 
@@ -266,7 +279,7 @@ def test_the_cpu_sensor_wins_over_the_dozen_others():
     assert icecc.best_temp({"weird": 3000.0}) is None
 
 
-def test_the_probe_is_shell_agnostic():
+def test_the_probe_is_shell_agnostic(monkeypatch):
     """Measured across this cluster: the three nodes run zsh, fish and bash, and
     zsh ABORTS the whole command on an unmatched glob — an unguarded
     /sys/class/thermal/* returned nothing at all from the e15. Wrapping in sh -c
@@ -275,6 +288,20 @@ def test_the_probe_is_shell_agnostic():
     inner = icecc._TEMP_INNER
     assert "$(" not in inner and "`" not in inner, "command substitution is not portable here"
     assert "=" not in inner.replace("2>/dev/null", ""), "shell variables break under fish"
+
+    # And the call site must actually APPLY the wrapper — asserting only on the
+    # constant lets the sh -c disappear from node_temp without a test noticing.
+    import subprocess as sp
+    seen = {}
+
+    def record(cmd, **kw):
+        seen["remote"] = cmd[-1]
+        return type("P", (), {"returncode": 0, "stdout": ""})()
+
+    monkeypatch.setattr(sp, "run", record)
+    icecc.node_temp("10.255.255.1")
+    assert seen["remote"] == f"sh -c {icecc._TEMP_INNER!r}", \
+        "the remote command is not wrapped for a POSIX shell"
 
 
 def test_a_node_without_ssh_access_simply_has_no_temperature(monkeypatch):
