@@ -205,6 +205,63 @@ _DOM_CAPTURE = _DOM_STUBS.replace(
     "global.__els={};global.document={getElementById:(i)=>(global.__els[i]=global.__els[i]||el()),")
 
 
+# A DOM real enough to run reconcileRows itself (the render tests stub it out
+# with innerHTML=join, so its own tree logic — the part that dropped the log
+# rows — is never otherwise exercised). Models exactly what reconcileRows uses:
+# a node whose innerHTML parses top-level <tr> chunks into child nodes,
+# .children / .firstElementChild, get/setAttribute, and replaceChildren.
+# Layered ON TOP of _DOM_STUBS (loaded first for window/document), overriding
+# only createElement so the rest of the template still loads.
+_DOM_TREE = r"""
+function _node(){return {
+  _a:{}, _c:[], _html:'',
+  get children(){return this._c;},
+  get firstElementChild(){return this._c[0]||null;},
+  getAttribute(k){return (k in this._a)?this._a[k]:null;},
+  setAttribute(k,v){this._a[k]=v;},
+  set innerHTML(h){ this._html=h;
+    const parts=h.match(/<tr\b[\s\S]*?<\/tr>/g)||[];
+    this._c=parts.map(p=>{const n=_node(); n._html=p;
+      const m=p.match(/id="([^"]+)"/); if(m)n._a.id=m[1]; return n;}); },
+  get innerHTML(){return this._html;},
+  replaceChildren(){ this._c=Array.prototype.slice.call(arguments); }
+};}
+global.document.createElement=()=>_node();
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_reconcile_keeps_both_the_watch_row_and_its_log_row(tmp_path):
+    """Each watch entry is two <tr>s in one html string: the visible row and its
+    hidden log row carrying id="log-<slot>". reconcileRows kept only
+    firstElementChild, dropping every log row — so the flash / onboard streams
+    had no box to write to and doFl/doRemap returned at once. Both must survive,
+    and a re-render with identical html must REUSE the same nodes (the image
+    reload the reconcile exists to prevent)."""
+    entry = ('`<tr class="wr" id="wr-1-2:1"><td>x</td></tr>'
+             '<tr class="lr" id="lr-1-2:1"><td><div id="log-1-2:1"></div></td></tr>`')
+    h = tmp_path / "reconcile.js"
+    h.write_text(
+        _DOM_STUBS + JS + _DOM_TREE +
+        "\nconst tb=_node();"
+        f"\nconst html={entry};"
+        "\nreconcileRows(tb, [html]);"
+        "\nconst first=tb.children.map(n=>n._html).join('');"
+        "\nconst ids1=tb.children.map(n=>n._a.id);"
+        "\nreconcileRows(tb, [html]);"          # second pass, identical html
+        "\nconst reused=tb.children.map(n=>n._html).join('')===first;"
+        "\nconsole.log(JSON.stringify({ids:ids1,html:first,reused:reused}));"
+        "\nprocess.exit(0);\n")
+    r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
+    assert r.returncode == 0, f"harness failed:\n{r.stderr[:600]}"
+    import json
+    out = json.loads(r.stdout.strip().splitlines()[-1])
+    assert out["ids"] == ["wr-1-2:1", "lr-1-2:1"], (
+        f"the log row was dropped — flash/onboard have no box to write to: {out['ids']}")
+    assert 'id="log-1-2:1"' in out["html"], "the log box never reached the DOM"
+    assert out["reused"], "an unchanged row was rebuilt — its thumbnail would reload"
+
+
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
 def test_refresh_button_powers_only_an_off_switchable_port(tmp_path):
     """The refresh button doubles as "power on and identify". A watch plugged

@@ -885,23 +885,30 @@ function _rowKey(html){
   return 'x:'+html.length;
 }
 function reconcileRows(tb, htmls){
+  // A watch entry is TWO rows: the visible <tr class="wr"> and its hidden
+  // <tr class="lr"> log row that carries id="log-<slot>". They arrive as one
+  // concatenated html string and must both reach the DOM — taking only
+  // firstElementChild dropped every log row, so the flash/onboard streams had
+  // no box to write to and doFl/doRemap bailed at once. Keep each key's whole
+  // group of nodes together.
   const existing={};
   for(const el of Array.from(tb.children)){
-    const k=el.getAttribute('data-k'); if(k!==null)existing[k]=el;
+    const k=el.getAttribute('data-k'); if(k!==null)(existing[k]||(existing[k]=[])).push(el);
   }
   const seen=new Set(), out=[];
   for(const html of htmls){
     const key=_rowKey(html);
     if(seen.has(key))continue;
     seen.add(key);
-    let el=existing[key];
-    if(!(el && _rowSig[key]===html)){          // new or changed → build fresh
+    let group=existing[key];
+    if(!(group && _rowSig[key]===html)){          // new or changed → build fresh
       const tmp=document.createElement('tbody');
       tmp.innerHTML=html;
-      el=tmp.firstElementChild;
-      if(el){el.setAttribute('data-k',key); _rowSig[key]=html;}
+      group=Array.from(tmp.children);
+      group.forEach(el=>el.setAttribute('data-k',key));
+      _rowSig[key]=html;
     }
-    if(el)out.push(el);                          // unchanged → reuse the node
+    for(const el of group)out.push(el);            // unchanged → reuse the nodes
   }
   for(const k in _rowSig)if(!seen.has(k))delete _rowSig[k];
   tb.replaceChildren(...out);
