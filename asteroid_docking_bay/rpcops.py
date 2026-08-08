@@ -1452,6 +1452,14 @@ def _dump_worker(serial, dest, manifest, cmd, expect_bytes, codename):
         # Compare against what the WATCH said its disk was, asked before the
         # copy started, and refuse to call a truncated result a backup.
         complete = bool(expect_bytes) and size == expect_bytes
+        if not complete and dest.exists():
+            # Mark it in the NAME, not only in the sidecar manifest: a manifest
+            # can be moved or lost, and a truncated .img that looks complete in
+            # a directory listing is exactly the original-sprat.img failure.
+            partial = dest.with_name(dest.name + ".partial")
+            dest.rename(partial)
+            dest = partial
+            run["dest"] = str(dest)
         run.update(state="done" if complete else "failed", size=size,
                    expect=expect_bytes, rc=rc,
                    error=None if complete else
@@ -1468,6 +1476,15 @@ def _dump_worker(serial, dest, manifest, cmd, expect_bytes, codename):
                   "the quiescent partitions will match and userdata will not."))
     except Exception as exc:                      # noqa: BLE001 - reported, not raised
         run.update(state="failed", error=str(exc)[:200])
+        # An exception leaves whatever bytes landed. Mark them partial too, so a
+        # crashed dump never leaves a bare .img with no provenance at all.
+        try:
+            if dest.exists() and not str(dest).endswith(".partial"):
+                partial = dest.with_name(dest.name + ".partial")
+                dest.rename(partial)
+                run["dest"] = str(partial)
+        except OSError:
+            pass
     finally:
         oplock.release(serial)
         run["ended"] = time.time()

@@ -1300,6 +1300,12 @@ def test_a_truncated_dump_is_reported_as_failed_not_done(monkeypatch, tmp_path):
     # And the manifest says so too, since the file may outlive this process.
     assert "complete: False" in (tmp_path / "m.txt").read_text()
 
+    # The file itself is renamed so a directory listing cannot mistake the
+    # truncated image for a good one — the manifest can be lost, the name cannot.
+    assert not dest.exists(), "the truncated .img was left looking complete"
+    assert (tmp_path / "short.img.partial").exists()
+    assert run["dest"].endswith(".partial")
+
 
 def test_a_complete_dump_is_reported_done_and_releases_the_watch(monkeypatch, tmp_path):
     from asteroid_docking_bay import oplock
