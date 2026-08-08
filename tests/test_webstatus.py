@@ -586,6 +586,50 @@ def test_reaching_the_stray_again_rearms_the_recovery(monkeypatch):
     assert len(cycles) == 2, "a later outage could never be recovered"
 
 
+def test_automatic_recovery_cycles_run_one_at_a_time(monkeypatch):
+    """Several ports crossing their recovery thresholds in one status pass used
+    to fire uhubctl_cycle simultaneously — the inrush brownout + adb-server
+    crash the 'never power many ports at once' rule forbids. Every automatic
+    recovery cycle shares one lock, so they actuate strictly serially."""
+    import threading
+    import time
+    inside, peak, guard = [], [0], threading.Lock()
+
+    def fake_cycle(loc, port):
+        with guard:
+            inside.append(1)
+            peak[0] = max(peak[0], len(inside))
+        time.sleep(0.05)          # a window an overlapping cycle would show in
+        with guard:
+            inside.pop()
+
+    monkeypatch.setattr(ws, "uhubctl_cycle", fake_cycle)
+    threads = [threading.Thread(target=ws._recovery_cycle, args=(f"1-{i}", 1))
+               for i in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert peak[0] == 1, (
+        f"{peak[0]} recovery cycles actuated at once — the brownout the "
+        "serialization exists to prevent")
+
+
+def test_adbs_recovery_cycle_shares_the_same_lock():
+    """adb's not-enumerating recovery must serialize against the status healer,
+    not just within webstatus — an op recovering one watch while the healer
+    cycles another is still two ports at once. Both take usb.recovery_cycle_lock;
+    a wiring check because the two call sites are far apart and easy to let
+    drift, and because this one actuates hardware."""
+    import inspect
+
+    from asteroid_docking_bay import adb
+    src = inspect.getsource(adb.wait_serial_online)
+    assert "with recovery_cycle_lock" in src, (
+        "adb's recovery cycle no longer holds the shared lock — it can now "
+        "overlap the status healer's cycle")
+
+
 def test_unreachable_stray_never_cycles_someone_elses_port(monkeypatch):
     """Same guard as adb's recovery (audit A4): the watch may have been moved,
     and cutting power to its old seat would bounce whoever sits there now. Also

@@ -485,6 +485,18 @@ def uhubctl_set_power(location: str, port: int, on: bool) -> bool:
     return confirmed
 
 
+# Every AUTOMATIC recovery power-cycle acquires this before actuating, so that
+# several wedged ports crossing their thresholds in one status pass — or an op's
+# own enumeration-recovery firing alongside the status healer — can never cut and
+# raise VBUS on many ports at once. That simultaneity is the inrush brownout and
+# adb-server crash the "never power many ports at once" rule exists to prevent.
+# It is deliberately NOT held by uhubctl_cycle itself: a deliberate operator
+# cycle or an onboarding sweep must stay immediate, not queue behind a background
+# heal. The three automatic callers (the fake-power heal, the SSH-stray recovery,
+# and adb's not-enumerating recovery) take it; nobody else does.
+recovery_cycle_lock = threading.Lock()
+
+
 def uhubctl_cycle(location: str, port: int, delay: int = 3) -> None:
     """Power-cycle a port in a single uhubctl invocation (off → delay → on).
     Used as the stale-node recovery primitive: unlike a plain off→on pair,
