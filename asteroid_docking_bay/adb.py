@@ -83,6 +83,24 @@ def maybe_heal_wedged_adb() -> bool:
     now = time.time()
     if now - _last_adb_heal < _ADB_HEAL_COOLDOWN:
         return False
+    # A dump streams through the local adb server (`adb -s X exec-out dd`), so
+    # kill-server severs it mid-copy. The wedge that triggers this heal can be
+    # spurious — one watch enumerating oddly can hide others from the server for
+    # two checks — and killing a 4 GB read to fix a maybe-wedge is the wrong
+    # trade. Defer while any watch is held; the lock's TTL bounds the wait, and
+    # a genuine wedge is still healed on a later pass. Imported here because
+    # config imports this module.
+    from .config import load_config
+    from . import oplock
+    holders = oplock.all_held(load_config())
+    if holders:
+        _last_adb_heal = now          # rate-limit this notice like a real heal
+        log.warning("adb server looks wedged, but %s held for %s — NOT "
+                    "restarting the server, which would sever a transfer in "
+                    "flight; will retry once released",
+                    ", ".join(sorted(holders)),
+                    ", ".join(sorted({h.get("kind", "?") for h in holders.values()})))
+        return False
     _last_adb_heal = now
     log.warning("adb server wedged: %d adb-mode watch(es) on the bus but not "
                 "listed by adb (%s) — restarting adb server",

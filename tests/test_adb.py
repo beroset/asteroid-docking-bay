@@ -205,11 +205,15 @@ def test_maybe_heal_wedged_adb_restarts_only_on_a_persistent_wedge(monkeypatch):
     race is not a false restart) and at most once per cooldown, since a restart
     briefly drops every watch (audit A2)."""
     import asteroid_docking_bay.adb as adbmod
+    from asteroid_docking_bay import config as cfgmod
     from asteroid_docking_bay import usb as usbmod
     ran = []
     monkeypatch.setattr(adbmod, "_run", lambda cmd, **k: (ran.append(cmd), (0, "", ""))[1])
     monkeypatch.setattr(adbmod, "adb_devices_checked", lambda: {})       # server blind
     monkeypatch.setattr(usbmod, "_sysfs_adb_serials", lambda: {"S1"})    # S1 on the bus
+    # No locks: the heal consults them now, and reading the host's real config
+    # would make this test depend on whether the rig has a dump running.
+    monkeypatch.setattr(cfgmod, "load_config", lambda: {})
     monkeypatch.setattr(adbmod, "_prev_adb_missing", set())
     monkeypatch.setattr(adbmod, "_last_adb_heal", 0.0)
     # first check: wedge seen but not yet persistent → no restart
@@ -223,6 +227,40 @@ def test_maybe_heal_wedged_adb_restarts_only_on_a_persistent_wedge(monkeypatch):
     # server now sees S1 → not a wedge
     monkeypatch.setattr(adbmod, "adb_devices_checked", lambda: {"S1": "device"})
     assert adbmod.maybe_heal_wedged_adb() is False
+
+
+def test_the_adb_heal_will_not_restart_the_server_under_a_held_watch(monkeypatch):
+    """A dump streams through the local adb server (`adb -s X exec-out dd`), so
+    kill-server severs it mid-copy. The wedge that triggers this heal can be
+    spurious — one watch enumerating oddly hides others from the server for two
+    checks — and killing a 4 GB read to fix a maybe-wedge is the wrong trade.
+    Defer while a watch is held; the TTL bounds the wait."""
+    import time as _t
+
+    import asteroid_docking_bay.adb as adbmod
+    from asteroid_docking_bay import config as cfgmod
+    from asteroid_docking_bay import usb as usbmod
+    now = _t.time()
+    ran = []
+    monkeypatch.setattr(adbmod, "_run", lambda cmd, **k: (ran.append(cmd), (0, "", ""))[1])
+    monkeypatch.setattr(adbmod, "adb_devices_checked", lambda: {})
+    monkeypatch.setattr(usbmod, "_sysfs_adb_serials", lambda: {"S1"})
+    monkeypatch.setattr(cfgmod, "load_config", lambda: {"op_locks": {
+        "S1": {"kind": "dump", "since": now, "until": now + 600}}})
+    monkeypatch.setattr(adbmod, "_prev_adb_missing", set())
+    monkeypatch.setattr(adbmod, "_last_adb_heal", 0.0)
+
+    adbmod.maybe_heal_wedged_adb()                      # arm persistence
+    assert adbmod.maybe_heal_wedged_adb() is False
+    assert not any("kill-server" in c for c in ran), \
+        "restarted the adb server under a running dump — the transfer dies"
+
+    # Once the lock is gone the heal works again: the guard defers, never disables.
+    monkeypatch.setattr(cfgmod, "load_config", lambda: {})
+    monkeypatch.setattr(adbmod, "_last_adb_heal", 0.0)
+    monkeypatch.setattr(adbmod, "_prev_adb_missing", {"S1"})
+    assert adbmod.maybe_heal_wedged_adb() is True
+    assert any("kill-server" in c for c in ran)
 
 
 def test_wait_serial_online_skips_recovery_cycle_when_another_watch_is_seated(monkeypatch):
