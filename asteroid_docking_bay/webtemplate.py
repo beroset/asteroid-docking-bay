@@ -2785,7 +2785,9 @@ function doFbReport(c){toast('reading bootloader…');fetch('/api/fbreport/'+_ap
 }).catch(()=>toast('fastboot report failed'));}
 function doBackup(c){toast('backing up…');fetch('/api/backup/'+_api(c),{method:'POST'}).then(r=>r.json()).then(d=>toast(d.ok?'backup saved':'backup incomplete — see log')).catch(()=>toast('backup failed'));}
 function doRestore(c){if(!confirm('Restore backed-up data onto this watch?\\nOverwrites its current settings + WiFi credentials with the last backup.'))return;toast('restoring…');fetch('/api/restore/'+_api(c),{method:'POST'}).then(r=>r.json()).then(d=>toast(d.ok?'restore done — reconnecting WiFi':(d.error||'restore incomplete — see log'))).catch(()=>toast('restore failed'));}
-function doDump(s){} function doRestoreDump(s){}
+// doDump is defined above (the real implementation). Restore-from-dump is
+// still a disabled, not-yet-implemented menu item, so it keeps its stub.
+function doRestoreDump(s){}
 // One floating window at a time, each persisting until a click lands OUTSIDE
 // it. Handled on mousedown in the CAPTURE phase, so it runs before any
 // trigger's onclick: the very click that opens a new window first closes

@@ -44,6 +44,19 @@ def test_every_click_handler_is_defined():
         "clicking these does nothing (the doHalt/power-off bug class)")
 
 
+def test_no_function_is_declared_twice():
+    """A second `function foo(){}` silently shadows the first — JS hoists the
+    LAST declaration, so a stray empty stub after the real one makes the whole
+    feature a no-op with no error anywhere. That is exactly how the Dump
+    mmcblk0 menu item died: an empty `function doDump(s){}` sat below the real
+    one. DEFINED_FUNCS is a set, so the handler-defined test cannot see this."""
+    names = re.findall(r"function\s+([A-Za-z_]\w*)\s*\(", JS)
+    dupes = sorted({n for n in names if names.count(n) > 1})
+    assert not dupes, (
+        f"function(s) declared more than once, the later one wins and shadows "
+        f"the real body: {dupes}")
+
+
 def test_every_literal_element_id_exists():
     wanted = set(re.findall(r"getElementById\('([A-Za-z][\w-]*)'\)", JS))
     static_ids = set(re.findall(r'id="([\w-]+)"', _WEB_TEMPLATE))
