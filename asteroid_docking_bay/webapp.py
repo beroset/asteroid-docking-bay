@@ -106,6 +106,28 @@ def merge_op_args(body: dict, url_args: dict, static: dict) -> dict:
     return {**(body or {}), **(url_args or {}), **(static or {})}
 
 
+def op_args_from_request(request, url_args: dict, static: dict) -> dict:
+    """The op arguments for one HTTP request: its JSON body, merged.
+
+    Split out of the route handler so this layer can be tested at all. It is
+    the layer that shipped the silent-defaults bug — the handler ignored bodies
+    entirely — and the only test around it exercised merge_op_args, a pure
+    function that stayed correct throughout. A test that cannot see the seam
+    cannot catch a bug in the seam.
+
+    A body that is absent, not JSON, or malformed yields {} rather than an
+    error: these routes take their identity (which watch, which action) from
+    the URL, so a broken body must not 500 a call whose target is unambiguous.
+    """
+    body = {}
+    try:
+        if request.json:
+            body = dict(request.json)
+    except Exception:
+        body = {}              # malformed JSON is not a reason to 500
+    return merge_op_args(body, url_args, static)
+
+
 def serve(args, cfg: dict):
     """Start the web UI. Requires the bottle package."""
     try:
@@ -188,13 +210,7 @@ def serve(args, cfg: dict):
             # Precedence is deliberate and runs body < url < static: a body must
             # never be able to redirect a call at another watch by overriding the
             # serial in the path, and the static args are the server's own.
-            body = {}
-            try:
-                if request.json:
-                    body = dict(request.json)
-            except Exception:
-                body = {}          # malformed JSON is not a reason to 500
-            result = _call(op, merge_op_args(body, url_args, static))
+            result = _call(op, op_args_from_request(request, url_args, static))
             if bust:
                 _bust_status_cache()
             return json.dumps(result)

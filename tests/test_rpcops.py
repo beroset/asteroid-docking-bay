@@ -1273,6 +1273,53 @@ def test_op_args_take_the_body_but_never_let_it_override_the_url():
     assert merge_op_args({}, {}, {}) == {}
 
 
+def test_the_request_layer_actually_reads_the_body():
+    """merge_op_args stayed correct throughout the silent-defaults bug — the
+    handler simply never called it with a body. Testing only the pure function
+    could not see that, so this drives the layer that reads the request.
+
+    A body that is absent, not JSON, or malformed must yield no args rather
+    than an error: these routes take their identity from the URL, so a broken
+    body must not fail a call whose target is unambiguous."""
+    from asteroid_docking_bay.webapp import op_args_from_request
+
+    class _Req:
+        def __init__(self, json_value=None, raises=False):
+            self._v, self._raises = json_value, raises
+
+        @property
+        def json(self):
+            if self._raises:
+                raise ValueError("malformed JSON body")
+            return self._v
+
+    args = op_args_from_request(_Req({"kind": "dump", "note": "run 1"}),
+                                {"serial": "REAL"}, {})
+    assert args["kind"] == "dump" and args["note"] == "run 1", \
+        "the request body never reached the op — the 2026-08-06 bug"
+    assert args["serial"] == "REAL"
+
+    # No body / no JSON content-type (bottle yields None) → defaults, no crash.
+    assert op_args_from_request(_Req(None), {"serial": "S"}, {}) == {"serial": "S"}
+    # Malformed JSON → same, rather than a 500 on an unambiguous URL.
+    assert op_args_from_request(_Req(raises=True), {"serial": "S"}, {}) == {"serial": "S"}
+    # A body still cannot redirect the call at another watch.
+    assert op_args_from_request(_Req({"serial": "ATTACKER"}),
+                                {"serial": "REAL"}, {})["serial"] == "REAL"
+
+
+def test_the_route_handler_is_wired_to_the_request_layer():
+    """The bug was a handler that never read bodies, so pin the call itself:
+    without this, deleting op_args_from_request from the handler leaves every
+    op silently receiving its defaults again and no test notices."""
+    import inspect
+
+    from asteroid_docking_bay import webapp
+    src = inspect.getsource(webapp.serve)
+    assert "op_args_from_request(request" in src, \
+        "the route handler no longer reads the request body"
+
+
 # ── taking a dump: the two properties the feature exists for ─────────────────
 
 def test_a_dump_holds_the_watch_before_it_starts_copying(monkeypatch):

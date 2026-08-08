@@ -62,6 +62,28 @@ _enum_stuck_since: dict[str, float] = {}
 _ENUM_STUCK_GRACE_SEC = 60  # normal boots enumerate well within this
 
 
+def _fb_draining(serial, power, adb_state, op_owns_slot: bool,
+                 last_conn_state) -> bool:
+    """Whether this port's watch is running flat in the bootloader, unseen.
+
+    Cutting VBUS does NOT stop a watch in fastboot — LK keeps running on
+    battery, invisible to the host, until the pack is flat. That is how
+    sturgeon reached 0%. With the port off there is nothing left to read, so
+    the only evidence is the state the watch vanished IN.
+
+    Every clause earns its place: no serial means no watch to warn about;
+    `power` means the port is live so it is not invisible; an adb_state means
+    it is still talking; and an op owning the slot cuts power deliberately (a
+    drain test), which must not read as an accident.
+
+    A standalone function because inlining it left the whole condition
+    untestable — the test that named this failure only checked a LastSeen
+    round-trip and would have passed with any clause inverted.
+    """
+    return bool(serial and not power and adb_state is None
+                and not op_owns_slot and last_conn_state == "fastboot")
+
+
 def _enum_stuck(slot: str, power, adb_state, present: bool, now: float) -> bool:
     """Whether a mapped, powered port has failed to enumerate a watch.
 
@@ -790,10 +812,9 @@ def _web_status_data(cfg: dict) -> list[dict]:
             op_owns_slot = any(
                 not tasks.get(slot, {}).get("done", True)
                 for tasks in (_charge_tasks, _drain_tasks, _workbench_tasks))
-            fb_draining = bool(
-                serial and not power and adb_state is None and not op_owns_slot
-                and (last_seen.get(serial) or {}).get("last_conn_state")
-                    == "fastboot")
+            fb_draining = _fb_draining(
+                serial, power, adb_state, op_owns_slot,
+                (last_seen.get(serial) or {}).get("last_conn_state"))
             # task_active, not a bare done-check: a remap whose worker died
             # would otherwise dim this row for the life of the service.
             flashing  = ((slot in _flash_tasks and not _flash_tasks[slot].get("done", True))

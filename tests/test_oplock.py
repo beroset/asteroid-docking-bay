@@ -366,6 +366,45 @@ def test_the_onboard_sweep_steps_around_a_held_watch_and_says_so(monkeypatch):
         f"the skip was silent — no reason given:\n{text}"
 
 
+def test_every_port_actuating_op_is_wired_to_the_guard(monkeypatch):
+    """The guard tests all call _refuse_if_busy directly, so deleting the CALL
+    from an op failed nothing — and that is not hypothetical: flash.start
+    shipped with no guard at all and the audit found it by reading, not by a
+    failing test.
+
+    This drives each port-actuating op through the dispatcher with a held watch
+    and demands a refusal, so an op that forgets the guard (or a new one that
+    never had it) fails here."""
+    from asteroid_docking_bay import rpcops
+    now = time.time()
+    cfg = {"op_locks": {"S1": {"kind": "dump", "note": "full-disk dump",
+                               "since": now, "until": now + 600}},
+           "hubs": [{"location": "1-2", "port_serials": {"1": "S1"}}]}
+    monkeypatch.setattr(rpcops, "load_config", lambda: cfg)
+    monkeypatch.setattr(rpcops, "find_serial_for_loc_port", lambda c, l, p: "S1")
+    monkeypatch.setattr(rpcops, "_op_owning", lambda l, p: None)
+    # Anything that would actually touch hardware if a guard were missing.
+    touched = []
+    for name in ("uhubctl_set_power", "uhubctl_cycle"):
+        monkeypatch.setattr(rpcops, name,
+                            lambda *a, **k: touched.append(a))
+    monkeypatch.setattr(rpcops, "_run", lambda *a, **k: touched.append(a) or (0, "", ""))
+
+    args = {"loc": "1-2", "port": 1, "on": True}
+    for op in ("port.set", "port.cycle", "port.poweroff", "port.reboot",
+               "port.bootloader", "port.recovery", "wear.set"):
+        res = rpcops.DISPATCH._data[op](dict(args))
+        assert res.get("ok") is False, f"{op} acted on a held watch: {res}"
+        assert "held" in str(res.get("error", "")), \
+            f"{op} refused for some other reason, not the lock: {res}"
+
+    # flash.start is a stream op and yields its refusal instead of returning it.
+    out = list(rpcops.DISPATCH._stream["flash.start"](dict(args)))
+    assert any("held" in line for line in out), f"flash.start: {out}"
+
+    assert not touched, f"a held watch was actuated anyway: {touched}"
+
+
 def test_ops_refuse_while_a_watch_is_held(monkeypatch):
     """The guard also faces the human: a person clicking Reboot mid-dump makes
     the same collision, just slower."""

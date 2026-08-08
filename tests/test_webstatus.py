@@ -187,10 +187,29 @@ def test_fb_draining_flags_a_watch_left_in_the_bootloader(monkeypatch, tmp_path)
     ls.record("S1", last_conn_state="fastboot")
     assert (ls.get("S1") or {}).get("last_conn_state") == "fastboot"
 
-    # A watch last seen booted must NOT raise the warning — only fastboot
-    # keeps running through a VBUS cut in the way this flag describes.
-    ls.record("S2", last_conn_state="device")
-    assert (ls.get("S2") or {}).get("last_conn_state") == "device"
+    # The warning itself, clause by clause. Asserting only the LastSeen
+    # round-trip (as this test used to) never evaluated the condition at all —
+    # any clause could have been inverted and it would still have passed.
+    def flag(**over):
+        args = dict(serial="S1", power=False, adb_state=None,
+                    op_owns_slot=False, last_conn_state="fastboot")
+        args.update(over)
+        return ws._fb_draining(**args)
+
+    assert flag() is True, "the sturgeon failure is not flagged at all"
+    # A watch last seen BOOTED does not keep running through a VBUS cut the way
+    # a bootloader does — only fastboot earns this warning.
+    assert flag(last_conn_state="device") is False
+    assert flag(last_conn_state=None) is False
+    # A powered port is not invisible; there is something to read.
+    assert flag(power=True) is False
+    # Still talking → not lost.
+    assert flag(adb_state="device") is False
+    # A drain test cuts power ON PURPOSE; calling that an accident would cry
+    # wolf on every run.
+    assert flag(op_owns_slot=True) is False
+    # No watch mapped, nothing to warn about.
+    assert flag(serial=None) is False
 
 
 def test_last_conn_state_is_not_erased_by_an_offline_poll(tmp_path):
