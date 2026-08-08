@@ -1595,7 +1595,12 @@ def _watch_dump(args):
         # and marked .partial now, but the host also shares this disk with the
         # fleet's backups, registry and logs, so filling it breaks more than the
         # dump. Refuse up front, while the number is still just a number.
-        free = shutil.disk_usage(stockrom.DUMP_ROOT.parent).free
+        #
+        # Create the directory FIRST and measure that: on a host that has never
+        # taken a dump, neither it nor its parent exists yet, and disk_usage on
+        # a missing path raises rather than reporting free space.
+        stockrom.DUMP_ROOT.mkdir(parents=True, exist_ok=True)
+        free = shutil.disk_usage(stockrom.DUMP_ROOT).free
         if expect and free < expect + _DUMP_HEADROOM_BYTES:
             return {"ok": False,
                     "error": (f"not enough space for this dump: it needs "
@@ -1603,7 +1608,6 @@ def _watch_dump(args):
                               f"{free / 1e9:.1f} GB is free")}
         cfg = load_config()
         codename = (cfg.get("serials") or {}).get(serial) or serial
-        stockrom.DUMP_ROOT.mkdir(parents=True, exist_ok=True)
         stamp = time.strftime("%Y%m%d-%H%M%S")
         dest = stockrom.DUMP_ROOT / f"{codename}-{serial}-{stamp}.img"
         manifest = stockrom.DUMP_ROOT / f"{codename}-{serial}-{stamp}.manifest.txt"
