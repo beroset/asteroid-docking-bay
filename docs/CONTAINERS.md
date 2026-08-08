@@ -1,10 +1,23 @@
-# 0.5 — container split (design for review)
+# 0.5 — container split (design, and what shipped)
 
-Status: **proposal**. Nothing below is implemented; this document is the
-first commit of 0.5 so the shape can be reviewed — and corrected — before
-any code exists. The architecture is Beroset's (two containers, JSON over
-TCP, shared secret); this elaborates it into a concrete contract and a
-commit-sized migration plan. Open questions for review are marked **[Q]**.
+Status: **implemented, experimental.** This began as a proposal written
+before any code existed, so the shape could be reviewed and corrected first;
+it shipped in 0.5 and the header said "nothing below is implemented" long
+after that stopped being true. What exists now: `serve-backend` in the CLI,
+two Containerfiles, podman quadlets and a network unit under `containers/`,
+and the run-it recipe in the README under
+[Running in a container](../README.md#running-in-a-container).
+
+What "experimental" means concretely: the entrypoints are kept in step with
+the CLI, but this path is not exercised by CI and is not part of the hardware
+testing everything touching a hub or a watch gets. The rootless-podman
+device/group directives in the quadlets are the least-proven part and should
+be expected to need per-host work.
+
+The architecture is Beroset's (two containers, JSON over TCP, shared secret);
+this document elaborates it into a concrete contract and a commit-sized
+migration plan. Open questions from the review stage are still marked **[Q]** —
+they are questions about the design, not a claim that the code is absent.
 
 ## Goal and threat model
 

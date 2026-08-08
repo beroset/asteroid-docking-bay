@@ -111,6 +111,9 @@ distros add it automatically; if yours doesn't (the installer will warn you):
 export PATH="$HOME/.local/bin:$PATH"   # add to ~/.bashrc or ~/.zshrc
 ```
 
+Prefer containers? See [Running in a container](#running-in-a-container) for
+the podman split (unprivileged frontend + host-touching backend).
+
 ### Rootless setup (recommended)
 
 By default uhubctl requires root. To run without sudo:
@@ -546,6 +549,38 @@ systemctl --user edit asteroid-docking-bay-web.service
 # ExecStart=%h/.local/bin/asteroid-docking-bay serve --port 9090
 ```
 
+## Running in a container
+
+Optional. The single-process `serve` above is the default and is what the
+bare-metal install runs; you only need this for a **network-exposed**
+deployment.
+
+There, the web UI can run as an unprivileged frontend container talking to a
+separate, host-touching backend over a token-gated socket — so a compromise of
+the exposed HTTP surface cannot reach the USB devices or the config. The design
+and threat model are in [docs/CONTAINERS.md](docs/CONTAINERS.md); the pieces
+live under `containers/` (Containerfiles + podman quadlets).
+
+```sh
+containers/build.sh                       # build both images
+python3 -c 'import secrets; print(secrets.token_urlsafe(32))' \
+  | podman secret create adb-token -      # shared token
+cp containers/adb-*.container containers/adb-*.network \
+  ~/.config/containers/systemd/           # install quadlets
+systemctl --user daemon-reload && systemctl --user start adb-frontend
+```
+
+The backend needs USB + sysfs access and the host's adb server; the exact
+rootless-podman device/group directives are noted in the quadlet and may need
+tuning per host.
+
+**Status: experimental.** The split landed in 0.5 and the entrypoints are kept
+in step with the CLI, but it is not exercised by CI and not part of the
+hardware testing the rest of the tool gets — everything that touches a hub or a
+watch is verified on real hardware, and this path has not been through that
+recently. Treat it as a starting point rather than a supported deployment, and
+expect the device/group directives to need work on your host.
+
 ## Hardware notes
 
 ### Watches that require a physical power button press
@@ -621,29 +656,6 @@ pytest
 
 Anything that touches a hub or a watch is verified on real hardware
 instead — see the release notes for what that means in practice.
-
-### Container split (experimental)
-
-For a network-exposed deployment the web UI can run as an unprivileged
-frontend container that talks to a separate, host-touching backend over a
-token-gated socket — so a compromise of the exposed HTTP surface cannot
-reach the USB devices or config. The design and threat model are in
-[docs/CONTAINERS.md](docs/CONTAINERS.md); the pieces live under
-`containers/` (Containerfiles + podman quadlets).
-
-```sh
-containers/build.sh                       # build both images
-python3 -c 'import secrets; print(secrets.token_urlsafe(32))' \
-  | podman secret create adb-token -      # shared token
-cp containers/adb-*.container containers/adb-*.network \
-  ~/.config/containers/systemd/           # install quadlets
-systemctl --user daemon-reload && systemctl --user start adb-frontend
-```
-
-The backend needs USB + sysfs access and the host's adb server; the exact
-rootless-podman device/group directives are noted in the quadlet and may
-need tuning per host. The single-process `serve` remains the default for
-bare-metal installs. This split is new in 0.5 and still being trialled.
 
 ## Uninstall
 
