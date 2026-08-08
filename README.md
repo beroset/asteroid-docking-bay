@@ -48,7 +48,7 @@ What it does:
 - Fleet flashing: fetch, checksum, and flash AsteroidOS nightlies to every
   docked watch at once.
 
-<img width="1501" height="631" alt="asteroid-docking-bay Web UI" src="https://github.com/user-attachments/assets/3bf9cc0e-ac0c-4aee-97b9-0624f2b92bb6" />
+<img width="1789" height="990" alt="image" src="https://github.com/user-attachments/assets/3f148578-8881-4844-9f4b-75d67811cbf0" />
 
 ## How it works
 
@@ -284,6 +284,8 @@ config — all streamed live into an inline log below the row.
 the port, its controls, the connection, the watch, its stats, battery, and
 actions. Almost everything lives *in the row*:
 
+<img width="931" height="321" alt="image" src="https://github.com/user-attachments/assets/66fdcb05-89b4-46c4-ac66-b53698c47148" />
+
 - **Port** — the socket/port label (`s1 p1`) with the **ON / OFF** power toggle
   in front of it. The toggle shows an animated *EXEC* state while a switch is in
   flight and settles into the confirmed state.
@@ -299,6 +301,11 @@ actions. Almost everything lives *in the row*:
 - **Watch** — the product photo and codename; a disconnected watch's name dims
   so the connected ones stand out. Click the **codename** for the **Control
   Center**, the **photo** for the composited live screen.
+
+
+<img width="529" height="614" alt="image" src="https://github.com/user-attachments/assets/dd152dda-97e8-481a-9a15-0481629b9aa1" />
+
+  
 - **Stats** — a row of dots: a **power** dot (green = powered, grey = shelved,
   orange = ambiguous) that also opens a short power menu, a **wearability** dot
   from the last drain test (click for drain-test / wear actions), a
@@ -360,6 +367,10 @@ watch (vibrate to find it in a full dock), force its **Screen** on, grab a
 **Screenshot**, and **Sync** its clock + timezone from the host. Session actions
 run in the watch's `ceres` user session, not as root.
 
+
+<img width="479" height="595" alt="image" src="https://github.com/user-attachments/assets/7874b6af-b62e-410c-8da7-90ecdf260ec3" />
+
+
 Two details have their own panels, reachable straight from the row:
 
 - **Battery Info** — the battery gauge, or any of the Stats battery dots. Charge,
@@ -367,6 +378,11 @@ Two details have their own panels, reachable straight from the row:
   temperature, cycle count, and USB-input voltage (confirms the port is actually
   delivering power, not just switched on), with the **battery-history chart** at
   its foot.
+
+
+<img width="419" height="537" alt="image" src="https://github.com/user-attachments/assets/cc910ac7-d6ad-471d-9233-68e01c08008f" />
+
+
 - **Network Center** — the ADB / SSH badge. WiFi, IP, traffic, Bluetooth, the
   connected companion phone, the watch's **USB IP**, and the **USB-mode switch**.
   It also carries **set up WiFi to \<SSID\>**, which lends this watch a network
@@ -379,6 +395,10 @@ Two details have their own panels, reachable straight from the row:
   verbatim copy would be ignored by the receiving watch. The source watch's
   DHCP lease is dropped with it. The button appears only when a backup
   actually holds an AP, and never for the network the watch is already on.
+
+
+<img width="502" height="412" alt="image" src="https://github.com/user-attachments/assets/c91393b0-48e3-447f-9e2a-750e131f5e76" />
+
 
 **Any wire — ADB or SSH.** Every one of these — the Control Center, the
 toggles, screenshots, time-sync, even a graceful power-off — works whether the
