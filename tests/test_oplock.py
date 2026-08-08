@@ -31,6 +31,53 @@ def test_an_expired_lock_stops_holding_without_anyone_sweeping_it():
     assert oplock.all_held(cfg) == {}, "the UI would show a hold that has lapsed"
 
 
+def test_a_lock_with_no_expiry_is_treated_as_expired(monkeypatch):
+    """A missing or unreadable `until` used to read as immortal, which fails in
+    the quietest possible direction: the watch is exempt from all housekeeping
+    forever and nothing says why. Every lock this module writes carries an
+    expiry, so a record without one is damaged, not eternal."""
+    now = time.time()
+    for bad in (None, 0, "", "soon", {}):
+        cfg = {"op_locks": {"S1": {"kind": "dump", "since": now, "until": bad}}}
+        assert oplock.held(cfg, "S1") is None, f"until={bad!r} held forever"
+    # A missing key entirely, not just a falsy value.
+    assert oplock.held({"op_locks": {"S1": {"kind": "dump"}}}, "S1") is None
+
+
+def test_a_caller_cannot_claim_a_watch_forever(monkeypatch):
+    """The expiry is the backstop that keeps a crashed holder from exempting a
+    watch from housekeeping for good, so an unbounded ttl from a script would
+    defeat the one property this lock cannot do without."""
+    from asteroid_docking_bay import rpcops
+    seen = {}
+    monkeypatch.setattr(oplock, "hold",
+                        lambda s, k, n, ttl: seen.update(ttl=ttl) or {"ok": True})
+
+    rpcops.DISPATCH._data["oplock.set"](
+        {"serial": "S1", "action": "hold", "ttl": 10 ** 12})
+    assert seen["ttl"] == oplock.MAX_TTL_SEC, \
+        f"an unbounded hold was accepted: {seen['ttl']}"
+
+    # Junk and non-positive values are refused rather than 500ing the route.
+    r = rpcops.DISPATCH._data["oplock.set"](
+        {"serial": "S1", "action": "hold", "ttl": "soon"})
+    assert r["ok"] is False and "number" in r["error"]
+    r = rpcops.DISPATCH._data["oplock.set"](
+        {"serial": "S1", "action": "hold", "ttl": -5})
+    assert r["ok"] is False
+
+
+def test_a_mistyped_dump_action_does_not_start_a_dump(monkeypatch):
+    """Every other multi-action op ends in an "unknown action" refusal. This one
+    treated anything that was not "status" as "start", so a typo silently began
+    a four-hour dump and took the watch's lock with it."""
+    from asteroid_docking_bay import rpcops
+    rpcops._dump_runs.clear()
+    r = rpcops.DISPATCH._data["watch.dump"]({"serial": "S1", "action": "stat"})
+    assert r["ok"] is False and "unknown action" in r["error"]
+    assert "S1" not in rpcops._dump_runs, "a typo started a dump"
+
+
 def test_all_held_reports_only_live_locks():
     now = time.time()
     cfg = {"op_locks": {

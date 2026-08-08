@@ -38,6 +38,11 @@ from .util import log
 # work takes, it is a backstop against a crashed holder. Callers that know
 # better pass their own.
 DEFAULT_TTL_SEC = 3 * 3600
+# The longest any caller may claim a watch for. The expiry is what stops a
+# crashed holder exempting a watch from housekeeping forever, so an unbounded
+# TTL would defeat the one property this lock cannot do without. 30 days clears
+# the longest real operation (a wanze run, 14 days) with room to spare.
+MAX_TTL_SEC = 30 * 24 * 3600
 
 _KEY = "op_locks"
 
@@ -54,8 +59,17 @@ def held(cfg: dict, serial: "str | None") -> "dict | None":
     lock = (cfg.get(_KEY) or {}).get(serial)
     if not lock:
         return None
-    until = lock.get("until") or 0
-    if until and time.time() > until:
+    # A missing or unreadable expiry counts as EXPIRED, not as immortal. The
+    # old `if until and ...` treated a lock with no `until` — a hand-edited or
+    # truncated entry — as one that could never lapse, which fails in the
+    # quietest possible direction: the watch is exempt from all housekeeping
+    # forever and nothing says why. Every lock this module writes carries an
+    # `until`, so demanding one costs nothing.
+    try:
+        until = float(lock.get("until") or 0)
+    except (TypeError, ValueError):
+        until = 0
+    if not until or time.time() > until:
         return None
     return lock
 

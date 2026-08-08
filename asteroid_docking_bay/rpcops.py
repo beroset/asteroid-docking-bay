@@ -1226,6 +1226,21 @@ def _watch_action(loc, port, adb_cmd, fb_cmd, fail_msg, boots_os=False,
                 "error": "this watch is only reachable over SSH, and this "
                          "action has no SSH equivalent — switch it to ADB "
                          "mode first (Network Center → USB mode)"}
+    # Name the adb state when there IS one. "not on adb" is false for a watch
+    # sitting in `unauthorized` or `recovery` — it is on adb, just not in a
+    # state that accepts this command — and sending an operator to look for a
+    # connection problem that does not exist costs more time than the failure
+    # itself. unauthorized in particular is fixed ON THE WATCH, by tapping the
+    # RSA prompt, which the old message gave no hint of.
+    state = _adb_state(adb_devices(), serial) if serial else None
+    if state == "unauthorized":
+        return {"ok": False,
+                "error": "this watch is on adb but UNAUTHORIZED — confirm the "
+                         "debugging prompt on the watch screen, then retry"}
+    if state:
+        return {"ok": False,
+                "error": f"this watch is on adb in '{state}' state, which does "
+                         f"not accept this command"}
     return {"ok": False,
             "error": "no way to reach this watch right now: not in fastboot, "
                      "not on adb, and no usable SSH address"}
@@ -1545,8 +1560,15 @@ def _watch_dump(args):
     would otherwise switch the watch's USB mode mid-copy — which is exactly how
     a 3.9 GB read produced a 0-byte file on 2026-08-03."""
     serial = args["serial"]
-    if args.get("action") == "status":
+    action = args.get("action") or "start"
+    if action == "status":
         return {"ok": True, "run": _dump_runs.get(serial)}
+    # Every other multi-action op ends in an "unknown action" refusal; this one
+    # treated ANYTHING that was not "status" as "start", so a typo — or a probe
+    # aimed at some other action — silently began a four-hour dump and took the
+    # watch's lock with it.
+    if action != "start":
+        return {"ok": False, "error": f"unknown action: {action}"}
     # Claim the slot ATOMICALLY. The check and the assignment used to be
     # separate statements on a threaded server, so two starts a moment apart
     # both passed — and the dest name is only second-granular, so a double click
@@ -1634,9 +1656,21 @@ def _oplock_set(argsd):
     script, not from a button."""
     serial, action = argsd["serial"], argsd.get("action")
     if action == "hold":
+        # A caller-supplied TTL is clamped rather than trusted. The expiry is
+        # the backstop that stops a crashed holder exempting a watch from
+        # housekeeping forever, so an unbounded ttl would defeat the one
+        # property this lock cannot do without. A non-numeric ttl falls back to
+        # the default instead of raising a 500 out of the route layer.
+        try:
+            ttl = float(argsd.get("ttl") or oplock.DEFAULT_TTL_SEC)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": f"ttl must be a number of seconds, "
+                                          f"got {argsd.get('ttl')!r}"}
+        if ttl <= 0:
+            return {"ok": False, "error": "ttl must be positive"}
+        ttl = min(ttl, oplock.MAX_TTL_SEC)
         return oplock.hold(serial, argsd.get("kind") or "operation",
-                           argsd.get("note") or "",
-                           float(argsd.get("ttl") or oplock.DEFAULT_TTL_SEC))
+                           argsd.get("note") or "", ttl)
     if action == "release":
         return oplock.release(serial)
     return {"ok": False, "error": f"unknown action: {action}"}
