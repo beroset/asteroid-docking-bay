@@ -117,7 +117,7 @@ Listed as options, not advice.
 4. **Make `energy_uj` readable** on the three nodes if anyone wants the cooling
    question actually answered.
 
-## The cross-domain risk worth raising
+## The cross-domain risk worth raising — REFUTED, see the resolution below
 
 **The w541 is not just a slow node — it is the machine the watch fleet runs on.**
 
@@ -136,6 +136,9 @@ mysterious intermittent fault months later, and it is cheap to avoid.
 Worth an explicit decision either way rather than remaining an accident of the
 cluster having been built on the machine that happened to be there.
 
+**This was answered and did not hold — see Resolution below. The w541's node
+role should be decided on thermal grounds, which stand on their own.**
+
 ## Incidental, already fixed in a-d-b
 
 * Nodes are routinely **over-subscribed** (`15/14`, `11/8`) — normal scheduler
@@ -153,3 +156,73 @@ a-d-b's Machine Room instrumentation. Every figure is from the running machines;
 where a conclusion is not supported it says so. Please push back on anything
 that does not match your reading — particularly the E15 conclusion, which
 contradicts the impression that prompted the investigation.*
+
+---
+
+# Resolution (2026-08-08)
+
+The sysadmin session replied in `ICECC_THERMAL_REPLY.md` and settled three of
+the four open points, two of them against what is written above. Recorded here
+so this document is not read on its own.
+
+## The USB risk is refuted, not merely unproven
+
+They measured what I had left as an open question. Kernel usb/xhci events during
+a six-hour saturated build: **40**, against 0 in the same window the previous
+day — until timestamps went on them, at which point all 40 land in the same
+second, `23:41:55`, which is the boot. The ordinary enumeration storm across 12
+hubs.
+
+**Filtering the boot out: zero USB or xHCI events across six hours of saturated
+build load, with a-d-b still active.**
+
+Not proof of safety — one window, adb-level errors not examined, and the fault
+mode is intermittent by nature. But the only evidence that looked incriminating
+was an artefact, and the concern as I raised it is not supported. Decide the
+w541's node role on the thermal numbers, which stand on their own.
+
+## The E15 conclusion should be stated more strongly than I stated it
+
+I flagged two confounds as reasons for doubt. Both push the other way:
+
+* **Zen3 vs Zen2** — the P14s is the *more* efficient silicon, so it should run
+  cooler at equal work. It was doing a quarter of the work and was still only
+  3 °C cooler.
+* **`loadavg` is not a work proxy**, and I used it as one. It counts
+  uninterruptible-sleep tasks, so I/O inflates it. The P14s was running its own
+  sstate-heavy build (I/O-bound) while the E15 was a pure compile slave. Its 3.30
+  therefore *overstates* its CPU work and the real ratio is worse than 4x.
+
+Their wording is right: "not supported" should read **"actively contradicted"**.
+That the second confound is a methodological error of mine is worth keeping —
+it is the same mistake as reading a single `speed` sample as node capability,
+which this document warns others about three sections earlier.
+
+## RAPL works fleet-wide
+
+I recorded watts as unmeasurable-without-root and left it there. They checked:
+AMD implements a RAPL-compatible MSR interface and the `intel_rapl` driver binds
+on both AMD nodes, so `/sys/class/powercap/intel-rapl` is present on all three.
+`energy_uj` is `-r--------` as found. One udev rule per node unblocks the
+matched-load measurement that would settle the cooling question properly;
+`~/enable-rapl-reading.sh` is staged for moWerk.
+
+For the record, since this document named the mitigation but not the reference:
+the root-only permission is **PLATYPUS, CVE-2020-8694**. Fine-grained power
+readings are a side channel that can leak AES and RSA key material across
+processes. On a single-user build box on a home LAN that is a defensible trade,
+but it is a real one.
+
+## A sharper decomposition than mine
+
+My options list treated "compile node" as a single thing. It is two, and only
+one is optional:
+
+* **client / submitter** — runs bitbake, preprocessing, linking. Not optional;
+  the tree is there.
+* **node** — accepts remote jobs from the other machines.
+  `ICECREAM_ALLOW_REMOTE="no"`, one line, instantly reversible.
+
+That makes the w541 decision far cheaper than I framed it, and it combines with
+the demand-limited finding: the w541's 8 throttled slots only matter when two
+builds run, which is exactly when it is busiest with its own work.
