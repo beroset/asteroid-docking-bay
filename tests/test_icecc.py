@@ -201,6 +201,32 @@ def test_summary_is_none_on_a_host_without_icecream(monkeypatch):
     assert icecc.summary() is None
 
 
+def test_a_failed_thread_spawn_does_not_wedge_the_cache(monkeypatch):
+    """Thread.start() raises under resource exhaustion. The refresh event is
+    set BEFORE the spawn and cleared by the worker — so a failed spawn used to
+    leave it set forever: every later poll saw a refresh 'in flight' and the
+    panel served the same data until a service restart, unmarked stale."""
+    monkeypatch.setattr(icecc, "configured",
+                        lambda *a, **k: {"scheduler": "1.2.3.4"})
+    icecc._cache.update(ts=0.0, data={"reachable": True})
+    attempts = []
+
+    class Boom:
+        def __init__(self, *a, **k):
+            pass
+
+        def start(self):
+            attempts.append(1)
+            raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(icecc.threading, "Thread", Boom)
+    # Must not raise into the status handler, and must keep serving the cache.
+    assert icecc.summary_cached() == {"reachable": True}
+    assert icecc.summary_cached() == {"reachable": True}
+    assert len(attempts) == 2, "the second poll never retried the refresh"
+    assert not icecc._refreshing.is_set()
+
+
 # ── node temperature: strictly optional ──────────────────────────────────────
 
 _HWMON = """/sys/class/hwmon/hwmon0/name:AC

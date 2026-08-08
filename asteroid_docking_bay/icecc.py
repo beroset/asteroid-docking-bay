@@ -299,9 +299,22 @@ def summary_cached() -> "dict | None":
         return None
     data = _cache["data"]
     if data is None or time.monotonic() - _cache["ts"] >= CACHE_TTL:
-        if not _refreshing.is_set():
-            _refreshing.set()
-            threading.Thread(target=_refresh_worker, daemon=True).start()
+        # Check-and-set under the lock: the web server is threaded, and two
+        # concurrent stale polls racing past a bare is_set() would each spawn
+        # a worker — double scheduler round-trips and double SSH sweeps.
+        with _lock:
+            spawn = not _refreshing.is_set()
+            if spawn:
+                _refreshing.set()
+        if spawn:
+            try:
+                threading.Thread(target=_refresh_worker, daemon=True).start()
+            except RuntimeError:
+                # Thread exhaustion. The worker that would have cleared the
+                # event never ran, so clear it here or no refresh would ever
+                # be attempted again. The caller still gets the cached data;
+                # the next poll simply tries again.
+                _refreshing.clear()
     return data
 
 
