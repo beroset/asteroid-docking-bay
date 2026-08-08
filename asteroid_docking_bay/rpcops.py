@@ -1779,6 +1779,17 @@ def _flash_start(args):
     if slot in _flash_tasks and not _flash_tasks[slot].get("done", True):
         yield "flash already in progress"
         return
+    # A flash reboots the watch to the bootloader and rewrites it — the most
+    # destructive thing this rig does to a watch that something else may be
+    # mid-way through reading. It checked only its OWN task table before, so it
+    # would start over a running dump, a wanze probe, or a live drain. The
+    # asymmetry was the tell: Operation.start refuses while a flash runs, and
+    # flash refused for nothing. _refuse_if_busy covers both the operation lock
+    # and an op owning the port.
+    busy = _refuse_if_busy(loc, port)
+    if busy:
+        yield f"ERROR: {busy['error']}"
+        return
     channel = args.get("channel")
     if channel and not re.fullmatch(r"[\w.-]+", channel):
         yield f"ERROR: invalid channel {channel!r}"

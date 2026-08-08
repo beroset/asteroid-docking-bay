@@ -235,6 +235,46 @@ def test_charge_drain_and_workbench_refuse_a_held_watch(monkeypatch):
     ops.ChargeOp.tasks.pop("1-2:1", None)
 
 
+def test_flash_refuses_a_held_watch_and_a_busy_port(monkeypatch):
+    """A flash reboots the watch to the bootloader and rewrites it — the most
+    destructive thing done to a watch something else may be mid-read of. It
+    checked only its own task table, so it would start over a live dump. The
+    asymmetry was the tell: Operation.start refuses while a flash runs, and
+    flash refused for nothing."""
+    from asteroid_docking_bay import rpcops
+    now = time.time()
+    cfg = {"op_locks": {"S1": {"kind": "dump", "note": "full-disk dump",
+                               "since": now, "until": now + 600}}}
+    monkeypatch.setattr(rpcops, "load_config", lambda: cfg)
+    monkeypatch.setattr(rpcops, "find_serial_for_loc_port", lambda c, l, p: "S1")
+    monkeypatch.setattr(rpcops, "_op_owning", lambda l, p: None)
+    monkeypatch.setattr(rpcops, "find_codename_for_loc_port", lambda c, l, p: "nemo")
+    reached = []
+    monkeypatch.setattr(rpcops, "_flash_stream",
+                        lambda *a, **k: reached.append(1) or iter(()))
+
+    out = list(rpcops.DISPATCH._stream["flash.start"](
+        {"loc": "1-2", "port": 1, "channel": None}))
+    assert any("held" in line for line in out), \
+        f"a flash started on a watch held for a dump: {out}"
+    assert not reached, "the flash stream ran for a held watch"
+
+    # An op owning the port is refused by the same guard (no lock this time, so
+    # the refusal can only come from the op-ownership half)...
+    monkeypatch.setattr(rpcops, "load_config", lambda: {})
+    monkeypatch.setattr(rpcops, "_op_owning", lambda l, p: "drain")
+    out = list(rpcops.DISPATCH._stream["flash.start"](
+        {"loc": "1-2", "port": 1, "channel": None}))
+    assert any("drain" in line for line in out), f"flashed a draining port: {out}"
+
+    # ...and a free, unheld port still flashes (the guard must not disable it).
+    monkeypatch.setattr(rpcops, "_op_owning", lambda l, p: None)
+    monkeypatch.setattr(rpcops, "load_config", lambda: {})
+    list(rpcops.DISPATCH._stream["flash.start"](
+        {"loc": "1-2", "port": 1, "channel": None}))
+    assert reached, "the guard blocked a flash on a free port"
+
+
 def test_ops_refuse_while_a_watch_is_held(monkeypatch):
     """The guard also faces the human: a person clicking Reboot mid-dump makes
     the same collision, just slower."""
