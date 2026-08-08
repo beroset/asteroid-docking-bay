@@ -531,7 +531,26 @@ let firstStatus=true;
 function mkhide(slot,excluded){
   return `<a href="#" class="hidebtn" onclick="doHidePort('${slot}');return false" title="${excluded?'un-hide this row':'hide this row'}">${excluded?'&#x2295;':'&#x2296;'}</a>`;
 }
-function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;')}
+// HTML-safe text OR attribute value. The quotes matter: without them a value
+// carrying a " ends the attribute it sits in and the rest is parsed as markup.
+// Values here are not all ours — a watch supplies its own USB serial, the icecc
+// scheduler supplies node hostnames, and a Bluetooth device supplies its
+// advertised name over the air.
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
+  .replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
+// Safe interpolation into a SINGLE-QUOTED JS STRING that itself lives inside an
+// HTML attribute — an inline click handler's argument. esc() is NOT enough
+// there, and the reason is easy to miss: two parsers run in order. The HTML
+// parser decodes
+// entities FIRST, so a ' escaped as &#39; is handed to the JS parser as a plain
+// quote and closes the string anyway. Escape for JS (backslash) first, then for
+// HTML. Written with fromCharCode because this template is a non-raw Python
+// string: literal backslashes in it get eaten before the browser ever sees them.
+const _BS=String.fromCharCode(92);
+function jsq(s){
+  return String(s).split(_BS).join(_BS+_BS).split("'").join(_BS+"'")
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+}
 function mkpwr(v){return v===true?'<span class="dot don"></span><span class="on">ON</span>':v===false?'<span class="dot doff"></span><span class="off">OFF</span>':'<span class="dim">---</span>'}
 function mksmart(p,slot,dis){
   // Smart = can the port switch VBUS. A known verdict is a pill (green yes /
@@ -629,7 +648,7 @@ function batPill(p,cls,inner,title){
   // serial (never seen) is a plain non-clickable pill.
   const t=title?` title="${esc(title)}"`:'';
   if(!p.serial)return `<span class="cbadge bat ${cls||''}"${t}>${inner}</span>`;
-  return `<button class="cbadge bat ${cls||''}" onclick="openBI('${esc(p.serial)}','${esc(p.codename||p.serial)}',event)"${t}>${inner}</button>`;
+  return `<button class="cbadge bat ${cls||''}" onclick="openBI('${jsq(p.serial)}','${jsq(p.codename||p.serial)}',event)"${t}>${inner}</button>`;
 }
 function fmtAge(ts){
   // Compact "how long ago" for a last-live timestamp (seconds since epoch).
@@ -654,9 +673,9 @@ function mkbatCell(p,lo,hi){
   const age=fmtAge(p.last_live_ts);
   const tip=connected?'battery — click for details'
     :('watch off the bus — last reading'+(age?' '+age+' ago':''));
-  const clk=p.serial?` onclick="openBI('${esc(p.serial)}','${esc(p.codename||p.serial)}',event)"`:'';
+  const clk=p.serial?` onclick="openBI('${jsq(p.serial)}','${jsq(p.codename||p.serial)}',event)"`:'';
   return fillPill('bat '+band, Math.max(0,Math.min(100,pct)), pct+'%',
-    {title:tip, click:p.serial?`openBI('${esc(p.serial)}','${esc(p.codename||p.serial)}',event)`:''});
+    {title:tip, click:p.serial?`openBI('${jsq(p.serial)}','${jsq(p.codename||p.serial)}',event)`:''});
 }
 function mkthumb(p){
   // Product photo thumbnail; removes itself if the watch has no image (404).
@@ -808,7 +827,7 @@ function mkadb(adb,fbprod,os,serial,sshIp,name){
     const brand=WEAR_SHORT[os]||'';
     const ttl=`ADB mode${os==='asteroidos'?' — AsteroidOS':(known?' — '+esc(WEAR_LONG[os]||os):'')}`;
     if(!known&&serial)
-      return `<button class="cbadge adb" onclick="openNC('${esc(serial)}','${nm}',event,'${esc(sshIp||'')}','device')" title="${ttl} — click for network details">${logo}ADB${ser}</button>`;
+      return `<button class="cbadge adb" onclick="openNC('${jsq(serial)}','${nm}',event,'${jsq(sshIp||'')}','device')" title="${ttl} — click for network details">${logo}ADB${ser}</button>`;
     return `<span class="cbadge adb" title="${ttl}">${logo}${brand?brand+' ':''}ADB${ser}</span>`;
   }
   if(adb==='ssh'){
@@ -819,8 +838,8 @@ function mkadb(adb,fbprod,os,serial,sshIp,name){
     // is rendered as what it is — an error — and the guess stays in the
     // tooltip where it is labelled as a guess.
     if(sshIp)
-      return `<button class="cbadge ssh" onclick="openNC('${esc(serial||'')}','${nm}',event,'${esc(sshIp)}','ssh')" title="SSH/developer USB mode at ${esc(sshIp)} (its own address) — click for network details">${AOSLOGO}SSH${` <span class="dim">${esc(sshIp)}</span>`}</button>`;
-    return `<button class="cbadge ssh noaddr" onclick="openNC('${esc(serial||'')}','${nm}',event,'','ssh')" title="Enumerated in SSH/developer mode but a-d-b has NO usable address for it, so no command can reach it. It was never given an address of its own, so it should be on the shared default ${USB_SSH_IP} — but that is unverified, and it has not answered there. Typically the host has not completed DHCP on this link (check that the interface got an IPv4 address), or another watch is shadowing the shared address.">${AOSLOGO}SSH <b>no address</b></button>`;
+      return `<button class="cbadge ssh" onclick="openNC('${jsq(serial||'')}','${nm}',event,'${jsq(sshIp)}','ssh')" title="SSH/developer USB mode at ${esc(sshIp)} (its own address) — click for network details">${AOSLOGO}SSH${` <span class="dim">${esc(sshIp)}</span>`}</button>`;
+    return `<button class="cbadge ssh noaddr" onclick="openNC('${jsq(serial||'')}','${nm}',event,'','ssh')" title="Enumerated in SSH/developer mode but a-d-b has NO usable address for it, so no command can reach it. It was never given an address of its own, so it should be on the shared default ${USB_SSH_IP} — but that is unverified, and it has not answered there. Typically the host has not completed DHCP on this link (check that the interface got an IPv4 address), or another watch is shadowing the shared address.">${AOSLOGO}SSH <b>no address</b></button>`;
   }
   if(adb==='fastboot'){const l=fbprod?`fastboot: ${esc(fbprod)}`:'fastboot';return `<span class="cbadge fb" title="watch is in the bootloader (fastboot) — flash/backup only, no ADB or watch functions">${l}</span>`;}
   if(adb)return `<span class="dim">${esc(adb)}</span>`;
@@ -1033,10 +1052,10 @@ function renderOrbit(hub,rows,lo,hi){
       `<td class="smtc"></td>`+
       `<td class="connc">${orbitBadge(p)}</td>`+
       `<td class="thumb">${mkthumb(p)}</td>`+
-      `<td><b class="cn${p.reachable?'':' offname'}" onclick="openCC('${p.serial}','${p.codename}',event)" title="open Control Center over WiFi (stale if offline)">${esc(p.codename)}</b> <span class="dim orbit-ip">${esc(p.ip||'')}</span></td>`+
+      `<td><b class="cn${p.reachable?'':' offname'}" onclick="openCC('${jsq(p.serial)}','${jsq(p.codename)}',event)" title="open Control Center over WiFi (stale if offline)">${esc(p.codename)}</b> <span class="dim orbit-ip">${esc(p.ip||'')}</span></td>`+
       `<td class="stats"></td>`+
       `<td class="batc" id="bat-orbit-${esc(p.serial)}">${mkbatCell(p,lo,hi)}</td>`+
-      `<td class="actc"><button class="btn" onclick="deorbit('${p.serial}','${p.codename}')" title="remove from Orbit — the watch itself is untouched">de-orbit</button></td>`+
+      `<td class="actc"><button class="btn" onclick="deorbit('${jsq(p.serial)}','${jsq(p.codename)}')" title="remove from Orbit — the watch itself is untouched">de-orbit</button></td>`+
       `</tr>`
     );
   });
@@ -1081,12 +1100,12 @@ function render(data){
   hubs.forEach(hub=>{
     if(hub.hidden&&!showHidden)return;
     if(hub.location==='orbit'){renderOrbit(hub,rows,lo,hi);return;}
-    const hubHideBtn=`<a href="#" class="hidebtn" onclick="doHideHub('${esc(hub.location)}');return false" title="${hub.hidden?'un-hide this hub':'hide/show this hub'}">${hub.hidden?'&#x2295;':'&#x2296;'}</a>`;
+    const hubHideBtn=`<a href="#" class="hidebtn" onclick="doHideHub('${jsq(hub.location)}');return false" title="${hub.hidden?'un-hide this hub':'hide/show this hub'}">${hub.hidden?'&#x2295;':'&#x2296;'}</a>`;
     // Lead with the physical-box name (A16 #1, the dock, …) so a row's box is
     // obvious; the raw chip address follows, dimmed. The pencil renames the box.
     const hubHl=hub.name?esc(hub.name):esc(hub.location);
     const hubAddr=hub.name?`<span class="dim">${esc(hub.location)}</span>`:'';
-    const hubRenameBtn=`<a href="#" class="hidebtn" onclick="doRenameHub('${esc(hub.name_prefix||hub.location)}','${esc(hub.name||'')}');return false" title="rename this hub">&#x270e;</a>`;
+    const hubRenameBtn=`<a href="#" class="hidebtn" onclick="doRenameHub('${jsq(hub.name_prefix||hub.location)}','${jsq(hub.name||'')}');return false" title="rename this hub">&#x270e;</a>`;
     rows.push(`<tr class="hub-hdr${hub.hidden?' hiddenrow':''}"><td colspan="8"><span class="hl">${hubHl}</span>${hubAddr}<span class="dim">${esc(hub.description)}</span> ${hubRenameBtn} ${hubHideBtn}</td></tr>`);
     const visPorts=hub.ports.filter(p=>showHidden||!p.excluded);
     visPorts.forEach((p,i)=>{
@@ -1214,12 +1233,12 @@ function render(data){
           `<td class="connc"${p.serial?` id="conn-${esc(p.serial)}"`:''}>${adb}</td>` +
           `<td class="thumb">${mkthumb(p)}</td>` +
           `<td>`+(p.serial
-            ?`<b class="cn${p.adb?'':' offname'}" onclick="openCC('${p.serial}','${p.codename}',event)" title="open Control Center (stale if offline)">${esc(p.codename)}</b>`
-            :`<b class="${p.adb?'':'offname'}">${esc(p.codename)}</b>`)+mklife(p)+(p.screen_forced?`<span class="scrn" onclick="releaseScreen('${p.serial}')" title="screen forced ON (draining) — click to release">screen</span>`:'')+`</td>` +
+            ?`<b class="cn${p.adb?'':' offname'}" onclick="openCC('${jsq(p.serial)}','${jsq(p.codename)}',event)" title="open Control Center (stale if offline)">${esc(p.codename)}</b>`
+            :`<b class="${p.adb?'':'offname'}">${esc(p.codename)}</b>`)+mklife(p)+(p.screen_forced?`<span class="scrn" onclick="releaseScreen('${jsq(p.serial)}')" title="screen forced ON (draining) — click to release">screen</span>`:'')+`</td>` +
           `<td class="stats">${mkstrip(p,wearH)}</td>` +
           `<td class="batc" id="bat-${slot}">${bat}</td>` +
           `<td class="actc" id="act-${slot}">` +
-          `<button class="btn ex${isRef?' pulsing':''}"${p.excluded?' disabled':''} onclick="menuExecute(event,'${slot}',${isFb},${charging},${draining},${p.power===true},${noSw},'${p.serial||''}',${wb},'${p.adb||''}','${p.ssh_ip||''}',${p.wear?1:0},${needPwr})" title="refresh · power/charge/drain · flash/backup · workbench · wear">menu</button>` +
+          `<button class="btn ex${isRef?' pulsing':''}"${p.excluded?' disabled':''} onclick="menuExecute(event,'${slot}',${isFb},${charging},${draining},${p.power===true},${noSw},'${jsq(p.serial||'')}',${wb},'${jsq(p.adb||'')}','${jsq(p.ssh_ip||'')}',${p.wear?1:0},${needPwr})" title="refresh · power/charge/drain · flash/backup · workbench · wear">menu</button>` +
           `</td></tr>` +
           `<tr class="lr" id="lr-${slot}"><td colspan="8"><div class="log${logActive?' show':''}" id="log-${slot}"></div></td></tr>`
         );
@@ -1484,7 +1503,7 @@ function ctlChrome(d,body){
     (ctlTab==='vit'?`<div class="cc-tgls">`+
       `<button class="cc-tgl" onclick="ccBuzz()" title="vibrate to locate in the dock">Buzz</button>`+
       `<button class="cc-tgl${d&&d.screen_forced?' scrnon':''}${ctlPending.has('sys:screen')?' cmd-pending':''}" onclick="ccScreen(${d&&d.screen_forced?0:1})" title="${d&&d.screen_forced?'demo mode is ON — the screen is forced on and draining. Click to release.':'force the screen on (mce demo mode — stays on and drains until released!)'}">Screen: ${d&&d.screen_forced?'ON':'OFF'}</button>`+
-      `<button class="cc-tgl" onclick="doScreenshot('${(d&&d.serial)||ctlSerial}')" title="screenshot in a new tab">Shot</button></div>`:'');
+      `<button class="cc-tgl" onclick="doScreenshot('${jsq((d&&d.serial)||ctlSerial)}')" title="screenshot in a new tab">Shot</button></div>`:'');
 }
 function renderControl(d){
   const cc=document.getElementById('cc');
@@ -1841,7 +1860,7 @@ function bodyWeather(){
   return `<div class="cc-sec"><div class="cc-sech">Weather</div>`+
     `<div class="wx-row">${icon}<div class="wx-t"><div class="wx-temp">${d0.min_c}\\u00b0 / ${d0.max_c}\\u00b0</div>`+
       `<div class="wx-city">${esc(loc.city)} <span class="dim">will sync</span></div></div>`+
-      `<button class="cc-act mini" onclick="wxSync('${ctlSerial}')" title="write this forecast to the watch">Sync to watch</button></div>`+
+      `<button class="cc-act mini" onclick="wxSync('${jsq(ctlSerial)}')" title="write this forecast to the watch">Sync to watch</button></div>`+
     `${_wxOnWatchLine()}${setter}</div>`;
 }
 
@@ -1883,8 +1902,8 @@ function bodyNet(d){
     _kv('Serial',d.serial));
   const tgl=(t,l,on)=>`<button class="cc-tgl${on?' on':''}${ctlPending.has('net:'+t)?' cmd-pending':''}" onclick="ncToggle('${t}',${on?0:1})">${l}: ${on?'ON':'OFF'}</button>`;
   const modeToggle=isSsh
-    ? `<button class="cc-tgl" onclick="switchAdb('${esc(d.serial||ctlSerial)}')" title="switch this watch's USB gadget back to ADB">USB &#8594; ADB</button>`
-    : `<button class="cc-tgl" onclick="switchSsh('${esc(d.serial||ctlSerial)}')" title="switch this watch's USB gadget to SSH/developer mode">USB &#8594; SSH</button>`;
+    ? `<button class="cc-tgl" onclick="switchAdb('${jsq(d.serial||ctlSerial)}')" title="switch this watch's USB gadget back to ADB">USB &#8594; ADB</button>`
+    : `<button class="cc-tgl" onclick="switchSsh('${jsq(d.serial||ctlSerial)}')" title="switch this watch's USB gadget to SSH/developer mode">USB &#8594; SSH</button>`;
   // Lend this watch a network another watch already joined. Offered only when
   // the rig actually holds a credential, and not for the SSID it is already
   // on — a button that would be a no-op should not be there at all.
@@ -2154,7 +2173,7 @@ function langRows(){
   const st=ctlSettings[ctlSerial], L=(st&&st.locale)||{};
   if(!L.available)return '<span class="dim">no locale data</span>';
   if(!L.available.length)return '<div class="cc-grid"><div class="cc-k">System locale</div><div class="cc-v">'+esc(L.current||'—')+'</div></div>';
-  const opts=L.available.map(l=>`<button class="cc-act mini${L.current===l?' on':''}${ctlPending.has('loc:'+l)?' cmd-pending':''}" onclick="localeSet('${esc(l)}')">${esc(l)}</button>`).join(' ');
+  const opts=L.available.map(l=>`<button class="cc-act mini${L.current===l?' on':''}${ctlPending.has('loc:'+l)?' cmd-pending':''}" onclick="localeSet('${jsq(l)}')">${esc(l)}</button>`).join(' ');
   return '<div class="cc-grid"><div class="cc-k">System locale</div><div class="cc-v">'+esc(L.current||'—')+'</div>'+
          '<div class="cc-k">Available</div><div class="cc-v" style="flex-wrap:wrap;justify-content:flex-end">'+opts+'</div></div>';
 }
@@ -2170,8 +2189,8 @@ function usbModeRows(d){
   // expect the USB mode here. Same switch, same handlers.
   const mode=ctlMode||(d&&d.transport)||'adb', isSsh=mode==='ssh';
   const btn=isSsh
-    ? `<button class="cc-tgl" onclick="switchAdb('${esc((d&&d.serial)||ctlSerial)}')" title="switch this watch's USB gadget back to ADB">USB &#8594; ADB</button>`
-    : `<button class="cc-tgl" onclick="switchSsh('${esc((d&&d.serial)||ctlSerial)}')" title="switch this watch's USB gadget to SSH/developer mode">USB &#8594; SSH</button>`;
+    ? `<button class="cc-tgl" onclick="switchAdb('${jsq((d&&d.serial)||ctlSerial)}')" title="switch this watch's USB gadget back to ADB">USB &#8594; ADB</button>`
+    : `<button class="cc-tgl" onclick="switchSsh('${jsq((d&&d.serial)||ctlSerial)}')" title="switch this watch's USB gadget to SSH/developer mode">USB &#8594; SSH</button>`;
   return '<div class="cc-grid"><div class="cc-k">Mode</div><div class="cc-v">'+(isSsh?'SSH (developer)':'ADB')+'</div>'+
          '<div class="cc-k">Switch</div><div class="cc-v">'+btn+'</div></div>';
 }
@@ -2587,7 +2606,7 @@ function renderRegistry(d){
     const nlog=(r.log||[]).length;
     const open=!!_regOpen[r.serial];
     const chevron=nlog?`<span class="reg-chev">${open?'&#9660;':'&#9654;'}</span>`:'';
-    rows+=`<tr class="reg-row${nlog?' has-log':''}"${nlog?` onclick="toggleRegLog('${esc(r.serial)}')"`:''}>`+
+    rows+=`<tr class="reg-row${nlog?' has-log':''}"${nlog?` onclick="toggleRegLog('${jsq(r.serial)}')"`:''}>`+
       `<td>${chevron}<b class="cn">${typeof cn==='string'&&cn[0]!=='<'?esc(cn):cn}</b></td>`+
       `<td class="dim mono">${esc(r.serial)}</td>`+
       `<td><span class="cbadge ${src==='orbit'?'wifi':(src==='ssh'?'ssh':'adb')}">${esc(src)}</span> <span class="dim">${seen}</span></td>`+
@@ -2631,7 +2650,7 @@ function renderBt(){
     const nm=d.in_fleet?`<b class="cn">${esc(d.codename||d.name)}</b>`:`<span class="dim">${esc(d.name||d.mac)}</span>`;
     const badge=d.in_fleet?' <span class="cbadge wifi">fleet</span>':'';
     const act=d.paired?'<span class="cbadge adb">paired</span>'
-      :`<button class="btn" onclick="btPair('${esc(d.mac)}','${esc(d.codename||d.name||d.mac)}')">Pair</button>`;
+      :`<button class="btn" onclick="btPair('${jsq(d.mac)}','${jsq(d.codename||d.name||d.mac)}')">Pair</button>`;
     return `<tr class="reg-row"><td>${nm}${badge}</td><td class="dim mono">${esc(d.mac)}</td><td class="dim">${d.rssi!=null?d.rssi+' dBm':''}</td><td>${act}</td></tr>`;
   }).join('');
   const fleet=ds.filter(d=>d.in_fleet).length;

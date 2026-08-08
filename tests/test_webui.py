@@ -244,6 +244,63 @@ global.document.createElement=()=>_node();
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_hostile_values_cannot_break_out_of_markup_or_a_click_handler(tmp_path):
+    """Not every value rendered here is ours. A watch supplies its own USB
+    serial, the icecc scheduler supplies node hostnames, and a Bluetooth device
+    supplies its advertised name OVER THE AIR — any radio in range can choose
+    it. Those land in attributes and in inline click-handler arguments.
+
+    esc() covers markup. It is NOT enough inside a handler argument, and the
+    reason is easy to miss: the HTML parser decodes entities BEFORE the JS
+    parser runs, so a quote written as &#39; arrives at JS as a plain quote and
+    closes the string anyway. jsq() escapes for JS first, then for HTML."""
+    import json
+    payloads = [
+        "x');alert(1);//",              # close the JS string, run code
+        'y" onmouseover="alert(2)',     # close the attribute, add a handler
+        "z</b><img src=x onerror=alert(3)>",   # close the element
+        "back" + chr(92) + "slash",     # a backslash must not escape the quote
+    ]
+    h = tmp_path / "esc.js"
+    h.write_text(
+        _DOM_STUBS + JS +
+        f"\nconst payloads={json.dumps(payloads)};"
+        "\nconst out=payloads.map(p=>({esc:esc(p), jsq:jsq(p)}));"
+        "\nconsole.log(JSON.stringify(out));"
+        "\nprocess.exit(0);\n")
+    r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
+    assert r.returncode == 0, f"harness failed:\n{r.stderr[:600]}"
+    got = json.loads(r.stdout.strip().splitlines()[-1])
+
+    for payload, res in zip(payloads, got):
+        # esc(): nothing that can end an attribute or open a tag survives.
+        for ch in ('<', '"', "'"):
+            assert ch not in res["esc"], (
+                f"esc() left {ch!r} in {payload!r} → {res['esc']!r}; it can "
+                "break out of the attribute it is rendered into")
+        # jsq(): the value must survive as ONE JS string argument. Simulate the
+        # browser: HTML-decode the attribute, then check the string still closes
+        # exactly where we put its quote.
+        # &#39; MUST be decoded here. Leaving it out is what makes this test
+        # pass against the very bug it exists to catch: esc() turns ' into
+        # &#39;, the browser turns it straight back into ', and the JS string
+        # ends there. A simulation that skips this entity proves nothing.
+        decoded = (res["jsq"].replace("&quot;", '"').replace("&lt;", "<")
+                   .replace("&#39;", "'").replace("&amp;", "&"))
+        depth, i = 0, 0
+        while i < len(decoded):                 # walk the JS string literal
+            c = decoded[i]
+            if c == chr(92):
+                i += 2                          # escaped char, skip both
+                continue
+            assert c != "'", (
+                f"jsq() let {payload!r} close its JS string early → "
+                f"{res['jsq']!r}; the rest would be executed as code")
+            i += 1
+        assert depth == 0
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
 def test_reconcile_keeps_both_the_watch_row_and_its_log_row(tmp_path):
     """Each watch entry is two <tr>s in one html string: the visible row and its
     hidden log row carrying id="log-<slot>". reconcileRows kept only
