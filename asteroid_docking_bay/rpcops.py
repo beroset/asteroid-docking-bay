@@ -2040,6 +2040,34 @@ def _sweep_leaf_ports(cfg: dict) -> "list[tuple[str, int]]":
     return out
 
 
+def _sweep_held_ports(cfg: dict, ports: "list[tuple[str, int]]") -> dict:
+    """Of these leaf ports, the ones whose watch is under an operation lock:
+    {(loc, port): (serial, lock)}.
+
+    The sweep is the one actuator the operator explicitly asks to power
+    everything down, so it does not REFUSE on a lock the way the other ops do —
+    it steps around it. A watch part-way through a 4 GB dump or a 14-day wanze
+    run is exactly the one that must not be cut, and the person clicking sweep
+    has no way to know a background run is live. Skipping keeps the sweep
+    useful (every other socket is still swept) while making the exception
+    visible, which a silent skip would not.
+    """
+    held = {}
+    for loc, port in ports:
+        serial = find_serial_for_loc_port(cfg, loc, port)
+        lock = oplock.held(cfg, serial)
+        if lock:
+            held[(loc, port)] = (serial, lock)
+    return held
+
+
+def _describe_held_ports(held: dict) -> str:
+    """One line naming each skipped port and what holds it."""
+    return "; ".join(
+        f"{loc}:{port} ({serial or '?'}) — {oplock.describe(lock)}"
+        for (loc, port), (serial, lock) in sorted(held.items()))
+
+
 # Set by onboard.sweep_skip while a sweep runs; the active boot-wait aborts on
 # its next tick and the port is treated as a no-show (cut + logged). An Event,
 # not a flag: the wait loop and the skip op run on different threads.
@@ -2267,14 +2295,22 @@ def _onboard_sweep_prepare(args):
     before the sweep (on an unpowered port a docked watch stays dark — no flood)."""
     with _config_lock:
         cfg = load_config()
+    ports = _sweep_leaf_ports(cfg)
+    held = _sweep_held_ports(cfg, ports)
     n = 0
-    for loc, port in _sweep_leaf_ports(cfg):
+    for loc, port in ports:
+        if (loc, port) in held:
+            continue          # a long operation owns this watch — leave it alone
         try:
             uhubctl_set_power(loc, port, False)
             n += 1
         except Exception as e:
             log.debug("sweep_prepare %s.%s: %s", loc, port, e)
-    return {"ok": True, "ports": n}
+    if held:
+        log.info("sweep_prepare: left %d held port(s) powered — %s",
+                 len(held), _describe_held_ports(held))
+    return {"ok": True, "ports": n,
+            "held": len(held), "held_detail": _describe_held_ports(held)}
 
 
 @DISPATCH.op("onboard.sweep_skip")
@@ -2298,8 +2334,16 @@ def _onboard_sweep_run(args):
     cfg = load_config()
     prefer_adb = usb_mode_preference(cfg) != "ssh"
     ports = _sweep_leaf_ports(cfg)
+    # Step around watches under an operation lock rather than cutting them: the
+    # sweep powers ports off and reboots what it finds, which would end a dump
+    # or a wanze run the operator cannot see from here. Named, not silent.
+    held = _sweep_held_ports(cfg, ports)
+    ports = [p for p in ports if p not in held]
     yield (f"Onboard sweep starting: {len(ports)} sockets, one at a time "
            f"(prefer {'ADB' if prefer_adb else 'SSH'}).")
+    if held:
+        yield (f"Skipping {len(held)} held socket(s), left untouched: "
+               f"{_describe_held_ports(held)}")
     q: "queue.Queue[str | None]" = queue.Queue()
     result = {"on": [], "skip": [], "unauthorized": []}
 
@@ -2318,7 +2362,10 @@ def _onboard_sweep_run(args):
                 result["skip"].append(f"{loc}:{port}")
         q.put(f"═══ sweep done: {len(result['on'])} onboarded, "
               f"{len(result['skip'])} need charge/empty, "
-              f"{len(result['unauthorized'])} unauthorized ═══")
+              f"{len(result['unauthorized'])} unauthorized"
+              + (f", {len(held)} held (skipped)" if held else "") + " ═══")
+        if held:
+            q.put("held, not touched: " + _describe_held_ports(held))
         if result["skip"]:
             q.put("needs charge / empty: " + ", ".join(result["skip"]))
         if result["unauthorized"]:

@@ -322,6 +322,50 @@ def test_wear_set_refuses_a_held_watch(monkeypatch):
     assert powered == [], "powered the port of a watch mid-wanze-run"
 
 
+def test_the_onboard_sweep_steps_around_a_held_watch_and_says_so(monkeypatch):
+    """The sweep powers every socket down and reboots what it finds, so it would
+    end a dump or a wanze run the operator cannot see from the sweep dialog.
+
+    Unlike the other actuators it does not REFUSE — the operator explicitly
+    asked to power everything down — it SKIPS the held socket and names it.
+    A silent skip would be worse than either: the sweep would quietly not
+    onboard a socket with no reason given."""
+    from asteroid_docking_bay import rpcops
+    now = time.time()
+    cfg = {"op_locks": {"S1": {"kind": "wanze", "note": "arm A",
+                               "since": now, "until": now + 600}}}
+    ports = [("1-2", 1), ("1-2", 2)]
+    monkeypatch.setattr(rpcops, "load_config", lambda: cfg)
+    monkeypatch.setattr(rpcops, "_sweep_leaf_ports", lambda c: ports)
+    monkeypatch.setattr(rpcops, "find_serial_for_loc_port",
+                        lambda c, l, p: "S1" if p == 1 else "S2")
+    cut = []
+    monkeypatch.setattr(rpcops, "uhubctl_set_power",
+                        lambda l, p, on: cut.append((l, p, on)))
+
+    r = rpcops.DISPATCH._data["onboard.sweep_prepare"]({})
+    assert cut == [("1-2", 2, False)], \
+        f"prepare cut power on the held socket: {cut}"
+    assert r["ports"] == 1 and r["held"] == 1
+    assert "S1" in r["held_detail"] and "wanze" in r["held_detail"], \
+        f"the skipped socket is not named: {r['held_detail']!r}"
+
+    # And the run half skips the same socket, announcing it rather than
+    # silently onboarding one fewer.
+    swept = []
+    monkeypatch.setattr(rpcops, "_sweep_one_port",
+                        lambda loc, port, prefer, emit: swept.append((loc, port))
+                        or ("nemo", None))
+    monkeypatch.setattr(rpcops, "usb_mode_preference", lambda c: "adb")
+    rpcops._remap_tasks.pop("__sweep__", None)
+    out = list(rpcops.DISPATCH._stream["onboard.sweep_run"]({}))
+    text = "\n".join(t for t in out if t)
+    assert ("1-2", 1) not in swept, "the sweep ran on a held socket"
+    assert ("1-2", 2) in swept, "the sweep skipped an unheld socket too"
+    assert "Skipping 1 held" in text and "S1" in text, \
+        f"the skip was silent — no reason given:\n{text}"
+
+
 def test_ops_refuse_while_a_watch_is_held(monkeypatch):
     """The guard also faces the human: a person clicking Reboot mid-dump makes
     the same collision, just slower."""

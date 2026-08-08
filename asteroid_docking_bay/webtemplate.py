@@ -2995,7 +2995,11 @@ function doOnboardSweep(){
   toast('powering all sockets off…');
   fetch('/api/onboard-sweep/prepare',{method:'POST'}).then(r=>r.json()).then(d=>{
     if(!d.ok){toast('sweep prepare failed');return;}
-    if(!confirm('All '+d.ports+' sockets are powered OFF. Equip every socket with a watch NOW, then click OK to run the sweep (one port at a time — this takes a while).')){refresh();return;}
+    // Name any socket left powered because a long operation owns its watch —
+    // the sweep steps around those, and the operator should know BEFORE they
+    // start equipping sockets, not discover it in the log afterwards.
+    const heldNote=d.held?('\\n\\n'+d.held+' socket(s) were left POWERED and will be skipped — a long operation owns them:\\n'+d.held_detail):'';
+    if(!confirm('All '+d.ports+' sockets are powered OFF. Equip every socket with a watch NOW, then click OK to run the sweep (one port at a time — this takes a while).'+heldNote)){refresh();return;}
     const box=document.getElementById('sweeplog'),body=document.getElementById('sweeplogbody');
     body.textContent='';box.style.display='block';
     const es=new EventSource('/api/onboard-sweep/run');
