@@ -112,60 +112,47 @@ onto the rig itself:
   and the confirm dialog shows it *before* the operator starts equipping
   sockets. With this, every actuator on the rig honours the lock.
 
-## Left for mo to decide
+## Everything found is now fixed (2026-08-08, same day)
 
-These are real and verified, but each is either hardware-actuating, a design
-decision, or a broad behaviour change — the kind of thing to surface in an
-autonomous run rather than wire in unattended. Priority order:
+The ledger is empty: all 24 findings are closed, each with a test validated by
+planting the bug it exists to catch. What the remaining batch fixed, beyond the
+guard work above:
 
-1. **Concurrent recovery cycles are not serialized** (`webstatus F2`, HIGH). When
-   several strays or fake-power-wedged ports cross their thresholds in one pass —
-   a fleet cold-boot into developer mode with no leases, or ~60s after a restart
-   — one daemon thread per port spawns and `uhubctl_cycle` fires N ports almost
-   at once. That is the adb-crash/brownout the binding "never many ports at once"
-   rule exists to prevent. The fix is a one-actuation-per-pass budget mirroring
-   the `_SOFT_REMAP_IDENTIFY_PER_PASS` already used on the adb side; I did not
-   apply it because it changes recovery timing on the live rig and you should see
-   it first.
+* **Atomic config writes + a cross-process lock** (`7044e27`). The save was a
+  truncate-in-place, so a crash mid-write left invalid JSON and nothing catches
+  the decode error — every op and the whole status page would break with the
+  fleet's mappings and locks unreadable. And the read-modify-write cycles were
+  guarded by a threading lock the CLI (a separate process) cannot see, so
+  interleaving cycles could erase a live operation lock outright.
+* **Escaping for values that are not ours** (`00ac15b`). A watch supplies its
+  own serial, the icecc scheduler supplies hostnames, and a Bluetooth device
+  supplies its advertised name over the air. `esc()` escaped neither quote, and
+  an inline handler argument needs more than that anyway: two parsers run in
+  order, so a quote written as `&#39;` is handed to JS as a plain quote. Added
+  `jsq()` for that context and routed 20 sites through it.
+* **A held watch now says so** (`a8300a6`) — the other unfinished half of the
+  dump UI, next to the Dump menu item that turned out to be dead.
+* **Dump integrity** (`cbd8eaf`): an atomic claim (the concurrency test found a
+  second hole in the first version of the fix — the claim window itself) and a
+  free-space refusal before an 8 GB write onto a disk the fleet shares.
+* **A full disk no longer blanks the fleet view** (`f0d3763`), **a shelved watch
+  no longer reports the OS it was reflashed away from** (`05243ab`), and **power
+  actions route on live adb rather than a warmer cache that can be a cycle
+  stale** (`56c2ed5`) — which had turned a working button into a 20-second hang.
+* **The three test gaps that let all of this ship** (`fb538e1`): nothing
+  asserted the ops CALL the guard, `fb_draining` was tested by round-trip rather
+  than by evaluating the flag, and nothing exercised the request layer that
+  shipped the silent-defaults bug.
+* **Low-severity quiet failures** (`4e6d07c`): an expiry-less lock read as
+  immortal, an unbounded ttl, a mistyped dump action starting a dump, and an
+  error message claiming "not on adb" for a watch that is on adb.
 
-2. **oplock guards only the automatic housekeepers, not the other actuators**
-   (`oplock F1-F7`, HIGH in aggregate). The peeler, aligner and fake-power heal
-   are guarded and tested. The CLI check-charge timer (a *separate* systemd-timer
-   process that cuts VBUS unattended), `flash.start`, charge/drain/workbench
-   `Operation.start`, the onboarding sweep, and the manual mode-switch ops are
-   not. `port.set` already refuses a held watch; a charge that does strictly more
-   does not — the guard is inconsistent at the same API. The dump feature is
-   unproven on hardware so most are latent, but the CLI timer runs continuously.
-   My recommendation: wire the existing `_refuse_if_busy` into `Operation.start`,
-   `flash.start`, and the CLI busy predicate (the status doc already carries
-   `held`). The onboarding-sweep and manual-switch guards are genuine judgment
-   calls about whether an operator action should skip a held watch.
-
-3. **esc() does not escape quotes → HTML/JS injection** (`webtemplate F3`, MED).
-   The Bluetooth advertised device name (attacker-controlled by any nearby
-   radio), the icecc hostname (from the remote scheduler), and device serials
-   flow into single-quoted onclick handlers; a quote breaks out and runs on
-   click. The fix is contained (extend `esc()`, esc the raw sites) but touches
-   many interpolation points and needs a UI regression pass.
-
-4. Medium items worth a look when convenient: the stale-fastboot-cache routing
-   window (`rpcops F7`), the wrong-OS panel still shown for offline watches
-   (`rpcops F8`), non-atomic config writes / cross-process lock loss
-   (`oplock F8/F9`), no host free-space check before an 8 GB dump
-   (`stockrom F4`), the dump check-then-claim race (`rpcops F6`), no per-row
-   exception isolation in the status loop (`webstatus F5`), and the missing
-   `held` badge that is the unfinished other half of the dump UI
-   (`webtemplate F4`).
-
-5. Test-quality gaps (`oplock F13`, `webstatus F4`, `rpcops F12`): nothing
-   asserts the power ops actually *call* `_refuse_if_busy`; `fb_draining`'s test
-   checks a round-trip rather than the flag logic; no test drives a request
-   through the bottle handler, so the body-reading layer that failed on hardware
-   is still only tested around. Worth closing because they are how the fixed bugs
-   escaped in the first place.
-
-The LOW items (cosmetic thresholds, dead args, an unbounded oplock ttl, a
-false "not reachable" message for recovery-mode watches) are in the ledger.
+Two things are worth recording as process, not findings. The audit's own
+suspicion that `registry.note` could take down the status path did **not** hold —
+it was already safe — and it is marked as such rather than quietly dropped. And
+two existing tests had to be corrected rather than the code: both stubbed a
+watch as adb-online *and* in the bootloader, a state that cannot exist on
+hardware, which is exactly what the stale-cache bug looked like.
 
 ## Dead ends
 
