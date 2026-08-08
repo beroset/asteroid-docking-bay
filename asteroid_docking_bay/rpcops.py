@@ -24,6 +24,7 @@ import json
 import logging
 import queue
 import re
+import shutil
 import threading
 from pathlib import Path
 import time
@@ -1462,6 +1463,13 @@ def _aod_check(argsd):
 # watch can be dumped over WiFi with no port at all), while every task there is
 # keyed by a hub port.
 _dump_runs: dict = {}
+# Serializes the check-and-claim in watch.dump. The web server is threaded and
+# the dest filename is only second-granular, so two starts inside one second
+# could both pass the "already running" check and be handed the SAME path.
+_dump_claim = threading.Lock()
+# Spare room demanded beyond the image itself, so a dump cannot fill the disk
+# the fleet's backups, registry and logs also live on.
+_DUMP_HEADROOM_BYTES = 2 * 1024 ** 3
 
 
 def _dump_worker(serial, dest, manifest, cmd, expect_bytes, codename):
@@ -1524,44 +1532,82 @@ def _watch_dump(args):
     serial = args["serial"]
     if args.get("action") == "status":
         return {"ok": True, "run": _dump_runs.get(serial)}
-    run = _dump_runs.get(serial)
-    if run and run.get("state") == "running":
-        return {"ok": False, "error": "a dump of this watch is already running"}
+    # Claim the slot ATOMICALLY. The check and the assignment used to be
+    # separate statements on a threaded server, so two starts a moment apart
+    # both passed — and the dest name is only second-granular, so a double click
+    # inside one second gave both workers the SAME file. Two dd pipelines
+    # interleaved into one path can still add up to the expected size and be
+    # manifested complete, which is the one thing this feature must never do.
+    with _dump_claim:
+        run = _dump_runs.get(serial)
+        # "starting" counts as taken: between the claim and the copy actually
+        # launching there is a preflight that talks to the watch, and a second
+        # caller arriving in that window would otherwise pass the check and be
+        # handed the same second-granular filename.
+        if run and run.get("state") in ("starting", "running"):
+            return {"ok": False, "error": "a dump of this watch is already running"}
+        _dump_runs[serial] = {"state": "starting", "started": time.time()}
 
-    from . import stockrom
-    w = _watch(serial)
-    expect, blocker = stockrom.disk_bytes(w)
-    if blocker:
-        return {"ok": False, "error": blocker}
-    cfg = load_config()
-    codename = (cfg.get("serials") or {}).get(serial) or serial
-    stockrom.DUMP_ROOT.mkdir(parents=True, exist_ok=True)
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    dest = stockrom.DUMP_ROOT / f"{codename}-{serial}-{stamp}.img"
-    manifest = stockrom.DUMP_ROOT / f"{codename}-{serial}-{stamp}.manifest.txt"
+    try:
+        from . import stockrom
+        w = _watch(serial)
+        expect, blocker = stockrom.disk_bytes(w)
+        if blocker:
+            return {"ok": False, "error": blocker}
+        # An 8 GB write onto a full disk produces a short dump. That is caught
+        # and marked .partial now, but the host also shares this disk with the
+        # fleet's backups, registry and logs, so filling it breaks more than the
+        # dump. Refuse up front, while the number is still just a number.
+        free = shutil.disk_usage(stockrom.DUMP_ROOT.parent).free
+        if expect and free < expect + _DUMP_HEADROOM_BYTES:
+            return {"ok": False,
+                    "error": (f"not enough space for this dump: it needs "
+                              f"{expect / 1e9:.1f} GB plus headroom and "
+                              f"{free / 1e9:.1f} GB is free")}
+        cfg = load_config()
+        codename = (cfg.get("serials") or {}).get(serial) or serial
+        stockrom.DUMP_ROOT.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        dest = stockrom.DUMP_ROOT / f"{codename}-{serial}-{stamp}.img"
+        manifest = stockrom.DUMP_ROOT / f"{codename}-{serial}-{stamp}.manifest.txt"
     # Use the address of the transport the size preflight just succeeded over,
     # not a re-derivation from cfg. An orbit/WiFi watch reaches us on an
     # SshTransport whose ip is its WiFi address, and it often has no ssh_ips
     # allocation — re-deriving gave None and fell back to an adb command against
-    # a watch that is not on adb, dumping 0 bytes after a preflight that passed.
-    ip = w.t.ip if isinstance(w.t, SshTransport) else None
-    cmd = stockrom.dump_command(serial, ip, str(dest))
+        # a watch that is not on adb, dumping 0 bytes after a preflight that passed.
+        ip = w.t.ip if isinstance(w.t, SshTransport) else None
+        cmd = stockrom.dump_command(serial, ip, str(dest))
 
-    lock = oplock.hold(serial, "dump", f"full-disk dump to {dest.name}", 4 * 3600)
-    if not lock.get("ok"):
-        # The watch is already held for something else (a wanze run, a flash).
-        # Starting a dump would have overwritten that lock and deleted it on
-        # release; refuse instead of stamping over it.
-        note = f" — {lock['note']}" if lock.get("note") else ""
-        return {"ok": False,
-                "error": f"watch is held for '{lock.get('kind')}'{note}; "
-                         "not starting a dump over it"}
-    _dump_runs[serial] = {"state": "running", "started": time.time(),
-                          "dest": str(dest), "expect": expect, "size": 0}
-    threading.Thread(target=_dump_worker, daemon=True,
-                     args=(serial, dest, manifest, cmd, expect, codename)).start()
-    return {"ok": True, "started": True, "dest": dest.name,
-            "expect_bytes": expect}
+        lock = oplock.hold(serial, "dump", f"full-disk dump to {dest.name}",
+                           4 * 3600)
+        if not lock.get("ok"):
+            # The watch is already held for something else (a wanze run, a
+            # flash). Starting a dump would have overwritten that lock and
+            # deleted it on release; refuse instead of stamping over it.
+            note = f" — {lock['note']}" if lock.get("note") else ""
+            return {"ok": False,
+                    "error": f"watch is held for '{lock.get('kind')}'{note}; "
+                             "not starting a dump over it"}
+        _dump_runs[serial] = {"state": "running", "started": time.time(),
+                              "dest": str(dest), "expect": expect, "size": 0}
+        try:
+            threading.Thread(target=_dump_worker, daemon=True,
+                             args=(serial, dest, manifest, cmd, expect,
+                                   codename)).start()
+        except RuntimeError as exc:
+            # The lock is already taken at this point; without releasing it the
+            # watch would sit held for four hours for a dump that never ran.
+            oplock.release(serial)
+            _dump_runs[serial] = {"state": "failed", "error": str(exc)[:200]}
+            return {"ok": False, "error": f"could not start the copy: {exc}"}
+        return {"ok": True, "started": True, "dest": dest.name,
+                "expect_bytes": expect}
+    finally:
+        # Any path that returned without reaching "running" must give the slot
+        # back, or a refused start would block every later dump of this watch.
+        with _dump_claim:
+            if _dump_runs.get(serial, {}).get("state") == "starting":
+                _dump_runs.pop(serial, None)
 
 
 @DISPATCH.op("oplock.set")

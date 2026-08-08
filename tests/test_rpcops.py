@@ -1280,6 +1280,79 @@ def test_a_dump_targets_the_link_the_preflight_used(monkeypatch):
         f"dump built for the wrong link: ip={seen['ip']} (should be the SSH address)"
 
 
+def test_two_dumps_of_one_watch_cannot_claim_the_same_file(monkeypatch, tmp_path):
+    """The check and the claim were separate statements on a threaded server, so
+    two starts a moment apart both passed — and the dest name is only
+    second-granular, so a double click inside one second handed both workers the
+    SAME path. Two dd pipelines interleaved into one file can still add up to
+    the expected size and be manifested complete, which is the single thing this
+    feature exists to make impossible."""
+    import threading
+    from asteroid_docking_bay import stockrom, oplock
+    # Grab the real class BEFORE stubbing: rpcops.threading is the threading
+    # module itself, so the stub below would replace the test's own threads too.
+    real_thread = threading.Thread
+    monkeypatch.setattr(stockrom, "disk_bytes", lambda w: (4096, None))
+    monkeypatch.setattr(stockrom, "DUMP_ROOT", tmp_path)
+    monkeypatch.setattr(rpcops, "_watch",
+                        lambda s: type("W", (), {"t": object()})())
+    monkeypatch.setattr(rpcops, "load_config", lambda: {"serials": {"S1": "nemo"}})
+    monkeypatch.setattr(oplock, "hold", lambda *a, **k: {"ok": True})
+    monkeypatch.setattr(rpcops.threading, "Thread",
+                        lambda *a, **k: type("T", (), {"start": lambda self: None})())
+
+    rpcops._dump_runs.clear()
+    results, barrier = [], threading.Barrier(4)
+
+    def start():
+        barrier.wait()                       # maximise the overlap
+        results.append(rpcops._watch_dump({"serial": "S1"}))
+
+    threads = [real_thread(target=start) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    started = [r for r in results if r.get("ok")]
+    assert len(started) == 1, (
+        f"{len(started)} concurrent dumps of one watch were started — they "
+        f"share a second-granular filename: {[r.get('dest') for r in started]}")
+
+
+def test_a_dump_is_refused_when_the_disk_cannot_hold_it(monkeypatch, tmp_path):
+    """An 8 GB write onto a full disk yields a short dump — caught and marked
+    .partial now, but the host shares this disk with the fleet's backups,
+    registry and logs, so filling it breaks more than the dump. Refuse while the
+    number is still just a number."""
+    import collections
+    from asteroid_docking_bay import stockrom
+    monkeypatch.setattr(stockrom, "disk_bytes", lambda w: (8 * 1024 ** 3, None))
+    monkeypatch.setattr(stockrom, "DUMP_ROOT", tmp_path)
+    monkeypatch.setattr(rpcops, "_watch",
+                        lambda s: type("W", (), {"t": object()})())
+    usage = collections.namedtuple("u", "total used free")
+    monkeypatch.setattr(rpcops.shutil, "disk_usage",
+                        lambda p: usage(0, 0, 3 * 1024 ** 3))   # 3 GB free
+
+    rpcops._dump_runs.clear()
+    r = rpcops._watch_dump({"serial": "S1"})
+    assert r["ok"] is False and "space" in r["error"]
+    assert "S1" not in rpcops._dump_runs, \
+        "a refused start left the slot claimed, blocking every later dump"
+
+    # Plenty of room → it proceeds (the guard must not disable dumping).
+    monkeypatch.setattr(rpcops.shutil, "disk_usage",
+                        lambda p: usage(0, 0, 500 * 1024 ** 3))
+    monkeypatch.setattr(rpcops, "load_config", lambda: {"serials": {}})
+    from asteroid_docking_bay import oplock
+    monkeypatch.setattr(oplock, "hold", lambda *a, **k: {"ok": True})
+    monkeypatch.setattr(rpcops.threading, "Thread",
+                        lambda *a, **k: type("T", (), {"start": lambda self: None})())
+    rpcops._dump_runs.clear()
+    assert rpcops._watch_dump({"serial": "S1"})["ok"] is True
+
+
 def test_a_truncated_dump_is_reported_as_failed_not_done(monkeypatch, tmp_path):
     """A short dump is the failure that hides best. original-sprat.img is
     0 bytes and sat in the backup directory looking present for months."""
