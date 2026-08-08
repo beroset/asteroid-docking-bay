@@ -730,6 +730,15 @@ def _web_status_data(cfg: dict) -> list[dict]:
             else:
                 battery, screen_forced, charge_status = None, False, None
             watch_os  = _watch_os_for(serial) if adb_state == "device" else None
+            if watch_os:
+                # Persist the detection. The in-memory _watch_os cache is
+                # evicted for every offline watch a few lines above, so it is
+                # empty exactly when a shelved watch's panel is being served
+                # from cache — which let a beluga restored to Wear OS keep
+                # showing its old AsteroidOS kernel and Qt build. record() is
+                # change-gated, so this writes only when the OS actually
+                # changes.
+                last_seen.record(serial, os_detected=watch_os)
             # Remember that a watch was last seen in the bootloader. Cutting
             # VBUS does NOT stop a watch in fastboot — measured 2026-07-18: it
             # keeps running on battery, invisible to the host, until flat. That

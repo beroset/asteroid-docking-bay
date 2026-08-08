@@ -1149,6 +1149,32 @@ def test_stale_cc_keeps_the_cache_when_the_os_is_not_known(monkeypatch):
     assert rpcops._stale_cc("S1", None)["bat_cap"] == "77"
 
 
+def test_stale_cc_drops_a_foreign_blob_for_an_OFFLINE_watch(monkeypatch):
+    """The guard only ever consulted the in-memory detection cache, which the
+    status pass evicts for every offline watch — so it was empty in exactly the
+    situation this cached panel is served in, and could never fire there.
+
+    That is the case it was written for: beluga, restored to Wear OS and then
+    shelved, kept reporting the AsteroidOS version, kernel and Qt build it no
+    longer had. The last detection is persisted now, so an offline watch is
+    still known to have changed OS."""
+    from asteroid_docking_bay.watchctl import _watch_os
+    monkeypatch.delitem(_watch_os, "S1", raising=False)      # offline: evicted
+    monkeypatch.setattr(rpcops.last_seen, "get", lambda s: {
+        "cc": {"os": "AsteroidOS 2.2-nightly", "bat_cap": "77"}, "cc_ts": 1.0,
+        "os_detected": "WearOS"})
+    monkeypatch.setattr(rpcops, "ssh_ip_for_serial", lambda c, s: None)
+    monkeypatch.setattr(rpcops, "load_config", lambda: {})
+    assert rpcops._stale_cc("S1", None) == {}, \
+        "a shelved watch still reports the OS it was reflashed away from"
+
+    # Same OS as the blob → the cache is still served, marked stale.
+    monkeypatch.setattr(rpcops.last_seen, "get", lambda s: {
+        "cc": {"os": "AsteroidOS 2.2-nightly", "bat_cap": "77"}, "cc_ts": 1.0,
+        "os_detected": "AsteroidOS"})
+    assert rpcops._stale_cc("S1", None)["bat_cap"] == "77"
+
+
 def test_os_family_is_blunt_on_purpose():
     """It only has to notice 'this is a different system', so an unrecognised
     string must compare as unknown rather than as a mismatch — otherwise a new

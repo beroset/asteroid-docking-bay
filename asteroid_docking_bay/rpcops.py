@@ -168,8 +168,14 @@ def _stale_cc(serial, standby):
     cached = last_seen.get(serial)
     if not (cached and cached.get("cc")):
         return {}
-    # Only the in-memory detection cache — this path promises no device I/O.
-    detected = _watch_os.get(serial)
+    # The in-memory detection cache first, then the durable one. The in-memory
+    # cache is evicted for every OFFLINE watch on each status pass, so for a
+    # shelved watch — precisely when this cached panel is what gets served — it
+    # is always empty, and the guard below could never fire. That left the very
+    # case it was written for: beluga, restored to Wear OS and then shelved,
+    # still reporting the AsteroidOS version, kernel and Qt build it no longer
+    # had. Neither read touches the device.
+    detected = _watch_os.get(serial) or (cached.get("os_detected") or None)
     if detected:
         was = _os_family(cached["cc"].get("os", ""))
         now = _os_family(detected) or ("android" if detected in
