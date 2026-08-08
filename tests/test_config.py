@@ -109,6 +109,73 @@ def test_manager_roundtrip_and_defaults_merge(tmp_path):
     assert charge_config(cfg).high_threshold == 80
 
 
+def test_a_save_never_leaves_a_half_written_config(tmp_path):
+    """The old truncate-in-place left invalid JSON if the process died mid-write
+    or the disk filled — and nothing catches the decode error, so every op and
+    the whole status page break with the fleet's port mappings and operation
+    locks unreadable. The write must be atomic: a reader sees the old file or
+    the new one, never a truncated one."""
+    import json
+    cm = ConfigManager(tmp_path / "config.json")
+    cm.save({"hubs": [{"location": "1-2"}], "serials": {"S1": "nemo"}})
+
+    # A failure part-way through the new content must not destroy the old file.
+    class _Boom(Exception):
+        pass
+
+    real_dump = json.dump
+
+    def explode(obj, fp, **kw):
+        fp.write('{"hubs": [{"loc')       # a plausible partial write
+        raise _Boom("disk full")
+
+    json.dump = explode
+    try:
+        try:
+            cm.save({"hubs": [{"location": "9-9"}]})
+        except _Boom:
+            pass
+    finally:
+        json.dump = real_dump
+
+    cfg = cm.load()                        # must still parse
+    assert cfg["hubs"][0]["location"] == "1-2", \
+        "a failed save destroyed the previous config"
+    assert cfg["serials"] == {"S1": "nemo"}
+
+
+def test_the_config_lock_excludes_another_process(tmp_path):
+    """The CLI is a SEPARATE process running its own load/modify/save cycles
+    (the check-charge timer, map, on/off). Two interleaving cycles lose one
+    side's write outright, and one thing that can vanish that way is a live
+    operation lock — the marker that stops housekeeping cutting a running dump.
+    A threading.Lock cannot see another process; an flock can."""
+    import subprocess
+    import sys
+    cm = ConfigManager(tmp_path / "config.json")
+    lockfile = str(tmp_path / "config.json.lock")
+
+    probe = (
+        "import fcntl, os, sys\n"
+        f"fd = os.open({lockfile!r}, os.O_CREAT | os.O_RDWR, 0o644)\n"
+        "try:\n"
+        "    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)\n"
+        "    print('GOT')\n"
+        "except OSError:\n"
+        "    print('BLOCKED')\n")
+
+    with cm.lock:                                   # this process holds it
+        out = subprocess.run([sys.executable, "-c", probe],
+                             capture_output=True, text=True, timeout=30).stdout
+    assert out.strip() == "BLOCKED", \
+        "another process could take the config lock while it was held"
+
+    # Released afterwards, or the first crash would wedge the fleet forever.
+    out = subprocess.run([sys.executable, "-c", probe],
+                         capture_output=True, text=True, timeout=30).stdout
+    assert out.strip() == "GOT", "the config lock was never released"
+
+
 # ── _store_smart_verdict: a proven verdict is sticky ──────────────────────────
 
 from asteroid_docking_bay.config import _store_smart_verdict

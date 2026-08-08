@@ -15,7 +15,9 @@ serials), edited in place by map/remap/soft-remap."""
 
 from __future__ import annotations
 
+import fcntl
 import json
+import os
 import threading
 from dataclasses import dataclass, fields
 from pathlib import Path
@@ -90,6 +92,53 @@ def flash_config(cfg: dict) -> FlashConfig:
     return FlashConfig.from_dict(cfg.get("flash"))
 
 
+class _ConfigLock:
+    """Serializes config read-modify-write cycles in this process AND across
+    processes.
+
+    A threading.Lock covers the web service's own threads, but the CLI is a
+    SEPARATE process running its own load → modify → save cycles: the
+    check-charge timer on a systemd timer, `map`, `on`/`off`. Two cycles
+    interleaving lose one side's write completely, and one of the things that
+    can vanish that way is a live operation lock — the marker that stops
+    housekeeping from cutting a running dump. So the same region also takes an
+    flock on a sidecar file, the pattern uhubctl access already uses.
+
+    Used only as a context manager, which every call site already does. Not
+    reentrant, exactly like the threading.Lock it replaces.
+    """
+
+    def __init__(self, path: Path):
+        self._thread_lock = threading.Lock()
+        self._path = Path(path)
+        self._fd: "int | None" = None
+
+    def __enter__(self):
+        self._thread_lock.acquire()
+        try:
+            if self._fd is None:
+                self._path.parent.mkdir(parents=True, exist_ok=True)
+                self._fd = os.open(self._path, os.O_CREAT | os.O_RDWR, 0o644)
+            fcntl.flock(self._fd, fcntl.LOCK_EX)
+        except OSError:
+            # A read-only or exotic filesystem must not make the config
+            # unusable: fall back to in-process serialization, which is what
+            # this had before.
+            self._fd = None
+        except BaseException:
+            self._thread_lock.release()
+            raise
+        return self
+
+    def __exit__(self, *exc) -> bool:
+        try:
+            if self._fd is not None:
+                fcntl.flock(self._fd, fcntl.LOCK_UN)
+        finally:
+            self._thread_lock.release()
+        return False
+
+
 class ConfigManager:
     """Owns the config file: load with defaults merged in, atomic-enough
     save, and the lock serializing read-modify-write cycles so concurrent
@@ -97,7 +146,7 @@ class ConfigManager:
 
     def __init__(self, path: Path = CONFIG_FILE):
         self.path = Path(path)
-        self.lock = threading.Lock()
+        self.lock = _ConfigLock(Path(path).with_name(Path(path).name + ".lock"))
 
     def load(self) -> dict:
         if not self.path.exists():
@@ -111,10 +160,23 @@ class ConfigManager:
         return cfg
 
     def save(self, cfg: dict) -> None:
+        """Write the config so a reader never sees a half-written file.
+
+        The old truncate-in-place left invalid JSON behind if the process died
+        mid-write (or the disk filled), and nothing catches the decode error —
+        every op and the whole status page would break, with the fleet's port
+        mappings and operation locks unreadable. Write a sibling temp file,
+        fsync it, then os.replace, which is atomic on POSIX: a reader sees
+        either the old file or the new one, never a truncated one.
+        """
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("w") as f:
+        tmp = self.path.with_name(self.path.name + ".tmp")
+        with tmp.open("w") as f:
             json.dump(cfg, f, indent=2)
             f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, self.path)
 
 
 config_manager = ConfigManager()
