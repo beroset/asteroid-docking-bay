@@ -475,7 +475,7 @@ def test_handed_off_port_renders_available_with_orbit_hint(tmp_path):
     assert r.returncode == 0, f"harness failed:\n{r.stderr[:600]}"
     html = json.loads(r.stdout.strip().splitlines()[-1])
     assert "skipjack" in html and "orbit-hint" in html   # whose port, now in orbit
-    assert "pwrGo(this,'1-2:1')" in html                 # port is available
+    assert "pwrMenu(event,'1-2:1'" in html             # port is available
     assert "doRemap('1-2:1')" in html                    # Onboard offered
 
 
@@ -552,7 +552,13 @@ def test_smart_column_is_pills_with_the_cycle_as_the_untested_state(tmp_path):
     assert 'class="smt unk"' in out["unk"] and "doCy('1-2:1')" in out["unk"], out["unk"]
     assert "&#x21BA;" in out["unk"], "untested state must show the cycle glyph"
     # The cycle lives only in the smart cell now — not as a power-column icon.
-    assert JS.count("doCy('") == 1, "doCy wired in more than one place — cycle not consolidated"
+    # doCy has TWO call sites on purpose since 2026-08-09, with different jobs:
+    # the smart pill's cycle IS the switchability test and appears only while
+    # the verdict is unknown; the port toggle's menu offers a power cycle as a
+    # routine action. Same op, different intent and availability — but still
+    # one implementation, which is what "consolidated" protects.
+    assert JS.count("function doCy(") == 1, "doCy has more than one implementation"
+    assert JS.count("doCy('") == 2, "expected doCy from the smart pill and the port menu only"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
@@ -1241,7 +1247,7 @@ def test_action_buttons_give_instant_click_feedback():
     assert "pulseSelf(this);doCy(" in JS, "cycle button lacks instant feedback"
     assert "function pwrGo(" in JS and "classList.add('pending')" in JS, \
         "power toggle lacks its in-flight pending state"
-    assert "pwrGo(this," in JS, "power toggle not wired to pwrGo"
+    assert "pwrMenu(event," in JS, "power toggle not wired to its port menu"
 
 
 def test_failed_actions_flash_red():
@@ -1249,7 +1255,7 @@ def test_failed_actions_flash_red():
     the button, a refused mode switch flashes the connection pill."""
     assert "function flashFail(" in JS and "cmd-fail" in _WEB_TEMPLATE
     # port toggle: on confirmed===false, flash the clicked button
-    assert "if(d.confirmed===false){flashFail(el)" in JS, "power toggle failure not flashed"
+    assert "if(d.confirmed===false){if(el)flashFail(el)" in JS, "power toggle failure not flashed"
     # mode switch: on !ok, flash the row's connection pill
     assert "flashFail(connPill(serial))" in JS, "mode-switch failure not flashed"
     # the connection cell carries an id so the pill can be found
@@ -2303,3 +2309,45 @@ def test_the_sweep_left_the_status_row_for_the_registry():
         "the sweep is back in the status row"
     assert "sweepControl()" in _WEB_TEMPLATE and 'class="reg-foot"' in _WEB_TEMPLATE, \
         "the registry panel does not host the sweep"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_the_port_toggle_opens_a_scoped_menu_instead_of_cutting_power(tmp_path):
+    """The port toggle is the biggest, most obvious control in the row and it
+    is the UNSAFE one: cutting VBUS does not stop a running watch, it keeps
+    draining on battery where the host cannot see it. The small grey dot beside
+    it does the graceful halt. Nothing said which was which.
+
+    The toggle now opens a menu like the dot does, offering only PORT-scope
+    actions and naming that scope. Cutting power to a watch that is UP arms
+    first, because that is the case that strands a watch on battery."""
+    import json
+    h = tmp_path / "pwr.js"
+    h.write_text(
+        _DOM_STUBS + JS +
+        "\nlet menu='';openMenu=function(ev,html){menu=html;};"
+        "\nconst ev={stopPropagation(){}};"
+        "\npwrMenu(ev,'1-2:1',true,false,'skipjack',true);const live=menu;"
+        "\npwrMenu(ev,'1-2:1',true,false,'skipjack',false);const dark=menu;"
+        "\npwrMenu(ev,'1-2:1',false,false,'skipjack',false);const off=menu;"
+        "\nconsole.log(JSON.stringify({live,dark,off}));\nprocess.exit(0);\n")
+    r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
+    assert r.returncode == 0, f"harness failed:\n{r.stderr[:600]}"
+    out = json.loads(r.stdout.strip().splitlines()[-1])
+
+    # Scope is stated, and only port actions are offered.
+    for key in ("live", "dark", "off"):
+        assert "VBUS" in out[key], f"{key}: the menu does not name its scope"
+        assert "Cycle power" in out[key], f"{key}: no cycle"
+        for watch_action in ("Reboot", "Bootloader", "Charge", "Drain"):
+            assert watch_action not in out[key], \
+                f"{key}: {watch_action} is a WATCH action and must not be here"
+
+    # Cutting power to a LIVE watch arms; to a dark one it is a plain item.
+    assert "armGo(" in out["live"], \
+        "cutting VBUS on a running watch commits on one click — it strands it on battery"
+    assert "armGo(" not in out["dark"], "arming a port with no live watch is noise"
+    assert "Power on" in out["off"] and "Power off" not in out["off"]
+
+    # And the warning names the real hazard.
+    assert "keeps draining" in out["live"]

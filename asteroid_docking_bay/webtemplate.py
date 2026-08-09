@@ -607,15 +607,36 @@ function flashFail(el){
 // animated EXEC state while the command is in flight; on confirm, refresh so
 // the row rebuilds into the new state (a brief delay lets the exec animation be
 // seen). A refused switch flashes the toggle red.
-function pwrGo(el,slot){
-  if(el.classList.contains('pending'))return;
-  const on=!el.classList.contains('tgl-on');
-  el.classList.add('pending');
+// The port toggle used to switch VBUS on the click. It is the biggest, most
+// obvious control in the row and it is the UNSAFE one: cutting VBUS does not
+// stop a running watch — it keeps draining on battery, invisible to the host —
+// while the small grey power dot beside it does the graceful watch halt.
+// Nothing said which was which.
+//
+// So the toggle now opens a menu, exactly like the dot does. It offers only
+// the two PORT-scope actions, and names their scope so the pair reads as what
+// it is: this one moves electricity, the other one talks to the watch.
+function pwrMenu(ev,slot,on,noSw,codename,live){
+  ev.stopPropagation();
+  const cut=on
+    ? (live
+        ? midanger('po','Power off — cut VBUS','pwrGo(null,"'+slot+'",false)','cut power to a RUNNING watch')
+        : mi('po','Power off — cut VBUS',`pwrGo(null,'${slot}',false)`))
+    : mi('ch','Power on',`pwrGo(null,'${slot}',true)`);
+  openMenu(ev,menuIdent(codename,slot,'port')+
+    `<div class="menu-hd">the PORT, not the watch &mdash; VBUS only</div>`+
+    grpBox(cut+mi('rb','Cycle power',`doCy('${slot}')`,noSw,'this port cannot switch its own power'))+
+    `<div class="menu-hd heldnote">cutting VBUS does not stop a running watch &mdash; it keeps draining on battery. Halt it from the power dot first.</div>`);
+}
+function pwrGo(el,slot,want){
+  if(el&&el.classList.contains('pending'))return;
+  const on=(want!==undefined)?want:(el?!el.classList.contains('tgl-on'):true);
+  if(el)el.classList.add('pending');
   fetch((on?'/api/on/':'/api/off/')+_api(slot),{method:'POST'}).then(r=>r.json()).then(d=>{
-    if(d.confirmed===false){flashFail(el);_pwrFlash(slot);return;}
+    if(d.confirmed===false){if(el)flashFail(el);_pwrFlash(slot);return;}
     setTimeout(refresh,700);
-  }).catch(()=>flashFail(el));
-  setTimeout(()=>{try{el.classList.remove('pending');}catch(e){}},8000);
+  }).catch(()=>{if(el)flashFail(el);});
+  setTimeout(()=>{try{if(el)el.classList.remove('pending');}catch(e){}},8000);
 }
 function connPill(serial){
   // The connection cell carries the id; flash the badge INSIDE it, not the whole
@@ -1166,7 +1187,7 @@ function render(data){
             :`<span class="cbadge" title="seen in sysfs only — the adb server does not list it">${esc(p.dev_link)}</span>`;
         const pwrCls=p.power===true?'tgl tgl-on':'tgl tgl-off';
         const pwrLbl=p.power===true?'<span class="dot don"></span>ON':'<span class="dot doff"></span>OFF';
-        const pwrFn=`pwrGo(this,'${slot}')`;
+        const pwrFn=`pwrMenu(event,'${slot}',${p.power===true},${p.smart===false},'${jsq(p.codename||'')}',false)`;
         // Onboard is a fill pill: idle it's a green action button; while onboarding
         // it fills left→right over the expected duration (the timed fill primitive).
         // While onboarding the pill is CLICKABLE (click again to stop — it never
@@ -1256,7 +1277,9 @@ function render(data){
         }else{
           bat=mkbatCell(p,lo,hi);
         }
-        const pwrFn=`pwrGo(this,'${slot}')`;
+        // `live` marks a watch that is UP: cutting its VBUS leaves it running on
+        // battery where the host cannot see it, so that item arms first.
+        const pwrFn=`pwrMenu(event,'${slot}',${p.power===true},${noSw},'${jsq(p.codename||'')}',${p.adb==='device'||p.adb==='ssh'})`;
         const pwrCls=p.power===true?'tgl tgl-on':'tgl tgl-off';
         const pwrLbl=p.power===true?'<span class="dot don"></span>ON':'<span class="dot doff"></span>OFF';
         const isRef=refreshing.has(slot);
