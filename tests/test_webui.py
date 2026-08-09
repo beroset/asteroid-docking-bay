@@ -392,8 +392,10 @@ def test_refresh_button_powers_only_an_off_switchable_port(tmp_path):
     assert r.returncode == 0, f"harness failed:\n{r.stderr[:600]}"
     html = json.loads(r.stdout.strip().splitlines()[-1])
 
-    # Refresh folded into the Execute menu; needPwr is the last menuExecute arg.
-    flags = dict(re.findall(r"menuExecute\(event,'([^']+)',[^)]*,(true|false)\)", html))
+    # Refresh folded into the Execute menu. needPwr is the second-to-last
+    # menuExecute arg since the menu gained a codename for its identity strip.
+    flags = dict(re.findall(
+        r"menuExecute\(event,'([^']+)',[^)]*,(true|false),'[^']*'\)", html))
     assert flags, f"no menuExecute wiring found in rendered rows:\n{html[:400]}"
     # skipjack is powered on -> refresh must stay a plain re-read
     assert flags.get("1-2:1") == "false", (
@@ -2068,3 +2070,69 @@ def test_a_charge_countdown_updates_inside_the_pill(tmp_path):
         "the countdown replaced the whole battery cell — the pill is destroyed"
     assert "cbadge bat" in out["html"], "the pill did not survive the tick"
     assert out["txt"] != "9m00s", "the countdown never updated"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_every_menu_names_the_watch_it_will_act_on(tmp_path):
+    """Four floating menus anchored to 24px dots across 28 dense rows is four
+    chances to command the wrong watch, and the menu itself said nothing about
+    which one it held. Each opener must lead with an identity strip."""
+    import json
+    h = tmp_path / "ident.js"
+    h.write_text(
+        _DOM_STUBS + JS +
+        "\nconst seen={};"
+        "\nopenMenu=function(ev,html){seen[Object.keys(seen).length]=html;};"
+        "\nmenuExecute({},'1-2:1',false,false,false,true,false,'S1',false,'device','',0,false,'skipjack');"
+        "\nmenuPwr({},'1-2:1',false,false,false,true,false,'skipjack');"
+        "\nmenuWear({},'1-2:1',false,'S1',0,'skipjack');"
+        "\nmenuFb({},'1-6:3',true);"
+        "\nconsole.log(JSON.stringify(seen));\nprocess.exit(0);\n")
+    r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
+    assert r.returncode == 0, f"harness failed:\n{r.stderr[:600]}"
+    out = json.loads(r.stdout.strip().splitlines()[-1])
+    assert len(out) == 4, f"expected four menus, got {len(out)}"
+
+    for i, html in out.items():
+        assert 'class="menuid"' in html, f"menu {i} opens with no identity strip"
+    for i in ("0", "1", "2"):
+        assert "skipjack" in out[i], f"menu {i} does not name the watch"
+        assert "1-2:1" in out[i], f"menu {i} does not name the slot"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_an_unmapped_bootloader_port_can_still_be_commanded(tmp_path):
+    """A watch that no longer boots far enough to be identified is the one that
+    most needs Continue boot, Recovery and a fastboot report — and an unmapped
+    row's actions were Onboard and hide, nothing else. Those commands address
+    the port by PATH, not by serial, so they work with no mapping at all.
+
+    Flash stays out on purpose: it resolves a codename from the mapping."""
+    import json
+    h = tmp_path / "fbmenu.js"
+    h.write_text(
+        _DOM_STUBS + JS +
+        "\nlet menu='';openMenu=function(ev,html){menu=html;};"
+        "\nconst btn=fbMenuBtn({adb:'fastboot',power:true},'1-6:3');"
+        "\nconst none=fbMenuBtn({adb:null,power:true},'1-6:3');"
+        "\nmenuFb({},'1-6:3',true);"
+        "\nconsole.log(JSON.stringify({btn:btn,none:none,menu:menu}));"
+        "\nprocess.exit(0);\n")
+    r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
+    assert r.returncode == 0, f"harness failed:\n{r.stderr[:600]}"
+    out = json.loads(r.stdout.strip().splitlines()[-1])
+
+    assert "menuFb(event,'1-6:3'" in out["btn"], \
+        "a bootloader watch on an unmapped port still has no way in"
+    assert out["none"] == "", "a port with no fastboot device grew a stray button"
+    for item in ("Continue boot", "Recovery", "Fastboot report"):
+        assert item in out["menu"], f"{item!r} unreachable on an unmapped port"
+    assert "Flash" not in out["menu"], \
+        "Flash needs a codename mapping and cannot run on an unmapped port"
+
+    # And it must be WIRED into the empty row, not merely defined — asserting
+    # on the builder alone lets the button vanish from the render unnoticed,
+    # which is exactly how .btn-ref's pulse died.
+    assert JS.count("fbMenuBtn(") >= 2, "fbMenuBtn is defined but never called"
+    assert "+fbMenuBtn(p,slot)+" in JS, \
+        "the unmapped row no longer renders its bootloader menu button"

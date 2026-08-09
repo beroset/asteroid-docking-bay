@@ -125,6 +125,12 @@ _WEB_TEMPLATE = """\
     .menu-item.info{color:#58a6ff}
     .menu-sep{height:1px;background:#30363d;margin:4px 2px}
     .menu-hd{padding:3px 10px 5px;font-size:10px;color:#6e7681}
+    /* Every floating menu names what it will act on. Four menus anchored to
+       24px dots across 28 dense rows is four chances to command the wrong
+       watch, and the menu itself said nothing about which one it held. */
+    .menuid{padding:6px 10px 7px;margin:-5px -5px 5px;background:#0d1117;
+      border-bottom:1px solid #30363d;border-radius:7px 7px 0 0;font-size:11px;color:#8b949e}
+    .menuid b{color:#c9d1d9;font-weight:400}
     /* Wear is the one item that stays a button — pink, the off-rig action. */
     .menu-wear{display:inline-flex;align-items:center;height:var(--pill-h);margin:3px 10px;padding:0 12px;border-radius:var(--pill-r);border:1px solid #e08a9e;background:none;color:#e0a5b5;cursor:pointer;font:inherit}
     .menu-wear:hover{background:#2a1a1f}
@@ -617,7 +623,7 @@ function pdot(p){
     :'power state ambiguous — port off with no graceful-shutdown marker; could be off, or still running on battery after a raw cut')
     +' · click for power actions';
   const slot=p.slot_loc+':'+p.port;
-  const clk=`menuPwr(event,'${slot}',${p.adb==='fastboot'},${!!p.charging_active},${!!(p.drain&&p.drain.active)},${p.power===true},${p.smart===false})`;
+  const clk=`menuPwr(event,'${slot}',${p.adb==='fastboot'},${!!p.charging_active},${!!(p.drain&&p.drain.active)},${p.power===true},${p.smart===false},'${jsq(p.codename||'')}')`;
   return sdot(st==='on'?'on':st==='down'?'dim':'warn',POWERSVG,tip,clk);
 }
 // A watch under an operation lock: a long transfer owns it, and every action on
@@ -720,7 +726,7 @@ function mkstrip(p,wearH){
   if(p.codename)out+=pdot(p);
   const biClk=p.serial?`openBI('${p.serial}','${esc(p.codename||'')}',event)`:'';
   const slot=p.slot_loc+':'+p.port;
-  const wearClk=`menuWear(event,'${slot}',${!!(p.drain&&p.drain.active)},'${esc(p.serial||'')}',${p.wear?1:0})`;
+  const wearClk=`menuWear(event,'${slot}',${!!(p.drain&&p.drain.active)},'${jsq(p.serial||'')}',${p.wear?1:0},'${jsq(p.codename||'')}')`;
   // 1. wearable verdict from the last drain test; an untested watch shows a
   //    grey "?" (like the battery-graph dot is grey with no history yet).
   //    Clicking it opens the drain-test / wear actions.
@@ -1170,7 +1176,7 @@ function render(data){
           `<td>${nameCell}</td>` +
           `<td class="stats">${mkstrip(p,wearH)}</td>` +
           `<td class="dim batc">&mdash;</td>` +
-          `<td class="actc">`+onboardBtn+mkhide(slot,p.excluded)+`</td>` +
+          `<td class="actc">`+onboardBtn+fbMenuBtn(p,slot)+mkhide(slot,p.excluded)+`</td>` +
           `</tr>` +
           `<tr class="lr" id="lr-${slot}"><td colspan="8"><div class="log${busy?' show':''}" id="log-${slot}"></div></td></tr>`
         );
@@ -1251,7 +1257,7 @@ function render(data){
           `<td class="stats">${mkstrip(p,wearH)}</td>` +
           `<td class="batc" id="bat-${slot}">${bat}</td>` +
           `<td class="actc" id="act-${slot}">` +
-          `<button class="btn ex${isRef?' pulsing':''}"${p.excluded?' disabled':''} onclick="menuExecute(event,'${slot}',${isFb},${charging},${draining},${p.power===true},${noSw},'${jsq(p.serial||'')}',${wb},'${jsq(p.adb||'')}','${jsq(p.ssh_ip||'')}',${p.wear?1:0},${needPwr})" title="refresh · power/charge/drain · flash/backup · workbench · wear">menu</button>` +
+          `<button class="btn ex${isRef?' pulsing':''}"${p.excluded?' disabled':''} onclick="menuExecute(event,'${slot}',${isFb},${charging},${draining},${p.power===true},${noSw},'${jsq(p.serial||'')}',${wb},'${jsq(p.adb||'')}','${jsq(p.ssh_ip||'')}',${p.wear?1:0},${needPwr},'${jsq(p.codename||'')}')" title="refresh · power/charge/drain · flash/backup · workbench · wear">menu</button>` +
           `</td></tr>` +
           `<tr class="lr" id="lr-${slot}"><td colspan="8"><div class="log${logActive?' show':''}" id="log-${slot}"></div></td></tr>`
         );
@@ -2687,6 +2693,10 @@ function mi(cls,label,fn,dis,title){return `<button class="menu-item ${cls}"${di
 // nested submenus). Each group is a content-builder returning just its items;
 // menuExecute composes them under headers. grpHd is a header, grpBox indents a
 // group's items beneath it.
+function menuIdent(name,slot,mode){
+  const m=mode?` \u00b7 <b>${esc(mode)}</b>`:'';
+  return `<div class="menuid">${esc(name||'\u2014')} \u00b7 ${esc(slot)}${m}</div>`;
+}
 function grpHd(label){return `<div class="exgrp-hd">${label}</div>`;}
 function grpBox(items){return `<div class="exgrp">${items}</div>`;}
 function grpPower(slot,charging,draining,powered,noSw){
@@ -2756,8 +2766,9 @@ function grpFlash(slot,serial){
     mi('','Dump mmcblk0',`doDump('${serial||''}')`,!serial,'takes a full-disk backup in the background; the watch is held for the duration so nothing else disturbs the copy')+
     mi('','Restore from dump',`doRestoreDump('${slot}')`,true,'not yet implemented');
 }
-function menuExecute(ev,slot,isFb,charging,draining,powered,noSw,serial,wb,mode,sshIp,wear,needPwr){
+function menuExecute(ev,slot,isFb,charging,draining,powered,noSw,serial,wb,mode,sshIp,wear,needPwr,codename){
   openMenu(ev,
+    menuIdent(codename,slot,isFb?'fastboot':(mode==='ssh'?'SSH':(mode==='device'?'ADB':'')))+
     (!isFb&&serial?grpHd('Wear')+grpBox(wearItem(slot,wear)):'')+
     grpHd('Power')+grpBox(isFb?grpPowerFb(slot,powered):grpPower(slot,charging,draining,powered,noSw))+
     grpHd('Flashing')+grpBox(grpFlash(slot,serial))+
@@ -2772,11 +2783,28 @@ function wearItem(slot,wear){
 // Contextual mini-menus reachable from the Stats dots — the same builders as
 // the full row menu, scoped to what each dot is about. The power dot opens just
 // the Power group; the wearability dot opens Drain test + a Wear button.
-function menuPwr(ev,slot,isFb,charging,draining,powered,noSw){
-  openMenu(ev,grpHd('Power')+grpBox(isFb?grpPowerFb(slot,powered):grpPower(slot,charging,draining,powered,noSw)));
+// A watch sitting in the BOOTLOADER on a port that is not mapped to any
+// codename had no menu at all — the empty row's actions were Onboard and hide.
+// That is exactly backwards: a watch that no longer boots far enough to be
+// identified is the one that most needs Continue boot, Recovery and a fastboot
+// report, and every one of those is addressed by PORT PATH, so they work
+// without a mapping. Flash is deliberately absent: it resolves a codename from
+// the mapping and cannot run here.
+function fbMenuBtn(p,slot){
+  if(p.adb!=='fastboot')return '';
+  return `<button class="btn" onclick="menuFb(event,'${slot}',${p.power===true})" title="bootloader actions — this port is not mapped, so identify it with Onboard for the full menu">fastboot</button>`;
 }
-function menuWear(ev,slot,draining,serial,wear){
-  openMenu(ev,
+function menuFb(ev,slot,powered){
+  openMenu(ev,menuIdent('unmapped port',slot,'fastboot')+
+    grpHd('Bootloader')+grpBox(grpPowerFb(slot,powered))+
+    grpHd('Capture')+grpBox(mi('info','Fastboot report',`doFbReport('${slot}')`)));
+}
+function menuPwr(ev,slot,isFb,charging,draining,powered,noSw,codename){
+  openMenu(ev,menuIdent(codename,slot,isFb?'fastboot':'')+
+    grpHd('Power')+grpBox(isFb?grpPowerFb(slot,powered):grpPower(slot,charging,draining,powered,noSw)));
+}
+function menuWear(ev,slot,draining,serial,wear,codename){
+  openMenu(ev,menuIdent(codename,slot,'')+
     grpHd('Drain test')+grpBox(draining?mi('dr','Stop drain test',`doStopDrain('${slot}')`):mi('dr','Drain test',`doDrain('${slot}')`))+
     (serial?grpHd('Wear')+grpBox(wearItem(slot,wear)):''));
 }
