@@ -395,7 +395,7 @@ def test_refresh_button_powers_only_an_off_switchable_port(tmp_path):
     # Refresh folded into the Execute menu. needPwr is the second-to-last
     # menuExecute arg since the menu gained a codename for its identity strip.
     flags = dict(re.findall(
-        r"menuExecute\(event,'([^']+)',[^)]*,(true|false),'[^']*'\)", html))
+        r"menuExecute\(event,'([^']+)',[^)]*,(true|false),'[^']*','[^']*'\)", html))
     assert flags, f"no menuExecute wiring found in rendered rows:\n{html[:400]}"
     # skipjack is powered on -> refresh must stay a plain re-read
     assert flags.get("1-2:1") == "false", (
@@ -2136,3 +2136,41 @@ def test_an_unmapped_bootloader_port_can_still_be_commanded(tmp_path):
     assert JS.count("fbMenuBtn(") >= 2, "fbMenuBtn is defined but never called"
     assert "+fbMenuBtn(p,slot)+" in JS, \
         "the unmapped row no longer renders its bootloader menu button"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_a_held_watch_offers_no_actions_the_server_will_refuse(tmp_path):
+    """The badge existed and _refuse_if_busy existed; only the menu never
+    consulted them, so a watch held for a dump rendered a fully-enabled menu
+    and the refusal arrived as a toast AFTER the click.
+
+    Disabled with the reason, not hidden — hiding would imply the watch cannot
+    do these things, which is false."""
+    import json
+    h = tmp_path / "heldmenu.js"
+    h.write_text(
+        _DOM_STUBS + JS +
+        "\nlet menu='';openMenu=function(ev,html){menu=html;};"
+        "\nmenuExecute({},'1-2:1',false,false,false,true,false,'S1',false,'device','',0,false,'nemo','dump');"
+        "\nconst held=menu;"
+        "\nmenuExecute({},'1-2:1',false,false,false,true,false,'S1',false,'device','',0,false,'nemo','');"
+        "\nconsole.log(JSON.stringify({held:held,free:menu}));\nprocess.exit(0);\n")
+    r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
+    assert r.returncode == 0, f"harness failed:\n{r.stderr[:600]}"
+    out = json.loads(r.stdout.strip().splitlines()[-1])
+
+    assert "dump" in out["held"], "the menu does not say what holds the watch"
+    assert "refused" in out["held"], "the reason is not stated"
+    assert "disabled" in out["held"], "held actions are still clickable"
+    assert "onclick" not in out["held"], \
+        "a held watch still offers a live action the server will reject"
+
+    # The guard must not disable the menu: an unheld watch is unchanged.
+    assert "onclick" in out["free"] and "Charge" in out["free"]
+
+
+def test_the_row_passes_the_lock_to_the_menu():
+    """menuExecute can only honour the lock if the row hands it over — the whole
+    bug was a guard that existed on both sides of a value nobody passed."""
+    assert "(p.held&&p.held.kind)" in JS, \
+        "the row no longer passes the operation lock into the menu"

@@ -128,6 +128,7 @@ _WEB_TEMPLATE = """\
     /* Every floating menu names what it will act on. Four menus anchored to
        24px dots across 28 dense rows is four chances to command the wrong
        watch, and the menu itself said nothing about which one it held. */
+    .menu-hd.heldnote{color:#e3b341;white-space:normal;max-width:230px;line-height:1.45}
     .menuid{padding:6px 10px 7px;margin:-5px -5px 5px;background:#0d1117;
       border-bottom:1px solid #30363d;border-radius:7px 7px 0 0;font-size:11px;color:#8b949e}
     .menuid b{color:#c9d1d9;font-weight:400}
@@ -1257,7 +1258,7 @@ function render(data){
           `<td class="stats">${mkstrip(p,wearH)}</td>` +
           `<td class="batc" id="bat-${slot}">${bat}</td>` +
           `<td class="actc" id="act-${slot}">` +
-          `<button class="btn ex${isRef?' pulsing':''}"${p.excluded?' disabled':''} onclick="menuExecute(event,'${slot}',${isFb},${charging},${draining},${p.power===true},${noSw},'${jsq(p.serial||'')}',${wb},'${jsq(p.adb||'')}','${jsq(p.ssh_ip||'')}',${p.wear?1:0},${needPwr},'${jsq(p.codename||'')}')" title="refresh · power/charge/drain · flash/backup · workbench · wear">menu</button>` +
+          `<button class="btn ex${isRef?' pulsing':''}"${p.excluded?' disabled':''} onclick="menuExecute(event,'${slot}',${isFb},${charging},${draining},${p.power===true},${noSw},'${jsq(p.serial||'')}',${wb},'${jsq(p.adb||'')}','${jsq(p.ssh_ip||'')}',${p.wear?1:0},${needPwr},'${jsq(p.codename||'')}','${jsq((p.held&&p.held.kind)||'')}')" title="refresh · power/charge/drain · flash/backup · workbench · wear">menu</button>` +
           `</td></tr>` +
           `<tr class="lr" id="lr-${slot}"><td colspan="8"><div class="log${logActive?' show':''}" id="log-${slot}"></div></td></tr>`
         );
@@ -2766,7 +2767,19 @@ function grpFlash(slot,serial){
     mi('','Dump mmcblk0',`doDump('${serial||''}')`,!serial,'takes a full-disk backup in the background; the watch is held for the duration so nothing else disturbs the copy')+
     mi('','Restore from dump',`doRestoreDump('${slot}')`,true,'not yet implemented');
 }
-function menuExecute(ev,slot,isFb,charging,draining,powered,noSw,serial,wb,mode,sshIp,wear,needPwr,codename){
+function menuExecute(ev,slot,isFb,charging,draining,powered,noSw,serial,wb,mode,sshIp,wear,needPwr,codename,held){
+  // A held watch is refused by the server for every port op, but the menu did
+  // not know: it rendered fully enabled and the refusal arrived as a toast
+  // AFTER the click. The badge existed and the guard existed; only the menu
+  // never consulted them. Say it up front instead, and disable rather than
+  // hide — hiding would imply the watch cannot do these things, which is false.
+  if(held){
+    openMenu(ev,menuIdent(codename,slot,'held: '+held)+
+      `<div class="menu-hd heldnote">held for a ${esc(held)} — actions on this watch are refused until it ends or expires</div>`+
+      grpBox(mi('','Charge',null,true,'held')+mi('','Power off',null,true,'held')+
+             mi('','Reboot',null,true,'held')+mi('','Flash / restore',null,true,'held')));
+    return;
+  }
   openMenu(ev,
     menuIdent(codename,slot,isFb?'fastboot':(mode==='ssh'?'SSH':(mode==='device'?'ADB':'')))+
     (!isFb&&serial?grpHd('Wear')+grpBox(wearItem(slot,wear)):'')+
