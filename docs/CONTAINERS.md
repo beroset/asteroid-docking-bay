@@ -128,6 +128,7 @@ Deliberately mirrors the existing `/api/*` routes and module seams — the
 | `onboard.sweep_prepare` | power all sockets down before an onboard sweep |
 | `onboard.sweep_run` | streaming: onboard every equipped socket, one at a time |
 | `onboard.sweep_skip` | skip the running sweep's current port (boot-wait aborts) |
+| `onboard.sweep_restore` | power the sweep's sockets back on after an aborted sweep |
 | `watch.bootchart` | systemd boot accounting: summary + per-service activation spans |
 | `watch.diag` | kernel diagnostics: suspend blockers, freq residency, eMMC wear, failed units |
 | `watch.wake_set` | MCE wake gestures: doubletap policy, wrist/tilt detection |

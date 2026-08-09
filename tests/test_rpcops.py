@@ -112,7 +112,7 @@ def test_registered_ops_are_the_documented_contract():
         "workbench.start", "workbench.stop", "wear.set",
         "drain.start", "drain.stop", "drain.history",
         "flash.start", "onboard.start", "onboard.sweep_prepare", "onboard.sweep_run",
-        "onboard.sweep_skip",
+        "onboard.sweep_skip", "onboard.sweep_restore",
     }
 
 

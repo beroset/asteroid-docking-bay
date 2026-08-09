@@ -2412,6 +2412,35 @@ def _onboard_sweep_prepare(args):
             "held": len(held), "held_detail": _describe_held_ports(held)}
 
 
+@DISPATCH.op("onboard.sweep_restore")
+def _onboard_sweep_restore(args):
+    """Power the sweep's sockets back ON after an aborted sweep.
+
+    sweep_prepare cuts VBUS on every leaf port. Until this existed there was no
+    way back: declining to run the sweep left the whole rig dark, and a watch
+    that loses VBUS without a delivered poweroff keeps running on battery,
+    invisible to the host — so an abort quietly started draining the fleet.
+
+    Serialized like every other bulk power path: one port at a time, never the
+    whole rig at once.
+    """
+    with _config_lock:
+        cfg = load_config()
+    ports = _sweep_leaf_ports(cfg)
+    held = _sweep_held_ports(cfg, ports)
+    n = 0
+    for loc, port in ports:
+        if (loc, port) in held:
+            continue                      # never touched, nothing to restore
+        try:
+            uhubctl_set_power(loc, port, True)
+            n += 1
+        except Exception as e:
+            log.debug("sweep_restore %s.%s: %s", loc, port, e)
+    log.info("sweep restore: powered %d socket(s) back on", n)
+    return {"ok": True, "ports": n}
+
+
 @DISPATCH.op("onboard.sweep_skip")
 def _onboard_sweep_skip(args):
     """Skip the running sweep's current port: its boot-wait aborts on the next

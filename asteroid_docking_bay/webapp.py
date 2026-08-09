@@ -492,6 +492,13 @@ def serve(args, cfg: dict):
         _bust_status_cache()
         return json.dumps(d)
 
+    @app.post("/api/onboard-sweep/restore")
+    def api_sweep_restore():
+        resp.content_type = "application/json"
+        d = _call("onboard.sweep_restore")
+        _bust_status_cache()
+        return json.dumps(d)
+
     @app.get("/api/onboard-sweep/run")
     def api_sweep_run():
         _event_stream_headers()

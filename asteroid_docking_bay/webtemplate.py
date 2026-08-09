@@ -135,6 +135,13 @@ _WEB_TEMPLATE = """\
     /* Every floating menu names what it will act on. Four menus anchored to
        24px dots across 28 dense rows is four chances to command the wrong
        watch, and the menu itself said nothing about which one it held. */
+    .reg-foot{border-top:1px solid #30363d;padding:12px 14px;background:#0d1117;border-radius:0 0 8px 8px}
+    .sweep{font-size:12px;line-height:1.5}
+    .sweep .dim{display:block;margin-top:4px;max-width:60ch}
+    .sweep-acts{display:flex;gap:8px;margin-top:9px}
+    .sweep-arm{border-color:#d29922!important;color:#d29922!important}
+    .sweep.armed{border-left:3px solid #f85149;padding-left:10px}
+    .sweep.armed b{color:#f85149}
     .menu-hd.heldnote{color:#e3b341;white-space:normal;max-width:230px;line-height:1.45}
     .menuid{padding:6px 10px 7px;margin:-5px -5px 5px;background:#0d1117;
       border-bottom:1px solid #30363d;border-radius:7px 7px 0 0;font-size:11px;color:#8b949e}
@@ -503,7 +510,7 @@ _WEB_TEMPLATE = """\
   <div id="alert" class="alert"></div>
   <div class="hdr">
   <h1><span class="hdim">&#x2728;  &#x22C6;  &#x02DA; </span>&#x2726;<span class="htxt">  asteroid-docking-bay  </span>&#x2726;<span class="hdim"> &#x02DA;  &#x22C6;  &#x2728;</span></h1>
-  <p class="meta"><a href="#" id="histlink" onclick="toggleHistory();return false" style="color:#388bfd;text-decoration:none">show drain history</a> &nbsp;&middot;&nbsp; <a href="#" id="hidlink" onclick="toggleShowHidden();return false" style="color:#6e7681;text-decoration:none">show all ports</a> &nbsp;&middot;&nbsp; <a href="#" id="usbpreflink" onclick="toggleUsbPref();return false" style="color:#6e7681;text-decoration:none" title="Fleet USB-mode preference — how a watch that comes up on its own in the wrong mode is auto-corrected:&#10;&#10;• prefer ADB (standard): a stray SSH watch is switched back to adb — faster, and how a stock flash enumerates&#10;• prefer SSH: a stray watch is given its own SSH IP so several can run SSH at once — needed for WiFi/workbench work, but updates are slower&#10;&#10;A watch you switched by hand is left alone. Click to switch.">prefer ADB</a> &nbsp;&middot;&nbsp; <a href="#" id="reglink" onclick="openRegistry();return false" style="color:#6e7681;text-decoration:none" title="the Fleet Registry — every watch the rig has ever seen (docked or in orbit), its identity, first/last sighting, and a Log of what changed (kernel, Qt, MACs, resolution) over time">fleet registry</a> &nbsp;&middot;&nbsp; <a href="#" id="btlink" onclick="openBtScan();return false" style="color:#6e7681;text-decoration:none" title="scan for AsteroidOS watches over Bluetooth (they advertise their codename) and pair them — the first rung of Bluetooth in the Orbit port">scan bt</a> &nbsp;&middot;&nbsp; <a href="#" id="sweeplink" onclick="doOnboardSweep();return false" style="color:#3fb950;text-decoration:none" title="Onboard sweep: power every socket off, then (once you've equipped them all with watches) onboard them one at a time — detect, register to the fleet, PPPS-test, clean power-off — no ADB flood, no brownout.">onboard sweep</a></p>
+  <p class="meta"><a href="#" id="histlink" onclick="toggleHistory();return false" style="color:#388bfd;text-decoration:none">show drain history</a> &nbsp;&middot;&nbsp; <a href="#" id="hidlink" onclick="toggleShowHidden();return false" style="color:#6e7681;text-decoration:none">show all ports</a> &nbsp;&middot;&nbsp; <a href="#" id="usbpreflink" onclick="toggleUsbPref();return false" style="color:#6e7681;text-decoration:none" title="Fleet USB-mode preference — how a watch that comes up on its own in the wrong mode is auto-corrected:&#10;&#10;• prefer ADB (standard): a stray SSH watch is switched back to adb — faster, and how a stock flash enumerates&#10;• prefer SSH: a stray watch is given its own SSH IP so several can run SSH at once — needed for WiFi/workbench work, but updates are slower&#10;&#10;A watch you switched by hand is left alone. Click to switch.">prefer ADB</a> &nbsp;&middot;&nbsp; <a href="#" id="reglink" onclick="openRegistry();return false" style="color:#6e7681;text-decoration:none" title="the Fleet Registry — every watch the rig has ever seen (docked or in orbit), its identity, first/last sighting, and a Log of what changed (kernel, Qt, MACs, resolution) over time">fleet registry</a> &nbsp;&middot;&nbsp; <a href="#" id="btlink" onclick="openBtScan();return false" style="color:#6e7681;text-decoration:none" title="scan for AsteroidOS watches over Bluetooth (they advertise their codename) and pair them — the first rung of Bluetooth in the Orbit port">scan bt</a></p>
   <div id="sweeplog" style="display:none;position:fixed;right:14px;bottom:14px;width:min(560px,92vw);max-height:60vh;overflow:auto;background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:10px 12px;font:12px monospace;color:#c9d1d9;white-space:pre-wrap;z-index:300;box-shadow:0 6px 30px rgba(0,0,0,.6)"><a href="#" onclick="document.getElementById('sweeplog').style.display='none';return false" style="float:right;color:#6e7681">close</a><a href="#" onclick="sweepSkip();return false" style="float:right;color:#d29922;margin-right:12px" title="give up on the current port's boot-wait and move to the next socket">skip port</a><b style="color:#3fb950">onboard sweep</b>\\n<span id="sweeplogbody"></span></div>
   </div>
   <div class="tblwrap">
@@ -2653,7 +2660,65 @@ function renderRegistry(d){
     `<div class="reg-body">`+(ws.length
       ?`<table class="reg-t"><thead><tr><th>codename</th><th>serial</th><th>last seen</th><th>latest</th><th>log</th></tr></thead><tbody>${rows}</tbody></table>`
       :'<p class="dim" style="padding:16px">No watches on record yet — connect or launch one and it appears here.</p>')+
-    `</div>`;
+    `</div>`+
+    // Fleet-scope ACTIONS live here, not in the top row. The top row carries
+    // persistent UI state (view toggles, the USB-mode policy); a sweep is a
+    // rare one-shot operation and does not belong beside them.
+    `<div class="reg-foot">${sweepControl()}</div>`;
+}
+// The sweep's whole lifecycle on one control.
+//
+// It used to be a link that fired and forgot. Declining its SECOND confirm
+// returned after /prepare had already cut VBUS on every socket, so the rig sat
+// fully dark with nothing on screen admitting it — and on this rig a watch that
+// loses VBUS without a delivered poweroff keeps running on battery, invisible.
+// That is the sturgeon-to-0% failure, fleet-wide, reachable by pressing Cancel.
+//
+// So the control carries state instead: idle -> armed (sockets are OFF, with a
+// way back) -> running. No modal can express "the rig is dark right now".
+let sweepState='idle',sweepPorts=0,sweepHeld='';
+function sweepControl(){
+  if(sweepState==='armed')
+    return `<div class="sweep armed"><b>&#9888; sweep armed &mdash; all ${sweepPorts} sockets are OFF</b>`+
+      (sweepHeld?`<div class="dim">${esc(sweepHeld)}</div>`:'')+
+      `<div class="dim">Equip every socket with a watch, then run it. Watches left unpowered keep their charge; they are not draining.</div>`+
+      `<div class="sweep-acts"><button class="btn" onclick="sweepRun()">Run the sweep</button>`+
+      `<button class="btn" onclick="sweepRestore()">Restore power &mdash; cancel</button></div></div>`;
+  if(sweepState==='running')
+    return `<div class="sweep"><b>sweeping&hellip;</b> <span class="dim">one socket at a time</span>`+
+      `<div class="sweep-acts"><button class="btn" onclick="sweepSkip()">Skip this port</button></div></div>`;
+  return `<div class="sweep"><button class="btn sweep-arm" onclick="sweepArm()">&#9888; Onboard sweep</button>`+
+    `<div class="dim">Powers every socket off, then onboards them one at a time. You confirm once the sockets are equipped.</div></div>`;
+}
+function sweepPaint(){const p=document.getElementById('reg');if(p&&p.style.display!=='none')renderRegistry();}
+function sweepArm(){
+  toast('powering all sockets off\u2026');
+  fetch('/api/onboard-sweep/prepare',{method:'POST'}).then(r=>r.json()).then(d=>{
+    if(!d.ok){toast('sweep prepare failed');return;}
+    sweepState='armed';sweepPorts=d.ports;
+    sweepHeld=d.held?`${d.held} socket(s) left POWERED and skipped \u2014 ${d.held_detail}`:'';
+    sweepPaint();refresh();
+  }).catch(()=>toast('sweep prepare failed'));
+}
+function sweepRestore(){
+  // The way out of the armed state. Without this, aborting left every socket
+  // dark and every watch quietly on battery.
+  toast('restoring port power\u2026');
+  fetch('/api/onboard-sweep/restore',{method:'POST'}).then(r=>r.json()).then(d=>{
+    toast(d.ok?`power restored to ${d.ports} socket(s)`:'restore failed \u2014 power ports on by hand');
+    sweepState='idle';sweepPaint();refresh();
+  }).catch(()=>{toast('restore failed \u2014 power ports on by hand');sweepState='idle';sweepPaint();});
+}
+function sweepRun(){
+  sweepState='running';sweepPaint();
+  const box=document.getElementById('sweeplog'),body=document.getElementById('sweeplogbody');
+  body.textContent='';box.style.display='block';
+  const es=new EventSource('/api/onboard-sweep/run');
+  es.onmessage=ev=>{body.textContent+=ev.data+'\\n';box.scrollTop=box.scrollHeight};
+  es.addEventListener('done',()=>{body.textContent+='\\n\\u2014 finished \\u2014\\n';es.close();
+    sweepState='idle';sweepPaint();refresh();});
+  es.onerror=()=>{body.textContent+='\\n(stream closed)\\n';es.close();
+    sweepState='idle';sweepPaint();refresh();};
 }
 function toggleRegLog(serial){_regOpen[serial]=!_regOpen[serial];renderRegistry();}
 // ── Bluetooth scan + pair (Orbit port, rung 1-2) ─────────────────────────────
@@ -3119,24 +3184,6 @@ function sweepSkip(){
   fetch('/api/onboard-sweep/skip',{method:'POST'}).then(r=>r.json())
     .then(d=>toast(d.ok?'skipping port…':(d.error||'skip failed')))
     .catch(()=>toast('skip failed'));
-}
-function doOnboardSweep(){
-  if(!confirm('Onboard sweep: I will power ALL sockets OFF now. Then equip every socket with a watch and confirm, and I onboard them one at a time.'))return;
-  toast('powering all sockets off…');
-  fetch('/api/onboard-sweep/prepare',{method:'POST'}).then(r=>r.json()).then(d=>{
-    if(!d.ok){toast('sweep prepare failed');return;}
-    // Name any socket left powered because a long operation owns its watch —
-    // the sweep steps around those, and the operator should know BEFORE they
-    // start equipping sockets, not discover it in the log afterwards.
-    const heldNote=d.held?('\\n\\n'+d.held+' socket(s) were left POWERED and will be skipped — a long operation owns them:\\n'+d.held_detail):'';
-    if(!confirm('All '+d.ports+' sockets are powered OFF. Equip every socket with a watch NOW, then click OK to run the sweep (one port at a time — this takes a while).'+heldNote)){refresh();return;}
-    const box=document.getElementById('sweeplog'),body=document.getElementById('sweeplogbody');
-    body.textContent='';box.style.display='block';
-    const es=new EventSource('/api/onboard-sweep/run');
-    es.onmessage=ev=>{body.textContent+=ev.data+'\\n';box.scrollTop=box.scrollHeight};
-    es.addEventListener('done',()=>{body.textContent+='\\n\\u2014 finished \\u2014\\n';es.close();refresh()});
-    es.onerror=()=>{body.textContent+='\\n(stream closed)\\n';es.close();refresh()};
-  }).catch(()=>toast('sweep prepare failed'));
 }
 function doRemap(c){
   // Clicking while it's already onboarding STOPS it — onboarding never gives up

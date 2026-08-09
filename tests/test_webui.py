@@ -2255,3 +2255,51 @@ def test_every_wipe_is_armed_and_none_is_a_bare_click():
     # And the old unguarded call must be gone.
     assert "doFlV(" not in src, \
         "doFlV's confirm is superseded by arming; leaving both is two mechanisms"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_the_sweep_can_be_aborted_without_leaving_the_rig_dark(tmp_path):
+    """THE TRAP: declining the sweep's second confirm returned after /prepare
+    had already cut VBUS on every socket, so the rig sat fully dark with
+    nothing on screen admitting it — and a watch that loses VBUS without a
+    delivered poweroff keeps running on battery, invisible to the host. That is
+    the sturgeon-to-0% failure, fleet-wide, reachable by pressing Cancel.
+
+    No modal can express "the rig is dark right now". The control carries the
+    state instead, and offers the way back."""
+    import json
+    h = tmp_path / "sweep.js"
+    h.write_text(
+        _DOM_STUBS + JS +
+        "\nconst idle=sweepControl();"
+        "\nsweepState='armed';sweepPorts=13;"
+        "\nconst armed=sweepControl();"
+        "\nsweepState='running';"
+        "\nconst running=sweepControl();"
+        "\nconsole.log(JSON.stringify({idle,armed,running}));\nprocess.exit(0);\n")
+    r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
+    assert r.returncode == 0, f"harness failed:\n{r.stderr[:600]}"
+    out = json.loads(r.stdout.strip().splitlines()[-1])
+
+    assert "sweepArm()" in out["idle"], "no way to start a sweep"
+    # The armed state must SAY the rig is down and offer a way out.
+    assert "sockets are OFF" in out["armed"], \
+        "the armed state does not admit that every socket is powered down"
+    assert "13" in out["armed"], "the armed state does not say how many"
+    assert "sweepRestore()" in out["armed"], \
+        "no way back from armed — this is the trap that drained the fleet"
+    assert "sweepRun()" in out["armed"]
+    assert "sweepSkip()" in out["running"]
+
+    # And the old fire-and-forget path is gone for good.
+    assert "doOnboardSweep" not in JS, "the fire-and-forget sweep is back"
+
+
+def test_the_sweep_left_the_status_row_for_the_registry():
+    """The top row carries persistent UI state — view toggles and the USB-mode
+    policy. A sweep is a rare one-shot operation and does not belong beside
+    them; it lives with the other fleet-scope surface, the registry panel."""
+    assert 'id="sweeplink"' not in _WEB_TEMPLATE, \
+        "the sweep is back in the status row"
+    assert "sweepControl()" in _WEB_TEMPLATE and 'class="reg-foot"' in _WEB_TEMPLATE, \
+        "the registry panel does not host the sweep"
