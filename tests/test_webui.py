@@ -372,39 +372,16 @@ def test_reconcile_keeps_both_the_watch_row_and_its_log_row(tmp_path):
     assert out["reused"], "an unchanged row was rebuilt — its thumbnail would reload"
 
 
-@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
-def test_refresh_button_powers_only_an_off_switchable_port(tmp_path):
-    """The refresh button doubles as "power on and identify". A watch plugged
-    into a powered-down port is invisible to adb, so refresh alone left the row
-    showing the previous occupant forever — the button has to raise VBUS first.
-    It must do that only where power is switchable and not excluded, and must
-    NOT re-power a port that is already on (that would be a pointless write on
-    every ordinary refresh)."""
-    import json
-    h = tmp_path / "refresh.js"
-    h.write_text(_DOM_CAPTURE + JS + global_simple() +
-                 f"\nconst S={json.dumps(_SAMPLE)};render(S);"
-                 # Only the rendered rows matter here; reading them alone also
-                 # avoids the starfield backdrop bloating (and mangling) the dump.
-                 "console.log(JSON.stringify(global.__els['tb'].innerHTML));"
-                 "\nprocess.exit(0);\n")
-    r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
-    assert r.returncode == 0, f"harness failed:\n{r.stderr[:600]}"
-    html = json.loads(r.stdout.strip().splitlines()[-1])
+def test_the_dead_menu_parameter_is_gone():
+    """needPwr was computed on every row, threaded through menuExecute and
+    declared in its signature — and never read. It survived because a test
+    asserted its VALUE in the rendered markup, so the argument looked covered
+    while validating a no-op; the behaviour it was named for ("refresh powers
+    an off switchable port") lives in the backend onboard op.
 
-    # Refresh folded into the Execute menu. needPwr is the second-to-last
-    # menuExecute arg since the menu gained a codename for its identity strip.
-    flags = dict(re.findall(
-        r"menuExecute\(event,'([^']+)',[^)]*,(true|false),'[^']*','[^']*'\)", html))
-    assert flags, f"no menuExecute wiring found in rendered rows:\n{html[:400]}"
-    # skipjack is powered on -> refresh must stay a plain re-read
-    assert flags.get("1-2:1") == "false", (
-        f"refresh on an already-powered port asks to power it again: {flags}")
-    # bass and casio are switchable but off -> refresh must raise power
-    assert flags.get("1-2:2") == "true", (
-        f"refresh on an off switchable port does not power it — a watch "
-        f"plugged in while the port was down stays unidentifiable: {flags}")
-    assert flags.get("1-2:4") == "true", f"off port 4 not wired to power: {flags}"
+    It also made the menu's arity a moving target: three separate tests had to
+    chase it as arguments were added around it."""
+    assert "needPwr" not in _WEB_TEMPLATE, "the dead parameter is back"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
@@ -802,10 +779,10 @@ def test_execute_menu_is_ordered_by_consequence(tmp_path):
           "({left:0,right:0,top:0,bottom:0})}}")
     h.write_text(_DOM_CAPTURE + JS +
                  f"\nmenuExecute({ev},'1-2:1',false,false,false,true,false,"
-                 "'S9',false,'device','192.168.13.37',0,true,'skipjack','');"
+                 "'S9',false,'device','192.168.13.37',0,'skipjack','');"
                  "const on=global.__els['menu'].innerHTML;"
                  f"menuExecute({ev},'1-2:1',true,false,false,true,false,"
-                 "'S9',false,'fastboot','',0,true,'skipjack','');"
+                 "'S9',false,'fastboot','',0,'skipjack','');"
                  "const fb=global.__els['menu'].innerHTML;"
                  "console.log(JSON.stringify({on,fb}));\nprocess.exit(0);\n")
     r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
@@ -857,7 +834,7 @@ def test_onboard_is_the_one_reidentify_path(tmp_path):
     h = tmp_path / "ri.js"
     h.write_text(_DOM_CAPTURE + JS +
                  f"\nmenuExecute({ev},'1-2:1',false,false,false,true,false,"
-                 "'S9',false,'device','192.168.13.37',0,true,'skipjack','');"
+                 "'S9',false,'device','192.168.13.37',0,'skipjack','');"
                  "console.log(global.__els['menu'].innerHTML);\nprocess.exit(0);\n")
     r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
     assert r.returncode == 0, r.stderr[:400]
@@ -2202,9 +2179,9 @@ def test_a_held_watch_offers_no_actions_the_server_will_refuse(tmp_path):
     h.write_text(
         _DOM_STUBS + JS +
         "\nlet menu='';openMenu=function(ev,html){menu=html;};"
-        "\nmenuExecute({},'1-2:1',false,false,false,true,false,'S1',false,'device','',0,false,'nemo','dump');"
+        "\nmenuExecute({},'1-2:1',false,false,false,true,false,'S1',false,'device','',0,'nemo','dump');"
         "\nconst held=menu;"
-        "\nmenuExecute({},'1-2:1',false,false,false,true,false,'S1',false,'device','',0,false,'nemo','');"
+        "\nmenuExecute({},'1-2:1',false,false,false,true,false,'S1',false,'device','',0,'nemo','');"
         "\nconsole.log(JSON.stringify({held:held,free:menu}));\nprocess.exit(0);\n")
     r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
     assert r.returncode == 0, f"harness failed:\n{r.stderr[:600]}"
@@ -2477,9 +2454,9 @@ def test_power_lives_on_the_dot_not_in_the_row_menu(tmp_path):
         _DOM_STUBS + JS +
         "\nlet menu='';openMenu=function(ev,html){menu=html;};"
         "\nconst ev={stopPropagation(){}};"
-        "\nmenuExecute(ev,'1-2:1',false,false,false,true,false,'S1',false,'device','',0,false,'skipjack','');"
+        "\nmenuExecute(ev,'1-2:1',false,false,false,true,false,'S1',false,'device','',0,'skipjack','');"
         "\nconst adb=menu;"
-        "\nmenuExecute(ev,'1-2:1',true,false,false,true,false,'S1',false,'fastboot','',0,false,'skipjack','');"
+        "\nmenuExecute(ev,'1-2:1',true,false,false,true,false,'S1',false,'fastboot','',0,'skipjack','');"
         "\nconst fb=menu;"
         "\nmenuPwr(ev,'1-2:1',false,false,false,true,false,'skipjack');"
         "\nconsole.log(JSON.stringify({adb:adb,fb:fb,dot:menu}));\nprocess.exit(0);\n")
@@ -2488,8 +2465,13 @@ def test_power_lives_on_the_dot_not_in_the_row_menu(tmp_path):
     out = json.loads(r.stdout.strip().splitlines()[-1])
 
     # Gone from the booted row menu...
-    for item in ("Charge", "Drain test", "Power off", "Reboot", "Bootloader"):
+    # Charge and the reboot family stay on the dot. The DRAIN test deliberately
+    # does not: it takes a watch out of service for hours to produce a wear
+    # verdict, which is workbench work, not a situational power action.
+    for item in ("Charge", "Power off", "Reboot", "Bootloader"):
         assert item not in out["adb"], f"{item!r} is duplicated in the row menu"
+    assert "Drain test" in out["adb"], "the drain test lost its Workbench home"
+    assert "Drain test" not in out["dot"], "the drain test is still on the power dot"
     # ...still on the dot, which is where it belongs.
     for item in ("Charge", "Reboot", "Bootloader"):
         assert item in out["dot"], f"the power dot lost {item!r}"
@@ -2532,3 +2514,30 @@ def test_amber_means_only_attention():
     # What KEEPS amber is only ever "something needs attention".
     for sel in (".alert", ".scrn", ".sdot.warn"):
         assert AMBER in rule(sel), f"{sel} should stay amber — it is a real warning"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_the_wanze_item_reflects_what_is_on_the_watch(tmp_path):
+    """One item, both directions: Deploy when the probe is absent, Remove when
+    it is already on the watch. A button that always says "deploy" makes the
+    fleet's most easily-forgotten background job invisible once it is running."""
+    import json
+    h = tmp_path / "wz.js"
+    h.write_text(
+        _DOM_STUBS + JS +
+        "\nconst absent=grpWorkbench('1-2:1','S9',false,'device','',false,false,false);"
+        "\nconst present=grpWorkbench('1-2:1','S9',false,'device','',false,false,true);"
+        "\nconsole.log(JSON.stringify({absent,present}));\nprocess.exit(0);\n")
+    r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
+    assert r.returncode == 0, f"harness failed:\n{r.stderr[:600]}"
+    out = json.loads(r.stdout.strip().splitlines()[-1])
+
+    assert "Deploy wanze" in out["absent"] and "Remove wanze" not in out["absent"]
+    assert "Remove wanze" in out["present"] and "Deploy wanze" not in out["present"]
+    assert "doWanze('S9',0)" in out["absent"], "deploy does not install"
+    assert "doWanze('S9',1)" in out["present"], "remove does not un-deploy"
+
+    # Both live in Workbench beside the drain test — the two long jobs that
+    # occupy a watch rather than change its power state.
+    for html in (out["absent"], out["present"]):
+        assert "Drain test" in html and "Checkout" in html

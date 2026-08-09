@@ -1241,10 +1241,6 @@ function render(data){
         const logActive=!!(srcs[slot]||p.flashing);
         const busy=!!(logActive||charging||draining||wb);
         const noSw=p.smart===false;
-        // Refresh doubles as "power on and identify" only where that is both
-        // possible and wanted: a switchable port that is currently off and not
-        // excluded (excluded ports are opted out of automatic power entirely).
-        const needPwr=(p.power!==true&&!noSw&&!p.excluded);
         const dp=(busy||noSw||p.excluded)?' disabled':'';
         // Keep the PORT POWER toggle live even on a 'not smart' port: that verdict
         // is often a transient false negative (a slow or momentarily-busy switch),
@@ -1303,7 +1299,7 @@ function render(data){
           `<td class="stats">${mkstrip(p,wearH)}</td>` +
           `<td class="batc" id="bat-${slot}">${bat}</td>` +
           `<td class="actc" id="act-${slot}">` +
-          `<button class="btn ex${isRef?' pulsing':''}"${p.excluded?' disabled':''} onclick="menuExecute(event,'${slot}',${isFb},${charging},${draining},${p.power===true},${noSw},'${jsq(p.serial||'')}',${wb},'${jsq(p.adb||'')}','${jsq(p.ssh_ip||'')}',${p.wear?1:0},${needPwr},'${jsq(p.codename||'')}','${jsq((p.held&&p.held.kind)||'')}')" title="refresh · power/charge/drain · flash/backup · workbench · wear">menu</button>` +
+          `<button class="btn ex${isRef?' pulsing':''}"${p.excluded?' disabled':''} onclick="menuExecute(event,'${slot}',${isFb},${charging},${draining},${p.power===true},${noSw},'${jsq(p.serial||'')}',${wb},'${jsq(p.adb||'')}','${jsq(p.ssh_ip||'')}',${p.wear?1:0},'${jsq(p.codename||'')}','${jsq((p.held&&p.held.kind)||'')}',${!!(p.wanze_known||p.wanze)})" title="refresh · power/charge/drain · flash/backup · workbench · wear">menu</button>` +
           `</td></tr>` +
           `<tr class="lr" id="lr-${slot}"><td colspan="8"><div class="log${logActive?' show':''}" id="log-${slot}"></div></td></tr>`
         );
@@ -2857,8 +2853,12 @@ function menuIdent(name,slot,mode){
 function grpHd(label){return `<div class="exgrp-hd">${label}</div>`;}
 function grpBox(items){return `<div class="exgrp">${items}</div>`;}
 function grpPower(slot,charging,draining,powered,noSw){
+  // Charge belongs here — it is what the power state of a docked watch is FOR.
+  // The drain test does not: it takes the watch out of service for hours to
+  // produce a wearability verdict, which is workbench work, not a situational
+  // power action. It moved to the Workbench group (and stays on the wear dot,
+  // where its verdict lands).
   return (charging?mi('ch','Stop charge',`doStopCharge('${slot}')`):mi('ch','Charge',`doCharge('${slot}')`,noSw))+
-    (draining?mi('dr','Stop drain test',`doStopDrain('${slot}')`):mi('dr','Drain test',`doDrain('${slot}')`,noSw))+
     '<div class="menu-sep"></div>'+
     (powered?mi('po','Power off',`doPoweroff('${slot}')`):'')+
     mi('rb','Reboot',`doReboot('${slot}')`)+
@@ -2885,7 +2885,7 @@ function grpPowerFb(slot,powered){
     (powered?'<div class="menu-sep"></div>'+mi('po','Power off',null,true,
       'unavailable — select and confirm "Power off" in the fastboot on-screen menu'):'');
 }
-function grpWorkbench(slot,serial,wb,mode,sshIp){
+function grpWorkbench(slot,serial,wb,mode,sshIp,draining,noSw,hasWanze){
   // What is left here is what has no other home. Everything else moved to the
   // surface that already showed its result:
   //   USB mode   -> the connection pill / Connect tab (that pill IS the mode)
@@ -2897,6 +2897,11 @@ function grpWorkbench(slot,serial,wb,mode,sshIp){
   // action goes.
   return '<div class="menu-hd">watch stays on — power off when done</div>'+
     (wb?mi('wbx','End checkout',`doStopWb('${slot}')`):mi('wbx','Checkout (hold band)',`doWb('${slot}')`))+
+    (draining?mi('dr','Stop drain test',`doStopDrain('${slot}')`)
+             :mi('dr','Drain test',`doDrain('${slot}')`,noSw,'this port cannot switch its own power'))+
+    (hasWanze
+      ?mi('info','Remove wanze',`doWanze('${serial||''}',1)`,!serial,'needs an identified watch')
+      :mi('info','Deploy wanze',`doWanze('${serial||''}',0)`,!serial,'needs an identified watch'))+
     mi('info','Collect diagnostics',`doDiag('${slot}')`);
 }
 function grpCapture(slot,serial){
@@ -2918,7 +2923,7 @@ function grpWipe(slot,serial){
     midanger('',"Flash 2.0",`doFl('${slot}','2.0')`,'wipe + flash 2.0')+
     midanger('','Restore from dump',null,'restore from dump',true,'not yet implemented');
 }
-function menuExecute(ev,slot,isFb,charging,draining,powered,noSw,serial,wb,mode,sshIp,wear,needPwr,codename,held){
+function menuExecute(ev,slot,isFb,charging,draining,powered,noSw,serial,wb,mode,sshIp,wear,codename,held,hasWanze){
   // A held watch is refused by the server for every port op, but the menu did
   // not know: it rendered fully enabled and the refusal arrived as a toast
   // AFTER the click. The badge existed and the guard existed; only the menu
@@ -2941,7 +2946,7 @@ function menuExecute(ev,slot,isFb,charging,draining,powered,noSw,serial,wb,mode,
     // (mkstrip only draws one for a mapped codename) and would otherwise have
     // no route to Continue boot at all.
     (isFb?grpHd('Bootloader')+grpBox(grpPowerFb(slot,powered)):'')+
-    (!isFb?grpHd('Workbench')+grpBox(grpWorkbench(slot,serial,wb,mode,sshIp)):'')+
+    (!isFb?grpHd('Workbench')+grpBox(grpWorkbench(slot,serial,wb,mode,sshIp,draining,noSw,hasWanze)):'')+
     // Ordered by consequence, not by category. Capture (produces a file, changes
     // nothing) sits above the wipes, and the wipes sit LAST — they used to be
     // second of five, so every trip to Workbench dragged the cursor across
@@ -3002,6 +3007,24 @@ function ctlSet(serial,mode,ip){
   if(ctlSerial!==serial)return;
   ctlMode=mode; if(ip)ctlSshIp=ip;
   if(ctlTab==='net'&&ctlCache[serial])renderControl(ctlCache[serial]);
+}
+// Install the on-watch wanze probe. It records while the watch sleeps and
+// never wakes it, so deploying is safe on a docked watch; the run itself is
+// marked with an operation lock, which is what keeps housekeeping off it.
+function doWanze(serial,remove){
+  if(!serial)return;
+  // `stop` disables the on-watch timer, which is what un-deploying means here:
+  // the probe stops recording. It does not delete the trace already collected,
+  // deliberately — that is the only copy until it is harvested.
+  const act=remove?'stop':'install';
+  toast(remove?'removing wanze\\u2026':'deploying wanze\\u2026');
+  fetch('/api/watch/'+encodeURIComponent(serial)+'/wanze/'+act,{method:'POST'})
+    .then(r=>r.json()).then(d=>{
+      toast(d.ok?(remove?'wanze removed — its trace is kept until harvested'
+                        :'wanze deployed — it records on its own, without waking the watch')
+                :(d.error||('wanze '+(remove?'removal':'deploy')+' failed')));
+      refresh();})
+    .catch(()=>toast('wanze '+(remove?'removal':'deploy')+' failed'));
 }
 function doDiag(c){toast('collecting diagnostics…');fetch('/api/diagnostics/'+_api(c),{method:'POST'}).then(r=>r.json()).then(d=>{
   if(d.name){
