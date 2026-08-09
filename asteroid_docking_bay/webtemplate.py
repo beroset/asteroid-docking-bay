@@ -237,6 +237,7 @@ _WEB_TEMPLATE = """\
     .wimg-ctl{display:flex;flex-direction:column;gap:6px;align-items:center;padding:2px 6px 8px}
     .wimg-ctl-r{display:flex;gap:10px;align-items:flex-end;justify-content:center;flex-wrap:wrap}
     .wimg-shot{height:230px;width:auto;max-width:44vw;object-fit:contain;background:#000}
+    .wimg-acts{display:flex;gap:8px;justify-content:center;padding:8px 10px 2px}
     .wimg-cap{color:#6e7681;font-size:10px;text-transform:uppercase;letter-spacing:.5px;text-align:center;margin-top:5px}
     /* Fluid: columns follow the page width with a minimal content margin, so
        the table always fits the viewport (no forced horizontal scroll). Column
@@ -1566,6 +1567,7 @@ function ctlChrome(d,body){
     `<div class="cc-body">${body}</div>`+
     (ctlTab==='vit'?`<div class="cc-tgls">`+
       `<button class="cc-tgl" onclick="ccBuzz()" title="vibrate to locate in the dock">Buzz</button>`+
+      `<button class="cc-tgl" onclick="doNotify('${jsq((d&&d.serial)||ctlSerial)}')" title="send a test notification to the watch">Notify</button>`+
       `<button class="cc-tgl${d&&d.screen_forced?' scrnon':''}${ctlPending.has('sys:screen')?' cmd-pending':''}" onclick="ccScreen(${d&&d.screen_forced?0:1})" title="${d&&d.screen_forced?'demo mode is ON — the screen is forced on and draining. Click to release.':'force the screen on (mce demo mode — stays on and drains until released!)'}">Screen: ${d&&d.screen_forced?'ON':'OFF'}</button>`+
       `<button class="cc-tgl" onclick="doScreenshot('${jsq((d&&d.serial)||ctlSerial)}')" title="screenshot in a new tab">Shot</button></div>`:'');
 }
@@ -2374,6 +2376,12 @@ function openWatchImg(codename,serial,ev,isRound,res){
           `onload="onProdLoad('${esc(codename)}','${esc(serial||'')}',${isRound?1:0},'${res?esc(res):''}')" `+
           `src="/api/watch-image/${encodeURIComponent(codename)}"></div></div>`+
     `</div>`+
+    // Screenshot actions live HERE, where the screenshot already is. They were
+    // in the row menu, three surfaces away from the picture they act on.
+    (serial?`<div class="wimg-acts">`+
+      `<button class="btn" onclick="shotRefresh('${jsq(serial)}','${res?esc(res):''}')" title="grab a fresh screenshot from the watch">Update screenshot</button>`+
+      `<button class="btn" onclick="shotDownload('${jsq(serial)}','${esc(codename)}')" title="save this screenshot to disk">Download</button>`+
+      `</div>`:'')+
     `<div class="wimg-ctl" id="wimghands"></div>`;
   o.style.display='block';
   wimgPlace();
@@ -2619,6 +2627,23 @@ function wimgDragStart(e){
   const o=document.getElementById('wimg'), r=o.getBoundingClientRect();
   _wimgDrag={dx:e.clientX-r.left, dy:e.clientY-r.top}; _wimgMoved=true; e.preventDefault();
 }
+// Re-grab the live screen. The composite already knows how to paint it, so
+// this is just loadShot again with a fresh cache-buster.
+function shotRefresh(serial,res){
+  const cap=document.getElementById('shotcap');
+  if(cap)cap.textContent='capturing\u2026';
+  loadShot(serial,res);
+}
+// Save it. doScreenshot opened a new tab and left the file to the user; an
+// anchor with `download` hands it straight to the browser's save flow and
+// keeps the panel where it is.
+function shotDownload(serial,codename){
+  const a=document.createElement('a');
+  a.href='/api/watch/'+encodeURIComponent(serial)+'/screenshot.jpg?t='+Date.now();
+  a.download=(codename||serial)+'-'+new Date().toISOString().replace(/[:.]/g,'-')+'.jpg';
+  document.body.appendChild(a);a.click();a.remove();
+  toast('downloading screenshot\u2026');
+}
 function loadShot(serial,res){
   const suffix=res?' · '+res:'';
   fetch('/api/watch/'+encodeURIComponent(serial)+'/screenshot.jpg?t='+Date.now())
@@ -2861,33 +2886,19 @@ function grpPowerFb(slot,powered){
       'unavailable — select and confirm "Power off" in the fastboot on-screen menu'):'');
 }
 function grpWorkbench(slot,serial,wb,mode,sshIp){
-  const online=mode==='device';
-  // (The USB IP used to be shown here as a banner; it now lives in the
-  // Connection column's Network Center, which is a better place to find it.)
-  // USB-mode toggle. Workbench work happens over WiFi/SSH, so switching the
-  // watch's USB gadget between adb and SSH/developer mode belongs here. The
-  // item flips with the current mode: on adb it offers SSH (delivered over
-  // adb, needs the watch online); in SSH mode it offers ADB (delivered over
-  // the watch's rndis link, which is up precisely because it's in SSH mode).
-  // Either switch re-enumerates the gadget and drops the current link.
-  let usbToggle;
-  if(mode==='ssh')
-    usbToggle=mi('info','Switch USB to ADB',`switchAdb('${serial}')`);
-  else
-    usbToggle=mi('info','Switch USB to SSH',`switchSsh('${serial}')`,!online,
-                 'watch must be on ADB to switch it to SSH mode');
+  // What is left here is what has no other home. Everything else moved to the
+  // surface that already showed its result:
+  //   USB mode   -> the connection pill / Connect tab (that pill IS the mode)
+  //   Set time   -> Settings, beside the clock spinners
+  //   Screenshot -> the live view, beside the screenshot itself
+  //   Notify     -> Vitals, beside Buzz (both make the watch announce itself)
+  // Each was a second copy of a control that already existed elsewhere; this
+  // group had been collecting them because there was no rule for where an
+  // action goes.
   return '<div class="menu-hd">watch stays on — power off when done</div>'+
     (wb?mi('wbx','End checkout',`doStopWb('${slot}')`):mi('wbx','Checkout (hold band)',`doWb('${slot}')`))+
-    '<div class="menu-sep"></div>'+
-    usbToggle+
-    '<div class="menu-sep"></div>'+
-    mi('info','Set time from host',`doSetTime('${serial}')`,!online)+
-    mi('info','Screenshot',`doScreenshot('${serial}')`,!online)+
-    mi('info','Test notification',`doNotify('${serial}')`,!online)+
-    mi('info','Collect diagnostics',`doDiag('${slot}')`,!online);
+    mi('info','Collect diagnostics',`doDiag('${slot}')`);
 }
-// CAPTURE — everything here produces a file on this host and changes nothing
-// on the watch. Safe to run at any time, so it is plain.
 function grpCapture(slot,serial){
   return mi('','Backup data',`doBackup('${slot}')`)+
     mi('info','Fastboot report',`doFbReport('${slot}')`)+
@@ -2923,7 +2934,13 @@ function menuExecute(ev,slot,isFb,charging,draining,powered,noSw,serial,wb,mode,
   openMenu(ev,
     menuIdent(codename,slot,isFb?'fastboot':(mode==='ssh'?'SSH':(mode==='device'?'ADB':'')))+
     (!isFb&&serial?grpHd('Wear')+grpBox(wearItem(slot,wear)):'')+
-    grpHd('Power')+grpBox(isFb?grpPowerFb(slot,powered):grpPower(slot,charging,draining,powered,noSw))+
+    // No Power group here. Every item it held is on the power dot's own menu,
+    // which sits in the row next to the state it changes — and the dot is a
+    // shorter trip than opening this menu and reading past four groups. The
+    // fastboot variant stays, because a watch in the bootloader has no dot
+    // (mkstrip only draws one for a mapped codename) and would otherwise have
+    // no route to Continue boot at all.
+    (isFb?grpHd('Bootloader')+grpBox(grpPowerFb(slot,powered)):'')+
     (!isFb?grpHd('Workbench')+grpBox(grpWorkbench(slot,serial,wb,mode,sshIp)):'')+
     // Ordered by consequence, not by category. Capture (produces a file, changes
     // nothing) sits above the wipes, and the wipes sit LAST — they used to be

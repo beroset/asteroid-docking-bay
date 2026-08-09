@@ -813,19 +813,22 @@ def test_execute_menu_is_ordered_by_consequence(tmp_path):
     out = json.loads(r.stdout.strip().splitlines()[-1])
     on = out["on"]
 
-    for hd in ("Power", "Workbench", "Capture", "Wear"):
+    for hd in ("Workbench", "Capture", "Wear"):
         assert f'exgrp-hd">{hd}<' in on, f"missing group header {hd}: {on[:200]}"
     assert 'dangerhd">wipes the watch<' in on, "the wipes have no heading of their own"
     assert 'class="exgrp-hd">Refresh<' not in on, \
         "the Refresh group is gone; its item was a power cycle with an identify"
     assert "Re-identify" not in on, "re-identify should live on the Onboard button now"
 
-    for item in ("Reboot", "Backup data", "Checkout", "Arm wear",
+    # Power items are NOT here any more — they live on the power dot.
+    assert "Reboot" not in on, "the Power group is back; it belongs on the dot"
+    assert 'exgrp-hd">Power<' not in on
+    for item in ("Backup data", "Checkout", "Arm wear",
                  "Flash nightly", "Dump mmcblk0"):
         assert item in on, f"menu lost {item!r}"
 
     # Consequence order: the destructive group is LAST, below capture.
-    assert on.index('exgrp-hd">Wear<') < on.index('exgrp-hd">Power<'), "Wear not first"
+    assert on.index('exgrp-hd">Wear<') < on.index('exgrp-hd">Workbench<'), "Wear not first"
     assert on.index('exgrp-hd">Capture<') < on.index('dangerhd">wipes'), \
         "capture must sit above the wipes"
     assert on.index('dangerhd">wipes') > on.index('exgrp-hd">Workbench<'), \
@@ -869,10 +872,15 @@ def test_onboard_is_the_one_reidentify_path(tmp_path):
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
-def test_workbench_menu_no_longer_carries_the_usb_ip(tmp_path):
-    """The USB IP moved out of the menu — it lives in the Connection column's
-    Network Center now, a better place to find it — so the workbench group must
-    not repeat it (and still carries the USB-mode switch)."""
+def test_workbench_holds_only_what_has_no_other_home(tmp_path):
+    """The USB IP left this menu first (it lives in the Network Center), and on
+    2026-08-09 the rest of the duplicates followed: the USB-mode SWITCH to the
+    Connect tab, Set time to Settings, Screenshot to the live view, Notify to
+    Vitals beside Buzz. Every one of those was a second copy of a control that
+    already existed on the surface showing its result.
+
+    What is left is what has no other home: checkout, and the diagnostics
+    bundle export."""
     import json
     h = tmp_path / "wb.js"
     h.write_text(_DOM_STUBS + JS +
@@ -881,8 +889,18 @@ def test_workbench_menu_no_longer_carries_the_usb_ip(tmp_path):
     r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
     assert r.returncode == 0, r.stderr[:400]
     html = json.loads(r.stdout.strip().splitlines()[-1])
+
+    assert "Checkout" in html and "Collect diagnostics" in html, "workbench lost its own items"
     assert "menu-ip" not in html and "192.168.13.37" not in html, "USB IP still in the menu"
-    assert "Switch USB to ADB" in html, "workbench group lost its USB-mode switch"
+    for moved in ("Switch USB", "Set time", "Screenshot", "Test notification"):
+        assert moved not in html, f"{moved!r} is duplicated here again"
+
+    # And each one must still be reachable where it moved to.
+    assert "switchAdb(" in _WEB_TEMPLATE and "switchSsh(" in _WEB_TEMPLATE
+    assert "ccSyncTime()" in _WEB_TEMPLATE, "Set time lost its Settings home"
+    assert "shotRefresh(" in _WEB_TEMPLATE and "shotDownload(" in _WEB_TEMPLATE, \
+        "the live view has no screenshot controls"
+    assert "doNotify(" in _WEB_TEMPLATE, "Notify was deleted rather than moved"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
@@ -2199,7 +2217,7 @@ def test_a_held_watch_offers_no_actions_the_server_will_refuse(tmp_path):
         "a held watch still offers a live action the server will reject"
 
     # The guard must not disable the menu: an unheld watch is unchanged.
-    assert "onclick" in out["free"] and "Charge" in out["free"]
+    assert "onclick" in out["free"] and "Checkout" in out["free"]
 
 
 def test_the_row_passes_the_lock_to_the_menu():
@@ -2442,3 +2460,39 @@ def test_view_toggles_carry_state_in_the_class_not_the_label(tmp_path):
     assert out["on"] is True, "the toggle does not mark itself active"
     assert out["label"] == "all ports", \
         "the label was rewritten — it should be a noun that stays put"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_power_lives_on_the_dot_not_in_the_row_menu(tmp_path):
+    """The row menu's Power group and the power dot's menu were built from the
+    same builder and offered the same five items. The dot sits in the row
+    beside the state it changes and is a shorter trip, so the menu copy goes.
+
+    The fastboot variant stays in the menu on purpose: mkstrip only draws a
+    power dot for a mapped codename, so a watch in the bootloader would
+    otherwise have no route to Continue boot."""
+    import json
+    h = tmp_path / "pwrgrp.js"
+    h.write_text(
+        _DOM_STUBS + JS +
+        "\nlet menu='';openMenu=function(ev,html){menu=html;};"
+        "\nconst ev={stopPropagation(){}};"
+        "\nmenuExecute(ev,'1-2:1',false,false,false,true,false,'S1',false,'device','',0,false,'skipjack','');"
+        "\nconst adb=menu;"
+        "\nmenuExecute(ev,'1-2:1',true,false,false,true,false,'S1',false,'fastboot','',0,false,'skipjack','');"
+        "\nconst fb=menu;"
+        "\nmenuPwr(ev,'1-2:1',false,false,false,true,false,'skipjack');"
+        "\nconsole.log(JSON.stringify({adb:adb,fb:fb,dot:menu}));\nprocess.exit(0);\n")
+    r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
+    assert r.returncode == 0, f"harness failed:\n{r.stderr[:600]}"
+    out = json.loads(r.stdout.strip().splitlines()[-1])
+
+    # Gone from the booted row menu...
+    for item in ("Charge", "Drain test", "Power off", "Reboot", "Bootloader"):
+        assert item not in out["adb"], f"{item!r} is duplicated in the row menu"
+    # ...still on the dot, which is where it belongs.
+    for item in ("Charge", "Reboot", "Bootloader"):
+        assert item in out["dot"], f"the power dot lost {item!r}"
+    # ...and a bootloader watch keeps its route, since it has no dot.
+    assert "Continue boot" in out["fb"], \
+        "a watch in the bootloader has no dot and now no menu route either"
