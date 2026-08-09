@@ -1699,6 +1699,16 @@ def _wanze_probe(argsd):
     if action == "stop":
         wanze.stop(w)
         return {"ok": True}
+    if action == "uninstall":
+        # clear_trace is opt-in: the trace is the only copy of the measurement
+        # until it is harvested, so tidying up the tool must not take the data
+        # with it unless that is what was asked for.
+        err = wanze.uninstall(w, clear_trace=bool(argsd.get("clear_trace")))
+        if err:
+            return {"ok": False, "error": err}
+        wanze.probing_set(serial, False)
+        return {"ok": True, "removed": True,
+                "trace_kept": not bool(argsd.get("clear_trace"))}
     if action == "harvest":
         d = wanze.harvest(w, clear=bool(argsd.get("clear")))
         return d

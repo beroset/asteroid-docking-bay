@@ -258,6 +258,42 @@ def stop(watch) -> None:
     watch.t.shell(f"systemctl disable --now {UNIT}", timeout=25)
 
 
+def uninstall(watch, clear_trace: bool = False) -> "str | None":
+    """Remove the probe from the watch: stop it, then delete what install put
+    there. Returns None on success, or a message.
+
+    The mirror of install(), file for file — anything install pushes, this
+    removes, so a half-removed probe cannot be left behind to re-arm on the
+    next boot.
+
+    The TRACE is kept by default and only deleted when explicitly asked. It is
+    the sole copy of whatever the probe recorded until it has been harvested,
+    and deleting a measurement as a side effect of tidying up the tool that
+    produced it is the kind of quiet loss this project keeps finding: it took
+    days of a run to collect and a moment to destroy.
+    """
+    stop(watch)
+    targets = [REMOTE_BIN,
+               "/etc/systemd/system/wanze.service",
+               "/etc/systemd/system/wanze.timer"]
+    if clear_trace:
+        targets.append(REMOTE_LOG)
+    rc, out, err = watch.t.shell(
+        shlex.quote("rm -f " + " ".join(targets) + " && systemctl daemon-reload"),
+        timeout=30)
+    if rc != 0:
+        return f"remove failed: {(err or out).strip()[:120]}"
+    # Confirm it is really gone: a unit file left behind re-arms on reboot and
+    # the watch quietly starts sampling again days later.
+    left = watch.t.shell(shlex.quote(f"ls {REMOTE_BIN} 2>/dev/null"),
+                         timeout=15)[1].strip()
+    if left:
+        return "the sampler is still on the watch after removal"
+    log.info("%s: wanze removed%s", watch.serial,
+             " (trace deleted)" if clear_trace else " (trace kept)")
+    return None
+
+
 def harvest(watch, clear: bool = False) -> dict:
     """Pull the trace and say what it means. `clear` truncates the on-watch
     buffer, which is only safe once the rows are actually in hand."""

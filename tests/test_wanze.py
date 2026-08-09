@@ -223,3 +223,66 @@ def test_harvest_closes_the_window_before_reading():
     assert calls.index(next(c for c in calls if "wanze.service" in c)) < \
         calls.index(next(c for c in calls if c.startswith("cat "))), \
         "the closing sample must be taken BEFORE the read, or it is not in it"
+
+
+# ── removing the probe ───────────────────────────────────────────────────────
+
+class _FakeT:
+    """A watch transport that records what it was told to run."""
+    def __init__(self, leftover=""):
+        self.cmds, self._leftover = [], leftover
+
+    def shell(self, cmd, timeout=None):
+        self.cmds.append(cmd)
+        if "ls " in cmd:
+            return 0, self._leftover, ""
+        return 0, "", ""
+
+
+class _FakeWatch:
+    def __init__(self, leftover=""):
+        self.serial, self.t = "S1", _FakeT(leftover)
+
+
+def test_uninstall_removes_everything_install_put_there():
+    """The mirror of install(), file for file. A unit file left behind re-arms
+    on the next boot and the watch quietly starts sampling again days later,
+    which is the failure mode a half-removal produces."""
+    from asteroid_docking_bay import wanze
+    w = _FakeWatch()
+    assert wanze.uninstall(w) is None
+    joined = " ".join(w.t.cmds)
+
+    assert f"disable --now {wanze.UNIT}" in joined, "the timer was not stopped first"
+    for f in (wanze.REMOTE_BIN, "/etc/systemd/system/wanze.service",
+              "/etc/systemd/system/wanze.timer"):
+        assert f in joined, f"{f} left on the watch"
+    assert "daemon-reload" in joined, "systemd still holds the removed units"
+
+
+def test_uninstall_keeps_the_trace_unless_asked():
+    """The trace is the ONLY copy of whatever the probe recorded until it has
+    been harvested. Deleting a measurement as a side effect of tidying up the
+    tool that produced it is a quiet, unrecoverable loss — it costs days of a
+    run to collect and a moment to destroy."""
+    from asteroid_docking_bay import wanze
+
+    w = _FakeWatch()
+    wanze.uninstall(w)
+    assert wanze.REMOTE_LOG not in " ".join(w.t.cmds), \
+        "removing the probe deleted the trace nobody asked to delete"
+
+    w2 = _FakeWatch()
+    wanze.uninstall(w2, clear_trace=True)
+    assert wanze.REMOTE_LOG in " ".join(w2.t.cmds), \
+        "an explicit clear_trace did not delete the trace"
+
+
+def test_uninstall_reports_a_probe_that_is_still_there():
+    """Confirm rather than assume — the same rule install() follows when it
+    checks the timer actually armed. A removal that silently failed would leave
+    the watch sampling with the UI insisting it is clean."""
+    from asteroid_docking_bay import wanze
+    w = _FakeWatch(leftover="/usr/bin/wanze-sample")
+    err = wanze.uninstall(w)
+    assert err and "still on the watch" in err

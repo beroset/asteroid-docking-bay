@@ -3013,14 +3013,16 @@ function ctlSet(serial,mode,ip){
 // marked with an operation lock, which is what keeps housekeeping off it.
 function doWanze(serial,remove){
   if(!serial)return;
-  // `stop` disables the on-watch timer, which is what un-deploying means here:
-  // the probe stops recording. It does not delete the trace already collected,
-  // deliberately — that is the only copy until it is harvested.
-  const act=remove?'stop':'install';
+  // Removing really removes: the sampler and both unit files come off the
+  // watch, so nothing can re-arm on the next boot. The TRACE is kept — it is
+  // the only copy of whatever was recorded until it has been harvested, and
+  // deleting a measurement as a side effect of removing the tool that made it
+  // is exactly the quiet loss this project keeps finding.
+  const act=remove?'uninstall':'install';
   toast(remove?'removing wanze\\u2026':'deploying wanze\\u2026');
   fetch('/api/watch/'+encodeURIComponent(serial)+'/wanze/'+act,{method:'POST'})
     .then(r=>r.json()).then(d=>{
-      toast(d.ok?(remove?'wanze removed — its trace is kept until harvested'
+      toast(d.ok?(remove?'wanze removed from the watch — its trace is kept until harvested'
                         :'wanze deployed — it records on its own, without waking the watch')
                 :(d.error||('wanze '+(remove?'removal':'deploy')+' failed')));
       refresh();})
