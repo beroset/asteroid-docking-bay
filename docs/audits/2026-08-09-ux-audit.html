@@ -563,6 +563,46 @@ footer p{max-width:66ch}
   <p>Nothing in this document is implemented. The counts come from a careful pass over the served template rather than rough greps: 223 class names, ~50 buttons, 21 anchors, 44 <code>onclick</code> handlers on bare elements, 14 keyframes, ~62 distinct hex colours.</p>
 </section>
 
+<section id="postscript">
+  <p class="eyebrow">postscript — what shipped</p>
+  <h2>All of it, and what the audit got wrong</h2>
+  <p class="lede">Written the same day the audit was read. Everything below is implemented, deployed on the rig and pushed; the suite went from 765 tests to 779, and every fix is validated by planting the bug it exists to catch.</p>
+
+  <div class="call warnc">
+    <p><strong>Read sections 03&ndash;06 as history.</strong> They describe the UI as it stood before this work. The mockups there are proposals, not the current interface.</p>
+  </div>
+
+  <h3>The six defects</h3>
+  <ul class="tight">
+    <li><b>01</b> &mdash; the sweep has a lifecycle. Armed states plainly that every socket is off, and offers <em>Restore power</em>; a new <code>onboard.sweep_restore</code> op powers them back one at a time. Aborting can no longer drain the fleet in silence.</li>
+    <li><b>02</b> &mdash; destructive items <em>arm</em> before they commit, and <code>doFlV</code>&rsquo;s confirm is gone rather than leaving two mechanisms for one job.</li>
+    <li><b>03</b> &mdash; a held watch says what holds it, with its actions disabled and the reason given.</li>
+    <li><b>04</b> &mdash; the countdown writes inside the pill, so the battery control survives a charge.</li>
+    <li><b>05</b> &mdash; an unmapped bootloader port gets a menu; Flash stays out because it needs a codename mapping.</li>
+    <li><b>06</b> &mdash; the dead pulse is alive, eight decoy rules are gone, <code>.smt</code> collapsed into <code>.cbadge</code>, and a test now fails if any state class is styled but never emitted.</li>
+  </ul>
+
+  <h3>Beyond the audit, at moWerk&rsquo;s direction</h3>
+  <ul class="tight">
+    <li>The status row carries persistent state only; the sweep moved to the registry panel.</li>
+    <li>The port toggle opens a scoped menu &mdash; and cutting VBUS on a <em>live</em> watch arms first, because that is the case that strands one on battery.</li>
+    <li>Duplicated actions went to the surface that already showed them: Power to the dot, USB mode to Connect, Set time to Settings, Screenshot to the live view. <em>Notify</em> was the exception &mdash; it was not duplicated anywhere, so it moved to Vitals beside Buzz rather than being deleted.</li>
+    <li>The drain test moved to Workbench; wanze gained a Deploy/Remove item and a true uninstall that removes every file <code>install</code> pushed, while keeping the trace unless asked.</li>
+    <li>Amber gave back five meanings it should never have carried.</li>
+  </ul>
+
+  <h3>What the audit got wrong</h3>
+  <div class="call own">
+    <p class="big">The worst call was a severity, not a fact.</p>
+    <p>The adversarial pass found that hub headers were keyed by their visible label, and flagged it as a low-severity edge case &mdash; two hubs renamed identically, reachable via the rename pencil. I recorded it that way and did not fix it.</p>
+    <p>It was not an edge case. Auto-naming gives every chip in a physical box the same name, so it was the normal state of every multi-chip box on the rig: the Sabrent is five hub entries all labelled <em>Sabrent</em>, and <code>reconcileRows</code> drops a repeated key, so four of its five headers silently never reached the DOM.</p>
+    <p>It surfaced the way these things do &mdash; moWerk clicked hide on the Sabrent, saw nothing happen, kept clicking, and watched rows vanish four at a time. Two bugs behind one symptom: the collision hid the headers, and hiding acted on one chip at a time when a box is five, the first of which carries no ports. Both are fixed.</p>
+    <p>The lesson is not that the finding was missed. It was in my hands, correctly described, and I rated it wrong &mdash; a severity assigned from how <em>obscure the trigger sounded</em> rather than from how the rig is actually configured. The three factual corrections in section 08 stand as written.</p>
+  </div>
+
+  <p>One process note worth keeping: the static shell-quoting test caught an unquoted <code>2&gt;/dev/null</code> in the wanze uninstall that would have redirected on the host instead of the watch, and <code>test_served_js_parses</code> caught a backslash eaten by the Python string layer &mdash; the trap this file warns about, sprung while fixing it.</p>
+</section>
+
 <footer>
   <p>Prepared for moWerk · asteroid-docking-bay · three independent analyses and one adversarial pass, every load-bearing claim re-verified in source before it reached this page.</p>
 </footer>
