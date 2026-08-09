@@ -547,9 +547,9 @@ def test_smart_column_is_pills_with_the_cycle_as_the_untested_state(tmp_path):
     r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
     assert r.returncode == 0, r.stderr[:400]
     out = json.loads(r.stdout.strip().splitlines()[-1])
-    assert 'class="smt ppps"' in out["yes"] and ">ppps<" in out["yes"]
-    assert 'class="smt no"' in out["no"] and "NO!" in out["no"]
-    assert 'class="smt unk"' in out["unk"] and "doCy('1-2:1')" in out["unk"], out["unk"]
+    assert 'class="cbadge ppps"' in out["yes"] and ">ppps<" in out["yes"]
+    assert 'class="cbadge no"' in out["no"] and "NO!" in out["no"]
+    assert 'class="cbadge unk"' in out["unk"] and "doCy('1-2:1')" in out["unk"], out["unk"]
     assert "&#x21BA;" in out["unk"], "untested state must show the cycle glyph"
     # The cycle lives only in the smart cell now — not as a power-column icon.
     # doCy has TWO call sites on purpose since 2026-08-09, with different jobs:
@@ -660,9 +660,10 @@ def test_pills_and_dots_share_one_height_token():
         assert m, f"no standalone rule for {sel}"
         return m.group(1)
 
-    for sel in (".cbadge", ".sdot", ".smt", ".tgl"):
+    # .smt was byte-identical to .cbadge and collapsed into it on 2026-08-09.
+    for sel in (".cbadge", ".sdot", ".tgl"):
         assert "var(--pill-h)" in rule(sel), f"{sel} does not use the shared height token"
-    for sel in (".cbadge", ".smt"):
+    for sel in (".cbadge",):
         assert "inline-block" in rule(sel), f"{sel} is not inline-block — long content won't wrap"
 
 
@@ -2351,3 +2352,46 @@ def test_the_port_toggle_opens_a_scoped_menu_instead_of_cutting_power(tmp_path):
 
     # And the warning names the real hazard.
     assert "keeps draining" in out["live"]
+
+
+def test_no_css_class_is_styled_but_never_emitted():
+    """THE AUDIT'S EXHIBIT. `.btn-ref.pulsing` styled a refresh pulse that
+    nothing ever wore: the row emits `btn ex pulsing`, `btn-ref` appeared
+    exactly once in the file — inside its own rule — and the pulse had been
+    dead since a rename. Nothing failed, because no test owned it.
+
+    A styled class that is never emitted is either dead weight or, worse,
+    DECOY vocabulary: `.hrb` was amber-for-reboot while the live
+    `.menu-item.rb` is orange-for-reboot, so anyone normalising from the CSS
+    would have picked the wrong one.
+
+    Scoped to the single-word state/variant classes this rot appeared in;
+    structural and compound selectors are exempt."""
+    import re as _re
+    css = _WEB_TEMPLATE[:_WEB_TEMPLATE.index("</style>")]
+    body = _WEB_TEMPLATE[_WEB_TEMPLATE.index("</style>"):]
+
+    # every class token that appears anywhere as an emitted class or via JS
+    emitted = set()
+    for m in _re.finditer(r'class="([^"]*)"', _WEB_TEMPLATE):
+        for tok in _re.split(r"[\s$]+", m.group(1)):
+            tok = tok.strip("{}`'\"+()")
+            if tok and not tok.startswith("$"):
+                emitted.add(tok)
+    for m in _re.finditer(r"classList\.\w+\(\s*'([^']+)'", body):
+        emitted.add(m.group(1))
+    # note the \s* — classes are often concatenated as ' foo' with a leading
+    # space inside the quotes (`${cond?' foo':''}`), which a tight pattern misses
+    for m in _re.finditer(r"'\s*((?:[a-z][\w-]*\s+)*[a-z][\w-]*)\s*'", body):
+        for tok in m.group(1).split():
+            emitted.add(tok)
+
+    # simple single-class rules only: .foo{...} / .foo.bar{...} / .foo:hover{...}
+    styled = set()
+    for m in _re.finditer(r"^\s*\.([a-z][\w-]*)[^{;}]*\{", css, _re.M):
+        styled.add(m.group(1))
+
+    orphans = sorted(c for c in styled - emitted if "-" in c or len(c) <= 6)
+    assert not orphans, (
+        f"CSS classes styled but never emitted: {orphans} — either dead weight "
+        f"or decoy vocabulary that contradicts the live rules")

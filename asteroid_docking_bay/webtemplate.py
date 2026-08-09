@@ -105,7 +105,6 @@ _WEB_TEMPLATE = """\
     .wx-onwatch{padding:1px 12px 4px;font-size:12px;color:#c9d1d9}
     .wx-set{display:flex;gap:6px;padding:2px 12px 10px}
     .wx-in{flex:1;min-width:0;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#c9d1d9;padding:5px 8px;font:inherit;font-size:12px}
-    .cc-acts{padding:0 12px 12px}
     .cc-act{width:100%;padding:8px;border-radius:6px;border:1px solid #388bfd;background:transparent;color:#388bfd;cursor:pointer;font:inherit}
     .cc-act:hover{background:#0d1f3a}
     .cc-act.done{border-color:#3fb950;color:#3fb950}
@@ -254,13 +253,11 @@ _WEB_TEMPLATE = """\
     .orbit-add input{width:118px;background:#0d1420;border:1px solid #30363d;color:#c9d1d9;border-radius:5px;padding:2px 7px;font-size:12px;margin-right:5px}
     .orbit-add input:focus{border-color:#a78bfa;outline:none}
     .orbitglyph{opacity:.75;font-size:14px}
-    .wifiok{color:#3fb950;font-weight:600;font-size:11px;letter-spacing:.5px}
     .orbit-ip{font-size:11px;margin-left:6px}
     .orbit-row.offrow{opacity:.72}
     tr.empty td{color:#6e7681}
     tr.empty:hover td{background:#0a0d13}
     .on{color:#3fb950}.off{color:#6e7681}.warn{color:#d29922}.err{color:#f85149}.dim{color:#6e7681}
-    .stale{color:#a1793a}.stale .agec{opacity:.7;font-size:10px}
     .shot-stale{opacity:.55;filter:grayscale(.3)}
     tr.justplugged>td{animation:plug 2s ease-out}
     @keyframes plug{0%{background:rgba(31,111,235,.4)}100%{background:transparent}}
@@ -345,16 +342,15 @@ _WEB_TEMPLATE = """\
     .reg-log{padding:4px 10px 8px 24px}
     .reg-le{padding:5px 0;border-top:1px dashed #21262d;display:grid;grid-template-columns:82px 44px 1fr;gap:8px;align-items:start;font-size:12px}
     .reg-when{color:#a78bfa}
-    .smt{display:inline-block;box-sizing:border-box;min-height:var(--pill-h);padding:2px var(--pill-px);border-radius:var(--pill-r);font-size:var(--pill-fs);line-height:1.5;border:1px solid;background:transparent;font-family:inherit;vertical-align:middle}
     /* Smart type is blue, not green — green is reserved for the power/charge
        states so it keeps its weight. The known type (ppps) is the brighter
        tone; the untested cycle is a darker shade of the same blue (it is an
        action, so deliberately NOT orange — orange means ambiguous/stale here). */
-    .smt.ppps{border-color:#58a6ff;color:#58a6ff}
-    .smt.no{border-color:#f85149;color:#f85149}
-    .smt.unk{border-color:#1f6feb;color:#388bfd;cursor:pointer}
-    .smt.unk:hover:not(:disabled){background:#0d2136}
-    .smt.unk:disabled{opacity:.35;cursor:default}
+    .cbadge.ppps{border-color:#58a6ff;color:#58a6ff}
+    .cbadge.no{border-color:#f85149;color:#f85149}
+    .cbadge.unk{border-color:#1f6feb;color:#388bfd;cursor:pointer}
+    .cbadge.unk:hover:not(:disabled){background:#0d2136}
+    .cbadge.unk:disabled{opacity:.35;cursor:default}
     .cbadge.life{margin-left:6px;letter-spacing:.3px}
     .cbadge.life.down{border-color:#3d4756;color:#8b98a5}
     .cbadge.life.worn{border-color:#d98ca0;color:#e0a5b5}
@@ -418,12 +414,7 @@ _WEB_TEMPLATE = """\
     .btn{background:none;color:#c9d1d9;border:1px solid #30363d;padding:3px 9px;border-radius:4px;cursor:pointer;font:12px monospace;margin:0 .36em;touch-action:manipulation;-webkit-tap-highlight-color:transparent;transition:background .12s,transform .12s}
     .btn:hover{background:#21262d}
     .btn:active{transform:scale(.92);transition:transform 55ms ease-out}
-    .fl{border-color:#58a6ff;color:#fff}.fl:hover{background:#111d2e}
     .ch{border-color:#3fb950;color:#3fb950}.ch:hover{background:#0f2a18}
-    .ht{border-color:#6e7681;color:#6e7681}.ht:hover{background:#1c1c1c}
-    .hcut{border-color:#f85149;color:#f85149}.hcut:hover{background:#2a0d0b}
-    .hrb{border-color:#d29922;color:#d29922}.hrb:hover{background:#2a2113}
-    .hbl{border-color:#58a6ff;color:#58a6ff}.hbl:hover{background:#111d2e}
     .btn:disabled{opacity:.35;cursor:default;pointer-events:none}
     .btn.ex{border-radius:12px;padding:3px 15px;border-color:#58a6ff;color:#58a6ff}.btn.ex:hover{background:#122132}
     /* A worn row dims but stays. */
@@ -453,7 +444,7 @@ _WEB_TEMPLATE = """\
        that pulses *from* the hover colour instead. */
     @keyframes rpulsehover{0%,100%{background:#161b22}50%{background:rgba(88,166,255,.16)}}
     .wr.refreshing:hover td{animation:rpulsehover 1.1s ease-in-out infinite}
-    .btn-ref.pulsing{animation:bpulse .85s ease-in-out infinite!important;border-color:#58a6ff!important;color:#58a6ff!important}
+    .btn.ex.pulsing{animation:bpulse .85s ease-in-out infinite!important;border-color:#58a6ff!important;color:#58a6ff!important}
     @keyframes pwrwarn{0%,100%{background:transparent}40%{background:rgba(248,81,73,.12)}}
     .wr.pwr-warn td{animation:pwrwarn 1.8s ease-in-out 2}
     /* Phones: stack each row into a slim card — one labelled line per field —
@@ -579,9 +570,9 @@ function mksmart(p,slot,dis){
   // red NO!). Untested shows the power-cycle in its place, because the cycle
   // IS the test — one click cuts and restores power and records the verdict —
   // so the control lives exactly where its result will land.
-  if(p.smart===true)return '<span class="smt ppps" title="PPPS — this port switches its own VBUS (per-port power switching)">ppps</span>';
-  if(p.smart===false)return '<span class="smt no" title="port cannot switch its own power (not smart)">NO!</span>';
-  return `<button class="smt unk"${dis} onclick="pulseSelf(this);doCy('${slot}')" title="smart capability not tested — click to power-cycle the port and detect it">&#x21BA;</button>`;
+  if(p.smart===true)return '<span class="cbadge ppps" title="PPPS — this port switches its own VBUS (per-port power switching)">ppps</span>';
+  if(p.smart===false)return '<span class="cbadge no" title="port cannot switch its own power (not smart)">NO!</span>';
+  return `<button class="cbadge unk"${dis} onclick="pulseSelf(this);doCy('${slot}')" title="smart capability not tested — click to power-cycle the port and detect it">&#x21BA;</button>`;
 }
 function pulseSelf(el){
   // Give a clicked action button instant feedback while the command is in
