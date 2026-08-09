@@ -123,6 +123,13 @@ _WEB_TEMPLATE = """\
     .menu-item.bl{color:#d2a8ff}
     .menu-item.wbx{color:#a371f7}
     .menu-item.info{color:#58a6ff}
+    /* Destructive items: red, and railed as a group so the dangerous region of
+       a menu is visible before it is read. An armed item inverts, so the state
+       is unmistakable at a glance rather than a colour shift. */
+    .menu-item.danger{color:#f85149}
+    .menu-item.danger[data-armed="1"]{background:rgba(248,81,73,.16);font-weight:700;border-radius:4px}
+    .exgrp.dangerbox{border-left:3px solid #f85149;margin-left:4px;padding-left:6px}
+    .exgrp-hd.dangerhd{color:#f85149}
     .menu-sep{height:1px;background:#30363d;margin:4px 2px}
     .menu-hd{padding:3px 10px 5px;font-size:10px;color:#6e7681}
     /* Every floating menu names what it will act on. Four menus anchored to
@@ -2689,6 +2696,35 @@ function btPair(mac,name){
   }).catch(()=>toast('pair failed'));
 }
 function mi(cls,label,fn,dis,title){return `<button class="menu-item ${cls}"${dis?` disabled title="${title||'not available yet'}"`:` onclick="${fn};closeMenu()"`}>${label}</button>`;}
+// A DESTRUCTIVE menu item: it arms on the first click and commits on the
+// second, instead of firing behind a modal.
+//
+// The obvious alternative — wrap every wipe in confirm() — is what the UI
+// already does five times a session (sweep twice, dump, restore, flash 2.x),
+// and it is why "Flash nightly" having no confirm at all went unnoticed: a
+// dialog you dismiss by reflex is not a decision. Arming puts the warning ON
+// the control, in place, and makes the destructive step a second deliberate
+// act. It also degrades honestly — an armed control that is never confirmed
+// simply disarms, where an abandoned modal leaves nothing behind at all.
+//
+// The armed state is per-menu and dies with it, so a menu closed and reopened
+// is disarmed. That is deliberate: arming should not survive looking away.
+function midanger(cls,label,fn,what,dis,title){
+  if(dis)return mi(cls+' danger',label,null,true,title);
+  const id='arm'+(_armSeq++);
+  return `<button class="menu-item ${cls} danger" id="${id}" onclick="armGo(this,${JSON.stringify(fn).replace(/"/g,'&quot;')},${JSON.stringify(what).replace(/"/g,'&quot;')})">${label}</button>`;
+}
+let _armSeq=0;
+function armGo(el,fn,what){
+  if(el.dataset.armed==='1'){closeMenu();(new Function(fn))();return;}
+  // Disarm any sibling first — two armed destructive items at once is exactly
+  // the confusion this is meant to remove.
+  el.closest('.menu').querySelectorAll('.menu-item.danger[data-armed="1"]').forEach(b=>{
+    b.dataset.armed='0';b.textContent=b.dataset.label||b.textContent;});
+  el.dataset.label=el.textContent;
+  el.dataset.armed='1';
+  el.textContent='\u26a0 '+what+' \u2014 click again';
+}
 // The row's actions fold into one Execute menu: each former button becomes a
 // group header, its items listed indented beneath, all visible at once (no
 // nested submenus). Each group is a content-builder returning just its items;
@@ -2755,17 +2791,26 @@ function grpWorkbench(slot,serial,wb,mode,sshIp){
     mi('info','Test notification',`doNotify('${serial}')`,!online)+
     mi('info','Collect diagnostics',`doDiag('${slot}')`,!online);
 }
-function grpFlash(slot,serial){
+// CAPTURE — everything here produces a file on this host and changes nothing
+// on the watch. Safe to run at any time, so it is plain.
+function grpCapture(slot,serial){
   return mi('','Backup data',`doBackup('${slot}')`)+
-    mi('','Restore data',`doRestore('${slot}')`)+
     mi('info','Fastboot report',`doFbReport('${slot}')`)+
-    '<div class="menu-sep"></div>'+
-    mi('','Flash nightly',`doFl('${slot}')`)+
-    mi('',"Flash 2.1",`doFlV('${slot}','2.1')`)+
-    mi('',"Flash 2.0",`doFlV('${slot}','2.0')`)+
-    '<div class="menu-sep"></div>'+
-    mi('','Dump mmcblk0',`doDump('${serial||''}')`,!serial,'takes a full-disk backup in the background; the watch is held for the duration so nothing else disturbs the copy')+
-    mi('','Restore from dump',`doRestoreDump('${slot}')`,true,'not yet implemented');
+    mi('dr','Dump mmcblk0',`doDump('${serial||''}')`,!serial,'takes a full-disk backup in the background; the watch is held for the duration so nothing else disturbs the copy');
+}
+// WIPES THE WATCH — every item here destroys data on the device and none of
+// them can be undone. They arm before they commit (see midanger); the group
+// carries a red rail so the dangerous region reads before the labels do.
+//
+// Flash nightly used to call doFl directly with NO confirmation while its own
+// siblings 2.1 and 2.0 went through a confirm. Same wipe, opposite
+// treatment, and the unguarded one is the daily driver.
+function grpWipe(slot,serial){
+  return midanger('','Restore data',`doRestore('${slot}')`,'overwrite settings')+
+    midanger('','Flash nightly',`doFl('${slot}')`,'wipe + flash nightly')+
+    midanger('',"Flash 2.1",`doFl('${slot}','2.1')`,'wipe + flash 2.1')+
+    midanger('',"Flash 2.0",`doFl('${slot}','2.0')`,'wipe + flash 2.0')+
+    midanger('','Restore from dump',null,'restore from dump',true,'not yet implemented');
 }
 function menuExecute(ev,slot,isFb,charging,draining,powered,noSw,serial,wb,mode,sshIp,wear,needPwr,codename,held){
   // A held watch is refused by the server for every port op, but the menu did
@@ -2784,9 +2829,14 @@ function menuExecute(ev,slot,isFb,charging,draining,powered,noSw,serial,wb,mode,
     menuIdent(codename,slot,isFb?'fastboot':(mode==='ssh'?'SSH':(mode==='device'?'ADB':'')))+
     (!isFb&&serial?grpHd('Wear')+grpBox(wearItem(slot,wear)):'')+
     grpHd('Power')+grpBox(isFb?grpPowerFb(slot,powered):grpPower(slot,charging,draining,powered,noSw))+
-    grpHd('Flashing')+grpBox(grpFlash(slot,serial))+
     (!isFb?grpHd('Workbench')+grpBox(grpWorkbench(slot,serial,wb,mode,sshIp)):'')+
-    grpHd('Refresh')+grpBox(mi('','Re-identify / power on',`doRemap('${slot}')`)));
+    // Ordered by consequence, not by category. Capture (produces a file, changes
+    // nothing) sits above the wipes, and the wipes sit LAST — they used to be
+    // second of five, so every trip to Workbench dragged the cursor across
+    // three ways to destroy the watch.
+    grpHd('Capture')+grpBox(grpCapture(slot,serial))+
+    `<div class="exgrp-hd dangerhd">wipes the watch</div>`+
+    `<div class="exgrp dangerbox">${grpWipe(slot,serial)}</div>`);
 }
 // Wear is the one menu item that stays a button — pink, the deliberate off-rig
 // action, distinct from the plain text links around it.
@@ -2832,7 +2882,6 @@ function toast(msg){
 function doSetTime(s){toast('syncing time…');fetch('/api/watch/'+encodeURIComponent(s)+'/settime',{method:'POST'}).then(()=>toast('time synced from host'));}
 function doNotify(s){fetch('/api/watch/'+encodeURIComponent(s)+'/notify',{method:'POST'}).then(r=>r.json()).then(d=>toast(d.ok?'notification sent to watch':'notify failed'));}
 function doScreenshot(s){toast('capturing…');window.open('/api/watch/'+encodeURIComponent(s)+'/screenshot.jpg?t='+Date.now(),'_blank');}
-function doFlV(s,v){if(!confirm('Flash AsteroidOS '+v+' to this watch?\\nThis wipes its data — back up first if you need it.'))return;doFl(s,v);}
 function switchAdb(serial){toast('switching to ADB…');fetch('/api/switch-adb'+(serial?'/'+encodeURIComponent(serial):''),{method:'POST'}).then(r=>r.json()).then(d=>{toast(d.ok?'switching — watch re-enumerating on ADB…':('Switch to ADB failed — '+(d.error||'unknown')));if(d.ok){ctlSet(serial,'adb',null);setTimeout(refresh,5000);}else flashFail(connPill(serial))});}
 function switchSsh(serial){toast('switching to SSH…');fetch('/api/switch-ssh/'+encodeURIComponent(serial),{method:'POST'}).then(r=>r.json()).then(d=>{toast(d.ok?'switching — watch re-enumerating as SSH…':('Switch to SSH failed — '+(d.error||'unknown')));if(d.ok){ctlSet(serial,'ssh',d.ip);setTimeout(refresh,6000);}else flashFail(connPill(serial))});}
 // Keep an open Network tab in sync with a USB-mode switch made from it: the

@@ -777,36 +777,55 @@ def test_stats_dots_open_contextual_mini_menus(tmp_path):
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
-def test_execute_menu_folds_every_group_under_a_header(tmp_path):
-    """The single Execute button opens one menu holding all former action
-    buttons as grouped, indented headers — every option visible at once, no
-    nested submenus. The fastboot variant swaps in the bootloader power group
-    and drops Workbench/Wear (which need a booted watch)."""
+def test_execute_menu_is_ordered_by_consequence(tmp_path):
+    """The Execute menu holds every action for a row, grouped and visible at
+    once. What changed on 2026-08-09 is the ORDER and the tiers.
+
+    Flashing used to sit second of five, so every trip to Workbench dragged the
+    cursor across three ways to wipe the watch. Now the groups run by
+    consequence: Wear and Power, then Workbench, then Capture (produces a file,
+    changes nothing on the device), then the wipes LAST behind a red rail.
+
+    The Refresh group is gone entirely — its single item was a port power cycle
+    with an identify, and device-driven discovery does the identifying now. The
+    manual trigger survives as the empty row's Onboard button."""
     import json
     h = tmp_path / "ex.js"
     ev = ("{stopPropagation(){},currentTarget:{getBoundingClientRect:()=>"
           "({left:0,right:0,top:0,bottom:0})}}")
     h.write_text(_DOM_CAPTURE + JS +
                  f"\nmenuExecute({ev},'1-2:1',false,false,false,true,false,"
-                 "'S9',false,'device','192.168.13.37',0,true);"
+                 "'S9',false,'device','192.168.13.37',0,true,'skipjack','');"
                  "const on=global.__els['menu'].innerHTML;"
                  f"menuExecute({ev},'1-2:1',true,false,false,true,false,"
-                 "'S9',false,'fastboot','',0,true);"
+                 "'S9',false,'fastboot','',0,true,'skipjack','');"
                  "const fb=global.__els['menu'].innerHTML;"
                  "console.log(JSON.stringify({on,fb}));\nprocess.exit(0);\n")
     r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
     assert r.returncode == 0, r.stderr[:400]
     out = json.loads(r.stdout.strip().splitlines()[-1])
     on = out["on"]
-    for hd in ("Refresh", "Power", "Flashing", "Workbench", "Wear"):
-        assert f'class="exgrp-hd">{hd}<' in on, f"missing group header {hd}: {on[:200]}"
-    # A representative item from each group survived the fold.
-    for item in ("Re-identify", "Reboot", "Backup data", "Checkout", "Arm wear"):
-        assert item in on, f"folded menu lost {item!r}"
-    # Wear leads, Refresh trails; wear is the one button, the rest are text links.
+
+    for hd in ("Power", "Workbench", "Capture", "Wear"):
+        assert f'exgrp-hd">{hd}<' in on, f"missing group header {hd}: {on[:200]}"
+    assert 'dangerhd">wipes the watch<' in on, "the wipes have no heading of their own"
+    assert 'class="exgrp-hd">Refresh<' not in on, \
+        "the Refresh group is gone; its item was a power cycle with an identify"
+    assert "Re-identify" not in on, "re-identify should live on the Onboard button now"
+
+    for item in ("Reboot", "Backup data", "Checkout", "Arm wear",
+                 "Flash nightly", "Dump mmcblk0"):
+        assert item in on, f"menu lost {item!r}"
+
+    # Consequence order: the destructive group is LAST, below capture.
     assert on.index('exgrp-hd">Wear<') < on.index('exgrp-hd">Power<'), "Wear not first"
-    assert on.index('exgrp-hd">Refresh<') > on.index('exgrp-hd">Workbench<'), "Refresh not last"
+    assert on.index('exgrp-hd">Capture<') < on.index('dangerhd">wipes'), \
+        "capture must sit above the wipes"
+    assert on.index('dangerhd">wipes') > on.index('exgrp-hd">Workbench<'), \
+        "the wipes are not last — they used to sit second, in the cursor's path"
     assert 'class="menu-wear' in on, "wear should stay a pink button"
+    assert 'class="exgrp dangerbox"' in on, "the wipes have no rail"
+
     # Fastboot: bootloader power group in, watch-only groups out.
     fb = out["fb"]
     assert "Continue boot" in fb and 'class="exgrp-hd">Workbench<' not in fb
@@ -814,25 +833,32 @@ def test_execute_menu_folds_every_group_under_a_header(tmp_path):
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
-def test_reidentify_and_onboard_are_one_flow_two_buttons(tmp_path):
-    """'Re-identify / power on' (occupied rows) and 'Onboard' (empty rows) are
-    the SAME action — the onboard flow — reached from two buttons, not two code
-    paths. Both must call doRemap; the old separate doRefresh path is gone (no
-    duplicated logic)."""
+def test_onboard_is_the_one_reidentify_path(tmp_path):
+    """Re-identify used to be reachable from two buttons: the empty row's
+    Onboard pill and a Refresh group in the row menu. The menu copy is gone as
+    of 2026-08-09 — on an already-identified row it amounted to a port power
+    cycle, and identification is device-driven now (a watch that enumerates is
+    picked up by the status pass without being asked).
+
+    What must hold: exactly one code path, reached from the Onboard button, and
+    never the old separate doRefresh path."""
     ev = ("{stopPropagation(){},currentTarget:{getBoundingClientRect:()=>"
           "({left:0,right:0,top:0,bottom:0})}}")
     h = tmp_path / "ri.js"
     h.write_text(_DOM_CAPTURE + JS +
                  f"\nmenuExecute({ev},'1-2:1',false,false,false,true,false,"
-                 "'S9',false,'device','192.168.13.37',0,true);"
+                 "'S9',false,'device','192.168.13.37',0,true,'skipjack','');"
                  "console.log(global.__els['menu'].innerHTML);\nprocess.exit(0);\n")
     r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
     assert r.returncode == 0, r.stderr[:400]
     menu = r.stdout
-    assert "doRemap('1-2:1')" in menu, menu[:300]     # Re-identify runs the onboard flow
-    assert "doRefresh" not in menu                    # not the old light path
-    # The Onboard button uses the same function; the duplicated path is deleted.
+    assert "Re-identify" not in menu, \
+        "the row menu carries re-identify again — it is the Onboard button's job"
+
+    # One path, still reached from the Onboard pill, and the old light path
+    # stays deleted.
     assert "doRemap(" in _WEB_TEMPLATE and "function doRefresh" not in _WEB_TEMPLATE
+    assert "'Onboard'" in _WEB_TEMPLATE, "the Onboard button is the remaining trigger"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
@@ -2174,3 +2200,58 @@ def test_the_row_passes_the_lock_to_the_menu():
     bug was a guard that existed on both sides of a value nobody passed."""
     assert "(p.held&&p.held.kind)" in JS, \
         "the row no longer passes the operation lock into the menu"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_a_destructive_item_arms_before_it_commits(tmp_path):
+    """Flash nightly wiped a watch on one click with no confirmation, while its
+    own siblings 2.1 and 2.0 went through a confirm. Same wipe, opposite
+    treatment — and the unguarded one is the daily driver.
+
+    The fix is not a fourth modal. This UI already fires five blocking confirms
+    in a session, which is how a MISSING one went unnoticed: a dialog dismissed
+    by reflex is not a decision. A destructive item arms on the first click,
+    says so on the control, and only commits on the second."""
+    import json
+    h = tmp_path / "arm.js"
+    h.write_text(
+        _DOM_STUBS + JS +
+        # a button stub that records its own state, plus a menu to close
+        "\nlet fired=0;global.__fire=()=>{fired++;};"
+        "\nconst sibling={dataset:{},textContent:'Flash 2.1',closest(){return holder;}};"
+        "\nconst tgt={dataset:{},textContent:'Flash nightly',closest(){return holder;}};"
+        "\nconst holder={querySelectorAll(){return [sibling].filter(b=>b.dataset.armed==='1');}};"
+        "\ncloseMenu=function(){};"
+        "\narmGo(tgt,'__fire()','wipe + flash nightly');"
+        "\nconst afterFirst={fired:fired,label:tgt.textContent,armed:tgt.dataset.armed};"
+        "\narmGo(tgt,'__fire()','wipe + flash nightly');"
+        "\nconsole.log(JSON.stringify({afterFirst:afterFirst,fired:fired}));"
+        "\nprocess.exit(0);\n")
+    r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
+    assert r.returncode == 0, f"harness failed:\n{r.stderr[:600]}"
+    out = json.loads(r.stdout.strip().splitlines()[-1])
+
+    assert out["afterFirst"]["fired"] == 0, \
+        "the first click wiped the watch — arming did not happen"
+    assert out["afterFirst"]["armed"] == "1"
+    assert "click again" in out["afterFirst"]["label"], \
+        "the armed state is not announced on the control itself"
+    assert "wipe" in out["afterFirst"]["label"], "the armed label does not say what it will do"
+    assert out["fired"] == 1, "the second click did not commit"
+
+
+def test_every_wipe_is_armed_and_none_is_a_bare_click():
+    """The contract, checked over the built menu rather than trusted: every item
+    in the wipes group goes through the arming path. A destructive item wired
+    straight to its handler is the defect this closes."""
+    import re as _re
+    src = _WEB_TEMPLATE
+    grp = src[src.index("function grpWipe("):src.index("function menuExecute(")]
+    # Each live item must be built with midanger, never plain mi(...) with a fn.
+    bare = _re.findall(r"mi\('[^']*',\s*[\"'][^\"']+[\"'],\s*`[^`]+`", grp)
+    assert not bare, f"a wipe is wired directly to its handler, unarmed: {bare}"
+    for item in ("Flash nightly", "Flash 2.1", "Flash 2.0", "Restore data"):
+        assert f"midanger" in grp and item in grp, f"{item} missing from the wipes group"
+    # And the old unguarded call must be gone.
+    assert "doFlV(" not in src, \
+        "doFlV's confirm is superseded by arming; leaving both is two mechanisms"
