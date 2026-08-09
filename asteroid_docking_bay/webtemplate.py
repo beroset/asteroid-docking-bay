@@ -1214,7 +1214,7 @@ function render(data){
         }else if(charging){
           if(p.charge_losing){bat=batPill(p,'low',`${p.charge_pct!=null?p.charge_pct:'?'}% <span class="dim">&#8595; losing</span>`,'battery is DROPPING while charging — losing power despite the charge attempt. Check contacts / cable / port (the dirty-contact failure).');}
           else if(p.charge_target!=null){bat=batPill(p,'warn',`${p.charge_pct!=null?p.charge_pct:'?'}% <span class="dim">&rarr; ${p.charge_target}%</span>`,'charging');}
-          else if(chargeEnd[slot]){const rem=Math.max(0,Math.round((chargeEnd[slot]-Date.now())/1000));const m=Math.floor(rem/60),s=rem%60;bat=batPill(p,'warn',`<span class="dim">${m}m${String(s).padStart(2,'0')}s</span>`,'charging');}
+          else if(chargeEnd[slot]){const rem=Math.max(0,Math.round((chargeEnd[slot]-Date.now())/1000));const m=Math.floor(rem/60),s=rem%60;bat=batPill(p,'warn',`<span class="dim ctdn">${m}m${String(s).padStart(2,'0')}s</span>`,'charging');}
           else{bat=batPill(p,'warn','<span class="dim">starting&hellip;</span>','charging');}
         }
         else if(draining){
@@ -2914,7 +2914,15 @@ function tickCountdown(){
     if(rem>0){
       any=true;
       const m=Math.floor(rem/60),s=rem%60;
-      cell.innerHTML=`<span class="warn">${m}m${String(s).padStart(2,'0')}s</span>`;
+      // Update the countdown INSIDE the existing pill. Overwriting the whole
+      // cell replaced the pill with a bare span once per second, so the
+      // battery control was unclickable during exactly the operation you would
+      // want to interrupt — and it re-created the node under any open menu
+      // anchored to it. Fall back to writing the cell only if the pill is not
+      // there yet (the first tick can beat the render).
+      const t=cell.querySelector('.ctdn');
+      if(t)t.textContent=`${m}m${String(s).padStart(2,'0')}s`;
+      else cell.innerHTML=`<span class="cbadge bat warn"><span class="ctdn">${m}m${String(s).padStart(2,'0')}s</span></span>`;
     }else{delete chargeEnd[c];refresh();}
   });
   if(any){setTimeout(tickCountdown,1000);}else{countdownRunning=false;}

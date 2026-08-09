@@ -2033,3 +2033,38 @@ process.exit(0);
     assert "mtemp hot" in over101, "101C did not read as throttling"
     assert "throttling" in over101
     assert "mtemp" not in nossh, "a node without SSH invented a temperature"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_a_charge_countdown_updates_inside_the_pill(tmp_path):
+    """tickCountdown used to set innerHTML on the whole battery cell every
+    second, replacing the clickable pill with a bare span — so the battery
+    control was dead during exactly the operation you would want to interrupt,
+    and any menu anchored to that node was re-created under itself.
+
+    The countdown must write into the pill, leaving the pill intact."""
+    h = tmp_path / "ctdn.js"
+    h.write_text(
+        _DOM_STUBS + JS +
+        # A cell holding a rendered pill, as render() produces it.
+        "\nconst cell={_h:'<button class=\"cbadge bat warn\">"
+        "<span class=\"dim ctdn\">9m00s</span></button>',"
+        "  _t:{textContent:'9m00s'},"
+        "  set innerHTML(v){this._h=v;this._wiped=true;},"
+        "  get innerHTML(){return this._h;},"
+        "  querySelector(sel){return sel==='.ctdn'?this._t:null;}};"
+        "\nglobal.document.getElementById=(id)=>id==='bat-1-2:1'?cell:null;"
+        "\nchargeEnd['1-2:1']=Date.now()+65000;"
+        "\ntickCountdown();"
+        "\nconsole.log(JSON.stringify({wiped:!!cell._wiped,txt:cell._t.textContent,"
+        "  html:cell._h}));"
+        "\nprocess.exit(0);\n")
+    r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
+    assert r.returncode == 0, f"harness failed:\n{r.stderr[:600]}"
+    import json
+    out = json.loads(r.stdout.strip().splitlines()[-1])
+
+    assert not out["wiped"], \
+        "the countdown replaced the whole battery cell — the pill is destroyed"
+    assert "cbadge bat" in out["html"], "the pill did not survive the tick"
+    assert out["txt"] != "9m00s", "the countdown never updated"
