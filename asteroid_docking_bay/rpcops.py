@@ -1305,17 +1305,33 @@ def _port_hide(args):
 
 @DISPATCH.op("hub.hide")
 def _hub_hide(args):
-    """Toggle a whole hub's hidden flag (for unused sub-hubs)."""
+    """Toggle the hidden flag for a whole physical BOX, not one chip.
+
+    A box registers as several cascaded hubs — the Sabrent is five entries
+    (1-6 plus 1-6.1..1-6.4), the A16 is five, the dock two — and they all carry
+    the same auto-assigned name. Hiding one chip at a time meant "hide the
+    Sabrent" took five clicks, the first of which appeared to do nothing at all
+    because the box root carries no ports: only its own header row vanished.
+
+    So one click hides the box: the root address and every hub cascaded under
+    it. The whole box takes the state of the hub that was clicked, so a
+    half-hidden box resolves to fully shown or fully hidden rather than
+    toggling each chip out of step.
+    """
     loc = args["loc"]
+    root = loc.split(".")[0]
     with _config_lock:
         cfg = load_config()
-        hub = next((hub for hub in cfg.get("hubs", []) if hub["location"] == loc), None)
-        if hub is None:
+        box = [h for h in cfg.get("hubs", [])
+               if h["location"] == root or h["location"].startswith(root + ".")]
+        target = next((h for h in box if h["location"] == loc), None)
+        if target is None:
             return {"ok": False, "error": "hub not found"}
-        hub["hidden"] = not hub.get("hidden", False)
-        state = hub["hidden"]
+        state = not target.get("hidden", False)
+        for h in box:
+            h["hidden"] = state
         save_config(cfg)
-    return {"ok": True, "hidden": state}
+    return {"ok": True, "hidden": state, "hubs": len(box)}
 
 
 @DISPATCH.op("socket.set")

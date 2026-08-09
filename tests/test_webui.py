@@ -1161,23 +1161,37 @@ def test_reopening_a_panel_paints_instantly_from_cache(tmp_path):
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
-def test_reconcile_keys_rows_by_slot_and_hubs_by_location(tmp_path):
-    """The row reconcile reuses a DOM node only when its key matches, so the
-    key MUST be stable and unique per row — a watch row by its slot, a hub
-    header by its location. A wrong key would reuse the wrong node (stale
-    data) or never reuse (back to full flicker)."""
+def test_reconcile_keys_hub_headers_by_address_not_by_label(tmp_path):
+    """The reconcile drops a repeated key, so a key must be unique per row.
+
+    Hub headers used to be keyed by their visible LABEL — and auto-naming gives
+    every chip in one physical box the same name. The Sabrent is five hub
+    entries all labelled "Sabrent", so four of its five headers collided onto
+    one key and silently never reached the DOM. Same for the five "A16 #2"
+    chips. Symptom on the rig: hiding the box appeared to do nothing, then
+    removed rows four at a time.
+
+    Headers key on their address now, which is unique by construction."""
     import json
     h = tmp_path / "key.js"
+    same = ('<tr class="hub-hdr" id="hub-1-6.1"><td><span class="hl">Sabrent</span></td></tr>',
+            '<tr class="hub-hdr" id="hub-1-6.2"><td><span class="hl">Sabrent</span></td></tr>')
     h.write_text(_DOM_STUBS + JS +
                  "\nconsole.log(JSON.stringify({"
                  "row:_rowKey('<tr class=\"wr\" id=\"wr-1-2.3:4\"><td>x</td></tr>'),"
-                 "hub:_rowKey('<tr class=\"hub-hdr\"><td><span class=\"hl\">1-2.3</span></td></tr>')}));"
+                 f"a:_rowKey('{same[0]}'),b:_rowKey('{same[1]}'),"
+                 "orbit:_rowKey('<tr><td><span class=\"hl\">Orbit</span></td></tr>')}));"
                  "\nprocess.exit(0);\n")
     r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
     assert r.returncode == 0, r.stderr[:400]
     out = json.loads(r.stdout.strip().splitlines()[-1])
+
     assert out["row"] == "row:1-2.3:4", out
-    assert out["hub"] == "hub:1-2.3", out
+    assert out["a"] == "hub:1-6.1" and out["b"] == "hub:1-6.2", out
+    assert out["a"] != out["b"], \
+        "two chips of one box share a key — four of five headers would vanish"
+    # Sections that legitimately have no address still get their own key.
+    assert out["orbit"] == "sec:Orbit", out
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")

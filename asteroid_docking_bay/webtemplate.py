@@ -962,8 +962,14 @@ const _rowSig={};
 function _rowKey(html){
   const m=html.match(/id="wr-([^"]+)"/);
   if(m)return 'row:'+m[1];
+  // Key hub headers by their ADDRESS, never by the label. Auto-naming gives
+  // every chip in one physical box the same name, so keying on the label
+  // collapsed all five "Sabrent" headers onto one key — and a repeated key is
+  // dropped here, so four of them silently never reached the DOM.
+  const hid=html.match(/id="hub-([^"]+)"/);
+  if(hid)return 'hub:'+hid[1];
   const h=html.match(/class="hl">([^<]*)</);
-  if(h)return 'hub:'+h[1];
+  if(h)return 'sec:'+h[1];
   return 'x:'+html.length;
 }
 function reconcileRows(tb, htmls){
@@ -1169,7 +1175,7 @@ function render(data){
     const hubHl=hub.name?esc(hub.name):esc(hub.location);
     const hubAddr=hub.name?`<span class="dim">${esc(hub.location)}</span>`:'';
     const hubRenameBtn=`<a href="#" class="hidebtn" onclick="doRenameHub('${jsq(hub.name_prefix||hub.location)}','${jsq(hub.name||'')}');return false" title="rename this hub">&#x270e;</a>`;
-    rows.push(`<tr class="hub-hdr${hub.hidden?' hiddenrow':''}"><td colspan="8"><span class="hl">${hubHl}</span>${hubAddr}<span class="dim">${esc(hub.description)}</span> ${hubRenameBtn} ${hubHideBtn}</td></tr>`);
+    rows.push(`<tr class="hub-hdr${hub.hidden?' hiddenrow':''}" id="hub-${hub.location}"><td colspan="8"><span class="hl">${hubHl}</span>${hubAddr}<span class="dim">${esc(hub.description)}</span> ${hubRenameBtn} ${hubHideBtn}</td></tr>`);
     const visPorts=hub.ports.filter(p=>showHidden||!p.excluded);
     visPorts.forEach((p,i)=>{
       if(p.empty){

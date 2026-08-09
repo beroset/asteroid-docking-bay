@@ -1554,3 +1554,52 @@ def test_the_status_poll_never_waits_on_the_compile_scheduler(monkeypatch):
     assert elapsed < 1.0, (
         f"/api/status waited {elapsed:.1f}s on another machine — a dead "
         f"scheduler would freeze the fleet UI on a timer")
+
+
+def test_hiding_a_hub_hides_the_whole_physical_box(monkeypatch):
+    """A box registers as several cascaded hubs — the Sabrent is five entries
+    (1-6 plus 1-6.1..1-6.4), the A16 five, the dock two — all carrying the same
+    auto-assigned name. Hiding one chip at a time meant "hide the Sabrent" took
+    five clicks, and the FIRST appeared to do nothing because the box root
+    carries no ports: only its own header row vanished. The rest then removed
+    rows four at a time, one 4-port chip per click.
+
+    One click hides the box."""
+    from asteroid_docking_bay import rpcops
+    cfg = {"hubs": [
+        {"location": "1-6"}, {"location": "1-6.1"}, {"location": "1-6.2"},
+        {"location": "1-6.3"}, {"location": "1-6.4"},
+        {"location": "1-3"}, {"location": "1-3.3"},          # a different box
+    ]}
+    monkeypatch.setattr(rpcops, "load_config", lambda: cfg)
+    monkeypatch.setattr(rpcops, "save_config", lambda c: None)
+
+    # Clicking a SUB-chip hides the whole box, root included.
+    r = rpcops.DISPATCH._data["hub.hide"]({"loc": "1-6.2"})
+    assert r["ok"] and r["hidden"] is True and r["hubs"] == 5
+    assert all(h["hidden"] for h in cfg["hubs"] if h["location"].startswith("1-6")), \
+        "hiding one chip left the rest of the box on screen"
+    # The neighbouring box is untouched.
+    assert not any(h.get("hidden") for h in cfg["hubs"] if h["location"].startswith("1-3")), \
+        "hiding one box hid another"
+
+    # And it comes back as a whole, from any of its chips.
+    r = rpcops.DISPATCH._data["hub.hide"]({"loc": "1-6"})
+    assert r["hidden"] is False
+    assert not any(h.get("hidden") for h in cfg["hubs"]), "the box did not come back"
+
+
+def test_a_half_hidden_box_resolves_rather_than_toggling_out_of_step(monkeypatch):
+    """Config written before this change can hold a box whose chips disagree.
+    A per-chip toggle would flip each one and leave it just as mixed; the whole
+    box takes the state of the chip that was clicked instead."""
+    from asteroid_docking_bay import rpcops
+    cfg = {"hubs": [
+        {"location": "1-6", "hidden": True}, {"location": "1-6.1", "hidden": False},
+        {"location": "1-6.2", "hidden": True}, {"location": "1-6.3", "hidden": False},
+    ]}
+    monkeypatch.setattr(rpcops, "load_config", lambda: cfg)
+    monkeypatch.setattr(rpcops, "save_config", lambda c: None)
+
+    rpcops.DISPATCH._data["hub.hide"]({"loc": "1-6.1"})       # was shown -> hide all
+    assert all(h["hidden"] for h in cfg["hubs"]), "the box is still mixed"
