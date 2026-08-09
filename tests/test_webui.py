@@ -2395,3 +2395,50 @@ def test_no_css_class_is_styled_but_never_emitted():
     assert not orphans, (
         f"CSS classes styled but never emitted: {orphans} — either dead weight "
         f"or decoy vocabulary that contradicts the live rules")
+
+
+def test_the_status_row_groups_by_kind_and_carries_no_actions():
+    """The row mixed four kinds of control in one bullet-separated list wearing
+    one costume: view toggles, a fleet-wide policy that rewrites config, panel
+    openers, and the most disruptive action in the app — the onboard sweep,
+    styled in the same green that means healthy/connected/charging in fifteen
+    other places.
+
+    It now carries persistent UI STATE only, grouped by kind, with no inline
+    colours. One-shot actions moved out."""
+    hdr = _WEB_TEMPLATE[_WEB_TEMPLATE.index('<p class="meta">'):]
+    hdr = hdr[:hdr.index("</p>")]
+
+    assert hdr.count('class="mgrp"') >= 2, "the row is not grouped by kind"
+    assert 'class="vtog"' in hdr and 'class="mopen"' in hdr and 'class="mpref"' in hdr, \
+        "view toggles, panel openers and the policy share one costume again"
+    assert "style=" not in hdr, "inline colours are back in the status row"
+    assert "#3fb950" not in hdr, \
+        "green is the healthy/on colour and must not appear in the status row"
+    assert "onboard sweep" not in hdr, \
+        "a one-shot action is back in a row meant for persistent state"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_view_toggles_carry_state_in_the_class_not_the_label(tmp_path):
+    """Two adjacent toggles disagreed about what their label meant: one named
+    the ACTION ('show drain history' → click → 'hide…'), the USB preference
+    beside it named the STATE ('prefer ADB', where clicking switches away from
+    the label). One label was a promise, the other a readout.
+
+    The labels are nouns now and the state lives in a class."""
+    import json
+    h = tmp_path / "vtog.js"
+    h.write_text(
+        _DOM_STUBS + JS +
+        "\nconst lnk={_c:{},classList:{toggle(c,v){lnk._c[c]=v;}},textContent:'all ports'};"
+        "\nglobal.document.getElementById=()=>lnk;"
+        "\ntoggleShowHidden();"
+        "\nconsole.log(JSON.stringify({on:lnk._c.on,label:lnk.textContent}));"
+        "\nprocess.exit(0);\n")
+    r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
+    assert r.returncode == 0, f"harness failed:\n{r.stderr[:600]}"
+    out = json.loads(r.stdout.strip().splitlines()[-1])
+    assert out["on"] is True, "the toggle does not mark itself active"
+    assert out["label"] == "all ports", \
+        "the label was rewritten — it should be a noun that stays put"

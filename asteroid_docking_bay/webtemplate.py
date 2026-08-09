@@ -134,6 +134,22 @@ _WEB_TEMPLATE = """\
     /* Every floating menu names what it will act on. Four menus anchored to
        24px dots across 28 dense rows is four chances to command the wrong
        watch, and the menu itself said nothing about which one it held. */
+    /* The status row, grouped by KIND. Every item here is persistent UI state:
+       what you are looking at (view toggles), what you look THROUGH (panels),
+       and the one fleet-wide policy. One-shot ACTIONS were removed from this
+       row entirely — the onboard sweep now lives with the registry. Colour is
+       no longer inline and no longer arbitrary: a link looks like a link. */
+    .meta{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 22px}
+    .mgrp{display:inline-flex;align-items:baseline;gap:14px}
+    .meta a{text-decoration:none}
+    .vtog{color:#6e7681;border-bottom:1px dotted #4d5561;padding-bottom:1px}
+    .vtog:hover{color:#c9d1d9}
+    .vtog.on{color:#c9d1d9;border-bottom-style:solid}
+    .mopen{color:#58a6ff}
+    .mopen:hover{text-decoration:underline}
+    .mpol{gap:7px}
+    .mpref{color:#c9d1d9;border:1px solid #30363d;border-radius:var(--pill-r);padding:1px 9px;font-size:11px}
+    .mpref:hover{border-color:#58a6ff;color:#58a6ff}
     .reg-foot{border-top:1px solid #30363d;padding:12px 14px;background:#0d1117;border-radius:0 0 8px 8px}
     .sweep{font-size:12px;line-height:1.5}
     .sweep .dim{display:block;margin-top:4px;max-width:60ch}
@@ -501,7 +517,7 @@ _WEB_TEMPLATE = """\
   <div id="alert" class="alert"></div>
   <div class="hdr">
   <h1><span class="hdim">&#x2728;  &#x22C6;  &#x02DA; </span>&#x2726;<span class="htxt">  asteroid-docking-bay  </span>&#x2726;<span class="hdim"> &#x02DA;  &#x22C6;  &#x2728;</span></h1>
-  <p class="meta"><a href="#" id="histlink" onclick="toggleHistory();return false" style="color:#388bfd;text-decoration:none">show drain history</a> &nbsp;&middot;&nbsp; <a href="#" id="hidlink" onclick="toggleShowHidden();return false" style="color:#6e7681;text-decoration:none">show all ports</a> &nbsp;&middot;&nbsp; <a href="#" id="usbpreflink" onclick="toggleUsbPref();return false" style="color:#6e7681;text-decoration:none" title="Fleet USB-mode preference — how a watch that comes up on its own in the wrong mode is auto-corrected:&#10;&#10;• prefer ADB (standard): a stray SSH watch is switched back to adb — faster, and how a stock flash enumerates&#10;• prefer SSH: a stray watch is given its own SSH IP so several can run SSH at once — needed for WiFi/workbench work, but updates are slower&#10;&#10;A watch you switched by hand is left alone. Click to switch.">prefer ADB</a> &nbsp;&middot;&nbsp; <a href="#" id="reglink" onclick="openRegistry();return false" style="color:#6e7681;text-decoration:none" title="the Fleet Registry — every watch the rig has ever seen (docked or in orbit), its identity, first/last sighting, and a Log of what changed (kernel, Qt, MACs, resolution) over time">fleet registry</a> &nbsp;&middot;&nbsp; <a href="#" id="btlink" onclick="openBtScan();return false" style="color:#6e7681;text-decoration:none" title="scan for AsteroidOS watches over Bluetooth (they advertise their codename) and pair them — the first rung of Bluetooth in the Orbit port">scan bt</a></p>
+  <p class="meta"><span class="mgrp"><a href="#" id="histlink" class="vtog" onclick="toggleHistory();return false">drain history</a><a href="#" id="hidlink" class="vtog" onclick="toggleShowHidden();return false">all ports</a></span><span class="mgrp"><a href="#" id="reglink" class="mopen" onclick="openRegistry();return false" title="the Fleet Registry &mdash; every watch the rig has ever seen (docked or in orbit), its identity, first/last sighting, and a Log of what changed (kernel, Qt, MACs, resolution) over time. Fleet-wide actions live here too.">fleet registry</a><a href="#" id="btlink" class="mopen" onclick="openBtScan();return false" title="scan for AsteroidOS watches over Bluetooth (they advertise their codename) and pair them &mdash; the first rung of Bluetooth in the Orbit port">scan bt</a></span><span class="mgrp mpol"><span class="dim">usb</span><a href="#" id="usbpreflink" class="mpref" onclick="toggleUsbPref();return false" title="Fleet USB-mode preference &mdash; how a watch that comes up on its own in the wrong mode is auto-corrected:&#10;&#10;&bull; prefer ADB (standard): a stray SSH watch is switched back to adb &mdash; faster, and how a stock flash enumerates&#10;&bull; prefer SSH: a stray watch is given its own SSH IP so several can run SSH at once &mdash; needed for WiFi/workbench work, but updates are slower&#10;&#10;A watch you switched by hand is left alone. Click to switch.">prefer ADB</a></span></p>
   <div id="sweeplog" style="display:none;position:fixed;right:14px;bottom:14px;width:min(560px,92vw);max-height:60vh;overflow:auto;background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:10px 12px;font:12px monospace;color:#c9d1d9;white-space:pre-wrap;z-index:300;box-shadow:0 6px 30px rgba(0,0,0,.6)"><a href="#" onclick="document.getElementById('sweeplog').style.display='none';return false" style="float:right;color:#6e7681">close</a><a href="#" onclick="sweepSkip();return false" style="float:right;color:#d29922;margin-right:12px" title="give up on the current port's boot-wait and move to the next socket">skip port</a><b style="color:#3fb950">onboard sweep</b>\\n<span id="sweeplogbody"></span></div>
   </div>
   <div class="tblwrap">
@@ -3112,7 +3128,7 @@ function toggleHistory(){
   const el=document.getElementById('hist');
   histShown=!histShown;
   const l=document.getElementById('histlink');
-  if(l)l.textContent=histShown?'hide drain history':'show drain history';
+  if(l)l.classList.toggle('on',histShown);
   if(!histShown){el.style.display='none';return;}
   el.style.display='block';
   el.innerHTML='<p class="dim" style="margin-top:14px">loading&hellip;</p>';
@@ -3151,7 +3167,7 @@ function doStopDrain(c){
 function toggleShowHidden(){
   showHidden=!showHidden;
   const l=document.getElementById('hidlink');
-  if(l)l.textContent=showHidden?'hide avoided ports':'show all ports';
+  if(l)l.classList.toggle('on',showHidden);
   refresh();
 }
 let usbPref='adb';   // fleet USB-mode preference, mirrored from status
