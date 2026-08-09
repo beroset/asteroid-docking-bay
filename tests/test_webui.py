@@ -2496,3 +2496,39 @@ def test_power_lives_on_the_dot_not_in_the_row_menu(tmp_path):
     # ...and a bootloader watch keeps its route, since it has no dot.
     assert "Continue boot" in out["fb"], \
         "a watch in the bootloader has no dot and now no menu route either"
+
+
+def test_amber_means_only_attention():
+    """Amber carried seven distinct meanings: warning, SSH mode, command in
+    flight, a running measurement, held, over-subscribed and mid battery. A
+    watch in SSH mode, a watch mid-command, a watch under an oplock and a watch
+    at 40% were all the same colour, so the colour told you nothing.
+
+    Each meaning that is not "something needs attention" now has its own token."""
+    css = _WEB_TEMPLATE[:_WEB_TEMPLATE.index("</style>")]
+
+    def rule(sel):
+        import re as _re
+        m = _re.search(_re.escape(sel) + r"\{([^}]*)\}", css)
+        assert m, f"{sel} not found"
+        return m.group(1)
+
+    AMBER, BUSY, MODE, LOCKED, PROBE = "#d29922", "#58a6ff", "#f0883e", "#e3b341", "#8957e5"
+
+    # An abnormal but VALID usb mode is not a warning — and SSH and fastboot
+    # are the same kind of thing, so they read as siblings.
+    assert MODE in rule(".cbadge.ssh"), "SSH mode still reads as a warning"
+    assert MODE in rule(".cbadge.fb")
+    # A run in progress / a command in flight is its own state.
+    assert BUSY in rule(".cbadge.drain"), "a running drain test still reads as a warning"
+    assert BUSY in rule(".tgl.pending"), "an in-flight command still reads as a warning"
+    # Held means refused, not wrong — and its border used to disagree with its text.
+    held = rule(".cbadge.held")
+    assert LOCKED in held and AMBER not in held, "held still reads as a warning"
+    assert held.count(LOCKED) >= 2, "the held pill's border and text still disagree"
+    # The wanze dot should match the wanze pill.
+    assert PROBE in rule(".sdot.wanze"), "the wanze dot still reads as a warning"
+
+    # What KEEPS amber is only ever "something needs attention".
+    for sel in (".alert", ".scrn", ".sdot.warn"):
+        assert AMBER in rule(sel), f"{sel} should stay amber — it is a real warning"

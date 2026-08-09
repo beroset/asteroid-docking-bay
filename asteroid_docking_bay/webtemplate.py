@@ -200,9 +200,9 @@ _WEB_TEMPLATE = """\
     .sdot.drain{border-color:#3d4756;color:#8b949e;animation:drainpulse 1.4s ease-in-out infinite}
     .sdot.flaps{font-size:10px;font-weight:700;font-variant-numeric:tabular-nums}
     .cbadge.ssh.noaddr{border-color:#f85149;color:#f85149}
-    .sdot.wanze{border-color:#d29922;color:#d29922}
+    .sdot.wanze{border-color:#8957e5;color:#d2a8ff}
     .cbadge.wanze{border-color:#8957e5;color:#d2a8ff;animation:drainpulse 1.4s ease-in-out infinite}
-    .cbadge.held{border-color:#d29922;color:#e3b341;margin-left:6px}
+    .cbadge.held{border-color:#e3b341;color:#e3b341;margin-left:6px}
     .sdot[onclick]{cursor:pointer}
     .sdot.spark:hover,.sdot[onclick]:hover{background:rgba(88,166,255,.12)}
     @keyframes drainpulse{0%,100%{opacity:.3}50%{opacity:.85}}
@@ -312,8 +312,8 @@ _WEB_TEMPLATE = """\
     .cbadge{display:inline-block;box-sizing:border-box;min-height:var(--pill-h);padding:2px var(--pill-px);border-radius:var(--pill-r);font-size:var(--pill-fs);line-height:1.5;border:1px solid;vertical-align:middle;background:transparent;font-family:inherit}
     .cbadge.fb{border-color:#f0883e;color:#f0883e}
     .cbadge.adb{border-color:#3fb950;color:#3fb950}
-    .cbadge.ssh{border-color:#d29922;color:#d29922}
-    .cbadge.drain{border-color:#d29922;color:#d29922}
+    .cbadge.ssh{border-color:#f0883e;color:#f0883e}
+    .cbadge.drain{border-color:#58a6ff;color:#58a6ff}
     .cbadge.wifi{border-color:#39c5cf;color:#39c5cf}
     .cbadge.bat{border-color:#6e7681;color:#c9d1d9}
     .orbit-hint{color:#a78bfa;font-size:.85em;opacity:.85}
@@ -424,8 +424,8 @@ _WEB_TEMPLATE = """\
     .tgl:active{transform:scale(.92);transition:transform 55ms ease-out}
     .tgl:disabled{opacity:.35;cursor:default;pointer-events:none}
     .tgl .dot{transition:transform .2s}
-    .tgl.pending{border-color:#d29922;color:#d29922;animation:tglexec .9s ease-in-out infinite}
-    .tgl.pending .dot{background:#d29922!important;animation:tgldot .9s ease-in-out infinite}
+    .tgl.pending{border-color:#58a6ff;color:#58a6ff;animation:tglexec .9s ease-in-out infinite}
+    .tgl.pending .dot{background:#58a6ff!important;animation:tgldot .9s ease-in-out infinite}
     @keyframes tglexec{0%,100%{opacity:1}50%{opacity:.4}}
     @keyframes tgldot{0%,100%{transform:scale(1)}50%{transform:scale(2)}}
     .btn{background:none;color:#c9d1d9;border:1px solid #30363d;padding:3px 9px;border-radius:4px;cursor:pointer;font:12px monospace;margin:0 .36em;touch-action:manipulation;-webkit-tap-highlight-color:transparent;transition:background .12s,transform .12s}
