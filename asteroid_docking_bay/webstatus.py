@@ -37,8 +37,8 @@ from .variants import exact_codename
 from .tasks import (_charge_tasks, _drain_tasks, _flash_tasks, _remap_tasks,
                     task_active,
                     _workbench_tasks)
-from .watchctl import (GEOMETRY_PROBE_VERSION, Watch, _watch_os,
-                       _watch_os_for)
+from .watchctl import (GEOMETRY_PROBE_VERSION, Watch, _watch_build,
+                       _watch_os, _watch_os_for)
 
 
 # Serials ADB couldn't identify YET — retried, never skipped forever. A watch
@@ -605,14 +605,28 @@ def _geometry_view(adb_state: "str | None", serial: "str | None") -> "dict | Non
     if not serial:
         return None
     geo = (last_seen.get(serial) or {}).get("geometry")
-    if geo and geo.get("probe_v", 1) >= GEOMETRY_PROBE_VERSION:
+    # Geometry is static per BUILD, not per watch. Caching it forever was right
+    # for a shipped watch and wrong for one under active porting: sol's
+    # framebuffer went 384x384 -> 456x456 and its machine.conf gained
+    # ROUND = true, while a-d-b kept serving the first probe — so the Control
+    # Center showed the old resolution AND masked its screenshots square.
+    # The build id comes from the os-release read that already identifies the
+    # OS, so this costs no extra device round-trip; it is only known while the
+    # watch is online, and an unknown build never forces a re-probe.
+    build = _watch_build.get(serial)
+    stale_build = bool(build) and geo is not None and geo.get("build_id") != build
+    if (geo and geo.get("probe_v", 1) >= GEOMETRY_PROBE_VERSION
+            and not stale_build):
         return geo
-    # Either nothing cached, or cached before a field we now collect existed —
-    # re-probe while the watch is live so the cache catches up on its own.
+    # Nothing cached, cached before a field we now collect existed, or cached
+    # under a different image — re-probe while the watch is live so the cache
+    # catches up on its own.
     if adb_state == "device":
         fresh = Watch(serial).geometry()
         if fresh:
             fresh = {**fresh, "probe_v": GEOMETRY_PROBE_VERSION}
+            if build:
+                fresh["build_id"] = build
             last_seen.record(serial, geometry=fresh)
             return fresh
     # Offline with an outdated cache: incomplete beats nothing (the screenshot
@@ -661,6 +675,7 @@ def _web_status_data(cfg: dict) -> list[dict]:
     for serial in list(_watch_os):
         if _adb_state(devices, serial) != "device":
             _watch_os.pop(serial)
+            _watch_build.pop(serial, None)
     physical = {hub["location"]: hub for hub in
                 _timed("hub_scan", lambda: _sysfs_hub_scan(cfg) or uhubctl_list())}
     # Every hub location, used to spot cascade ports: a port whose child is

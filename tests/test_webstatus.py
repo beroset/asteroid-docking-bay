@@ -806,3 +806,68 @@ def test_a_stored_non_answer_is_re_resolved_not_kept_forever(monkeypatch):
     monkeypatch.setattr(ws, "get_watch_codename",
                         lambda s: (_ for _ in ()).throw(AssertionError("re-read a good codename")))
     assert ws._soft_remap(cfg2, {"1-3.4.3": "S2"}) is None
+
+
+def test_geometry_re_probes_when_the_watch_is_reflashed(monkeypatch, tmp_path):
+    """Geometry is static per BUILD, not per watch. Caching it forever was
+    right for a shipped watch and wrong for one under active porting: sol's
+    framebuffer went 384x384 -> 456x456 and its machine.conf gained
+    ROUND = true, while a-d-b kept serving the first probe — so the Control
+    Center showed the old resolution AND masked its screenshots square.
+
+    The build id rides along on the os-release read that already identifies
+    the OS, so this costs no extra device round-trip."""
+    from asteroid_docking_bay import webstatus as ws
+    from asteroid_docking_bay.lastseen import LastSeen
+    from asteroid_docking_bay.watchctl import GEOMETRY_PROBE_VERSION
+
+    ls = LastSeen(tmp_path / "ls.json")
+    monkeypatch.setattr(ws, "last_seen", ls)
+    ls.record("S1", geometry={"round": False, "resolution": "384x384",
+                              "probe_v": GEOMETRY_PROBE_VERSION,
+                              "build_id": "20260701000000"})
+    probes = []
+
+    class _W:
+        def __init__(self, serial): pass
+        def geometry(self):
+            probes.append(1)
+            return {"round": True, "resolution": "456x456"}
+    monkeypatch.setattr(ws, "Watch", _W)
+
+    # Same build → served from cache, no probe.
+    ws._watch_build["S1"] = "20260701000000"
+    assert ws._geometry_view("device", "S1")["resolution"] == "384x384"
+    assert probes == [], "re-probed a watch running the same image"
+
+    # Reflashed → the cache belongs to a build that is no longer running.
+    ws._watch_build["S1"] = "20260808164137"
+    got = ws._geometry_view("device", "S1")
+    assert got["resolution"] == "456x456", "served geometry from the old image"
+    assert got["round"] is True, "the screenshot mask kept the old shape"
+    assert got["build_id"] == "20260808164137"
+    assert len(probes) == 1
+
+    # An OFFLINE watch has no known build and must not be re-probed on a guess.
+    ws._watch_build.pop("S1", None)
+    assert ws._geometry_view(None, "S1")["resolution"] == "456x456"
+    assert len(probes) == 1
+
+
+def test_a_cache_from_before_build_tracking_re_probes_once(monkeypatch, tmp_path):
+    """Every watch cached before this change carries no build_id, so the first
+    pass after the upgrade re-probes it once and stamps the current build —
+    which is what corrects sol without anyone touching it."""
+    from asteroid_docking_bay import webstatus as ws
+    from asteroid_docking_bay.lastseen import LastSeen
+    from asteroid_docking_bay.watchctl import GEOMETRY_PROBE_VERSION
+
+    ls = LastSeen(tmp_path / "ls.json")
+    monkeypatch.setattr(ws, "last_seen", ls)
+    ls.record("S1", geometry={"round": False, "resolution": "384x384",
+                              "probe_v": GEOMETRY_PROBE_VERSION})   # no build_id
+    monkeypatch.setattr(ws, "Watch", lambda s: type("W", (), {
+        "geometry": lambda self: {"round": True, "resolution": "456x456"}})())
+    ws._watch_build["S1"] = "20260808164137"
+    got = ws._geometry_view("device", "S1")
+    assert got["resolution"] == "456x456" and got["build_id"] == "20260808164137"

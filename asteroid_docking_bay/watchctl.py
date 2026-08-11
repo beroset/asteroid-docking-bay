@@ -84,6 +84,11 @@ def wait_for_adb(codename: str, cfg: dict,
 # Entries are dropped when the watch goes offline, so a reflash is re-detected
 # on its next boot.
 _watch_os: dict[str, str] = {}
+# The BUILD_ID of the image each online watch is running, harvested from the
+# SAME /etc/os-release read that identifies the OS — so it costs no extra
+# device round-trip. Used to expire caches that are only valid for one build;
+# evicted alongside _watch_os when a watch goes offline.
+_watch_build: dict[str, str] = {}
 
 
 def detect_watch_os(serial: str) -> str:
@@ -95,6 +100,8 @@ def detect_watch_os(serial: str) -> str:
             if "=" in line:
                 k, v = line.split("=", 1)
                 kv[k.strip()] = v.strip().strip('"')
+        if kv.get("BUILD_ID"):
+            _watch_build[serial] = kv["BUILD_ID"]
         if kv.get("ID", "").lower() == "asteroid" or "asteroid" in kv.get("NAME", "").lower():
             return "asteroidos"
         if kv.get("NAME"):
