@@ -772,3 +772,37 @@ def test_an_allocated_watch_is_probed_not_peeled(monkeypatch):
     spawned.clear()
     ws._maybe_align_usb_mode("S2", "ssh", {"ssh_ips": {}, "usb_mode_preference": "adb"})
     assert spawned == [("_align_usb_mode_worker", ("S2", "adb"))], spawned
+
+
+def test_a_stored_non_answer_is_re_resolved_not_kept_forever(monkeypatch):
+    """sol, 2026-08-11: identified before its hostname was set, so `hostname`
+    returned the literal "(none)", a-d-b accepted it as an identity and wrote it
+    into the config. "(none)" is truthy, so the mapping read as CORRECT on every
+    later pass and the port was skipped before it could be re-read — the watch
+    stayed frozen under that name long after it began answering "sol".
+
+    A stored non-answer is not a mapping. It must resolve again."""
+    from asteroid_docking_bay import webstatus as ws
+    saved = {}
+    cfg = {"serials": {"S1": "(none)"},
+           "hubs": [{"location": "1-3.4", "ports": {"3": "(none)"},
+                     "port_serials": {"3": "S1"}}]}
+    monkeypatch.setattr(ws, "load_config", lambda: cfg)
+    monkeypatch.setattr(ws, "save_config", lambda c: saved.update(c=c))
+    monkeypatch.setattr(ws, "get_watch_codename", lambda s: "sol")
+    monkeypatch.setattr(ws, "registry", type("R", (), {"note": staticmethod(lambda *a, **k: None)})())
+    monkeypatch.setattr(ws, "last_seen", type("L", (), {"get": staticmethod(lambda s: {})})())
+    ws._soft_remap_unknown.clear()
+
+    out = ws._soft_remap(cfg, {"1-3.4.3": "S1"})
+    assert out is not None, "the stale mapping was treated as correct and skipped"
+    assert cfg["serials"]["S1"] == "sol", "the watch kept its non-answer name"
+
+    # A watch with a REAL codename is left alone — no needless adb reads.
+    cfg2 = {"serials": {"S2": "nemo"},
+            "hubs": [{"location": "1-3.4", "ports": {"3": "nemo"},
+                      "port_serials": {"3": "S2"}}]}
+    monkeypatch.setattr(ws, "load_config", lambda: cfg2)
+    monkeypatch.setattr(ws, "get_watch_codename",
+                        lambda s: (_ for _ in ()).throw(AssertionError("re-read a good codename")))
+    assert ws._soft_remap(cfg2, {"1-3.4.3": "S2"}) is None

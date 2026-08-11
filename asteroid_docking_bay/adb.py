@@ -146,6 +146,18 @@ def adb_shell(serial: str, cmd: str, timeout: int = 8) -> tuple[int, str, str]:
     return _run(f"adb -s {serial} shell {cmd}", check=False, timeout=timeout)
 
 
+# Strings a watch can hand back that are NOT an identity. `(none)` is what
+# `hostname` prints when none has been set — seen on a half-ported sol, where
+# it was accepted as a codename and persisted into the config, freezing the
+# watch's name as "(none)" long after the real hostname appeared.
+NOT_A_CODENAME = frozenset({"", "(none)", "none", "localhost", "unknown"})
+
+
+def is_a_codename(value: "str | None") -> bool:
+    """Whether what a watch reported can be used as its identity."""
+    return bool(value) and value.strip().lower() not in NOT_A_CODENAME
+
+
 def get_watch_codename(serial: str) -> str | None:
     """
     Read the AsteroidOS codename from the watch.
@@ -170,7 +182,7 @@ def get_watch_codename(serial: str) -> str | None:
 
     # Last resort: hostname (often set to the codename on AsteroidOS).
     rc, out, _ = adb_shell(serial, "hostname")
-    if rc == 0 and out.strip() not in ("", "localhost"):
+    if rc == 0 and is_a_codename(out):
         return out.strip()
 
     return None

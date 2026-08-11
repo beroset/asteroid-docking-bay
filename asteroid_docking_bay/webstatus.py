@@ -13,7 +13,7 @@ from .flap import flaps
 from . import oplock
 from . import wanze as wanze_mod
 from .adb import (_adb_state, _resolve_conn_state, adb_devices, adb_shell,
-                  battery_and_screen, get_watch_codename)
+                  battery_and_screen, get_watch_codename, is_a_codename)
 from .boottime import measure_boot
 from .config import (_config_lock, charge_config, find_codename_for_serial,
                      find_serial_for_loc_port,
@@ -359,7 +359,12 @@ def _soft_remap(cfg: dict, online_by_path: dict[str, str]) -> "dict | None":
         hub = next(hub for hub in cfg["hubs"] if hub["location"] == loc)
         port_str = str(port)
         codename = cfg.get("serials", {}).get(serial)
-        if (codename is not None
+        # A stored NON-ANSWER is not a correct mapping. "(none)" is truthy, so a
+        # watch identified before its hostname was set stayed frozen under that
+        # name forever: this check called the mapping correct and skipped the
+        # port before it could ever be re-read. Let it through to be resolved
+        # again — it costs one adb read, rate-limited like any other identify.
+        if (codename is not None and is_a_codename(codename)
                 and hub.get("ports", {}).get(port_str) == codename
                 and hub.get("port_serials", {}).get(port_str) == serial):
             continue  # mapping already correct
@@ -373,12 +378,12 @@ def _soft_remap(cfg: dict, online_by_path: dict[str, str]) -> "dict | None":
         identified = 0
         for loc, port_str, serial in moves:
             codename = cfg.get("serials", {}).get(serial)
-            if not codename:
+            if not is_a_codename(codename):
                 if identified >= _SOFT_REMAP_IDENTIFY_PER_PASS:
                     continue                        # serialize: defer to next pass
                 codename = get_watch_codename(serial)
                 identified += 1
-            if not codename:
+            if not is_a_codename(codename):
                 _soft_remap_unknown[serial] = now   # retry in _SOFT_REMAP_RETRY_S
                 continue
             _soft_remap_unknown.pop(serial, None)   # identified → clear any skip

@@ -281,3 +281,19 @@ def test_wait_serial_online_skips_recovery_cycle_when_another_watch_is_seated(mo
     monkeypatch.setattr(usbmod, "_sysfs_serial_at", lambda l, p: None)
     adbmod.wait_serial_online("TARGET", 0, 1, recover_loc_port=("1-2", 1))
     assert cycled == [("1-2", 1)], "did not cycle an empty seat"
+
+
+def test_a_non_answer_is_not_accepted_as_an_identity(monkeypatch):
+    """`hostname` prints "(none)" when none is set. That was taken as a codename
+    and persisted, so a half-ported watch was named "(none)" in the config.
+    Only `localhost` and the empty string were rejected before."""
+    import asteroid_docking_bay.adb as adbmod
+    assert adbmod.is_a_codename("sol") and adbmod.is_a_codename("nemo")
+    for junk in ("(none)", "none", "localhost", "", "  ", "UNKNOWN", "(None)"):
+        assert not adbmod.is_a_codename(junk), f"{junk!r} accepted as a codename"
+
+    # And the resolver must not return one from its hostname fallback.
+    monkeypatch.setattr(adbmod, "adb_shell",
+                        lambda s, cmd, **k: (0, "(none)", "") if cmd == "hostname" else (1, "", ""))
+    assert adbmod.get_watch_codename("S1") is None, \
+        "the resolver handed back a non-answer as the watch's name"
