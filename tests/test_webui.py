@@ -2406,6 +2406,48 @@ def test_no_css_class_is_styled_but_never_emitted():
         f"or decoy vocabulary that contradicts the live rules")
 
 
+def test_nowrap_cells_cap_their_width():
+    """`td.stats{white-space:nowrap}` was written for the watch icon strip —
+    "so the base pair never wraps to two rows". But the SAME cell carries the
+    Machine Room's "arch · speed · load N/1000" text, which is developer-mode
+    only (renderMachineRoom is gated on isDev()). Pinned to one line, that cell
+    demanded ~350px it could never give back, so the table outgrew the viewport
+    and the page grew a horizontal scrollbar — in developer mode only, which is
+    why user mode looked fixed.
+
+    nowrap does not shrink; it only defers the overflow to the page. It is safe
+    on free text ONLY when the width is also capped, so the cell has a ceiling
+    to ellipsis against — `.bc-n` is the pattern that gets this right. The rule
+    was also redundant for the strip it was written for: `.strip` is an
+    inline-flex (flex-wrap defaults to nowrap) whose `.sdot` children are
+    flex:none, and `.lastseen` carries its own nowrap."""
+    import re as _re
+    css = _WEB_TEMPLATE[:_WEB_TEMPLATE.index("</style>")]
+
+    # rule bodies are single-line in this stylesheet; a nowrap rule must also
+    # carry a width ceiling for the text to have something to ellipsis against
+    offenders = []
+    for m in _re.finditer(r"^\s*([^{}\n]+)\{([^{}]*white-space:\s*nowrap[^{}]*)\}",
+                          css, _re.M):
+        sel, decls = m.group(1).strip(), m.group(2)
+        # `width:`/`max-width:` cap; `min-width:` is a FLOOR and caps nothing —
+        # td.stats had one and still overflowed.
+        capped = bool(_re.search(r"(?<!-)(?<!min-)width:", decls)) or (
+            "overflow:hidden" in decls and "text-overflow" in decls)
+        if not capped:
+            offenders.append(sel)
+
+    # Bounded-content selectors: what they hold cannot grow past a few glyphs,
+    # so there is nothing for a cap to protect against.
+    bounded = {".pcell", ".lastseen", ".menu-item", ".fillpill .plbl"}
+    offenders = [s for s in offenders if s not in bounded]
+
+    assert not offenders, (
+        f"white-space:nowrap without a width cap on: {offenders} — free text "
+        f"pinned to one line pushes the table past the viewport instead of "
+        f"wrapping. Cap the width (see .bc-n) or drop the nowrap.")
+
+
 def test_the_status_row_groups_by_kind_and_carries_no_actions():
     """The row mixed four kinds of control in one bullet-separated list wearing
     one costume: view toggles, a fleet-wide policy that rewrites config, panel

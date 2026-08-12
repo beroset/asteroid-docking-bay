@@ -182,7 +182,11 @@ _WEB_TEMPLATE = """\
     .wthumb{width:30px;height:30px;object-fit:contain;cursor:pointer;vertical-align:middle;border-radius:4px;transition:transform .1s;position:relative;z-index:1}
     .wthumb:hover{transform:scale(1.12)}
     .svgi{width:15px;height:15px;fill:currentColor;vertical-align:-2px}
-    td.stats{min-width:52px;white-space:nowrap}   /* >=2 icons wide so the base pair never wraps to two rows */
+    /* >=2 icons wide so the base pair never wraps to two rows. Deliberately NOT
+       white-space:nowrap — the strip is an inline-flex that never wraps anyway,
+       but this same cell carries the Machine Room's "arch · speed · load" text,
+       and pinning that to one line pushed the whole table past the viewport. */
+    td.stats{min-width:52px}
     td.stats .strip{margin-left:0}
     .strip{margin-left:8px;display:inline-flex;gap:6px;align-items:center;vertical-align:middle}
     /* Every stat is a dot — a glyph in a circle — for one visual language with
