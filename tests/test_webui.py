@@ -2432,7 +2432,7 @@ def test_nowrap_cells_cap_their_width():
         sel, decls = m.group(1).strip(), m.group(2)
         # `width:`/`max-width:` cap; `min-width:` is a FLOOR and caps nothing —
         # td.stats had one and still overflowed.
-        capped = bool(_re.search(r"(?<!-)(?<!min-)width:", decls)) or (
+        capped = bool(_re.search(r"(?:^|;)\s*(?:max-)?width\s*:", decls)) or (
             "overflow:hidden" in decls and "text-overflow" in decls)
         if not capped:
             offenders.append(sel)
