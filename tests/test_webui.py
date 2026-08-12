@@ -2555,3 +2555,53 @@ def test_the_wanze_item_reflects_what_is_on_the_watch(tmp_path):
     # occupy a watch rather than change its power state.
     for html in (out["absent"], out["present"]):
         assert "Drain test" in html and "Checkout" in html
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_user_mode_hides_the_lab_but_keeps_the_fleet(tmp_path):
+    """User mode is a GUARD RAIL, not a security boundary — the backend still
+    accepts every op. What it removes is the LAB: instrumentation and
+    diagnosis. User mode operates the fleet; developer mode instruments it.
+
+    Flashing is deliberately IN (moWerk's call), so this must not be mistaken
+    for a safety feature — arming is what carries that."""
+    import json
+    h = tmp_path / "mode.js"
+    h.write_text(
+        _DOM_STUBS + JS +
+        "\nlet menu='';openMenu=function(ev,html){menu=html;};"
+        "\nconst ev={stopPropagation(){}};"
+        "\nfunction grab(){menuExecute(ev,'1-2:1',false,false,false,true,false,"
+        "'S1',false,'device','',0,'skipjack','');const m=menu;"
+        "menuPwr(ev,'1-2:1',false,false,false,true,false,'skipjack');return {menu:m,dot:menu};}"
+        "\nuiMode='developer';const dev=grab();"
+        "\nuiMode='user';const usr=grab();"
+        "\nconsole.log(JSON.stringify({dev:dev,usr:usr}));\nprocess.exit(0);\n")
+    r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
+    assert r.returncode == 0, f"harness failed:\n{r.stderr[:600]}"
+    out = json.loads(r.stdout.strip().splitlines()[-1])
+
+    # The lab goes: instrumentation, diagnosis, bootloader steering.
+    for gone in ("Workbench", "Drain test", "wanze", "Collect diagnostics",
+                 "Fastboot report"):
+        assert gone in out["dev"]["menu"], f"developer mode lost {gone!r}"
+        assert gone not in out["usr"]["menu"], f"user mode still shows {gone!r}"
+    assert "Bootloader" in out["dev"]["dot"] and "Bootloader" not in out["usr"]["dot"]
+
+    # The fleet stays — including flashing, which moWerk wants in user mode.
+    for kept in ("Flash nightly", "Backup data", "Dump mmcblk0", "Arm wear"):
+        assert kept in out["usr"]["menu"], f"user mode lost {kept!r}"
+    for kept in ("Charge", "Reboot", "Power off"):
+        assert kept in out["usr"]["dot"], f"user mode lost {kept!r}"
+
+
+def test_the_mode_toggle_is_in_the_status_row_and_persists():
+    """It belongs with the other persistent UI state, and must survive a reload
+    — a mode you have to re-pick every refresh is not a mode."""
+    assert 'id="modelink"' in _WEB_TEMPLATE, "no mode toggle in the status row"
+    assert "toggleMode()" in _WEB_TEMPLATE
+    assert "localStorage.setItem('adb-mode'" in _WEB_TEMPLATE, "the mode is not remembered"
+    assert "paintMode();" in _WEB_TEMPLATE, "the stored mode is never painted on load"
+    # It must not claim to be a security boundary.
+    assert "not a security boundary" in _WEB_TEMPLATE, \
+        "the tooltip should say plainly that this is a guard rail"

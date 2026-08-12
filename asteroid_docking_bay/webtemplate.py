@@ -148,6 +148,7 @@ _WEB_TEMPLATE = """\
     .mopen{color:#58a6ff}
     .mopen:hover{text-decoration:underline}
     .mpol{gap:7px}
+    .mpref.usermode{border-color:#a78bfa;color:#a78bfa}
     .mpref{color:#c9d1d9;border:1px solid #30363d;border-radius:var(--pill-r);padding:1px 9px;font-size:11px}
     .mpref:hover{border-color:#58a6ff;color:#58a6ff}
     .reg-foot{border-top:1px solid #30363d;padding:12px 14px;background:#0d1117;border-radius:0 0 8px 8px}
@@ -518,7 +519,7 @@ _WEB_TEMPLATE = """\
   <div id="alert" class="alert"></div>
   <div class="hdr">
   <h1><span class="hdim">&#x2728;  &#x22C6;  &#x02DA; </span>&#x2726;<span class="htxt">  asteroid-docking-bay  </span>&#x2726;<span class="hdim"> &#x02DA;  &#x22C6;  &#x2728;</span></h1>
-  <p class="meta"><span class="mgrp"><a href="#" id="histlink" class="vtog" onclick="toggleHistory();return false">drain history</a><a href="#" id="hidlink" class="vtog" onclick="toggleShowHidden();return false">all ports</a></span><span class="mgrp"><a href="#" id="reglink" class="mopen" onclick="openRegistry();return false" title="the Fleet Registry &mdash; every watch the rig has ever seen (docked or in orbit), its identity, first/last sighting, and a Log of what changed (kernel, Qt, MACs, resolution) over time. Fleet-wide actions live here too.">fleet registry</a><a href="#" id="btlink" class="mopen" onclick="openBtScan();return false" title="scan for AsteroidOS watches over Bluetooth (they advertise their codename) and pair them &mdash; the first rung of Bluetooth in the Orbit port">scan bt</a></span><span class="mgrp mpol"><span class="dim">usb</span><a href="#" id="usbpreflink" class="mpref" onclick="toggleUsbPref();return false" title="Fleet USB-mode preference &mdash; how a watch that comes up on its own in the wrong mode is auto-corrected:&#10;&#10;&bull; prefer ADB (standard): a stray SSH watch is switched back to adb &mdash; faster, and how a stock flash enumerates&#10;&bull; prefer SSH: a stray watch is given its own SSH IP so several can run SSH at once &mdash; needed for WiFi/workbench work, but updates are slower&#10;&#10;A watch you switched by hand is left alone. Click to switch.">prefer ADB</a></span></p>
+  <p class="meta"><span class="mgrp"><a href="#" id="histlink" class="vtog" onclick="toggleHistory();return false">drain history</a><a href="#" id="hidlink" class="vtog" onclick="toggleShowHidden();return false">all ports</a></span><span class="mgrp"><a href="#" id="reglink" class="mopen" onclick="openRegistry();return false" title="the Fleet Registry &mdash; every watch the rig has ever seen (docked or in orbit), its identity, first/last sighting, and a Log of what changed (kernel, Qt, MACs, resolution) over time. Fleet-wide actions live here too.">fleet registry</a><a href="#" id="btlink" class="mopen" onclick="openBtScan();return false" title="scan for AsteroidOS watches over Bluetooth (they advertise their codename) and pair them &mdash; the first rung of Bluetooth in the Orbit port">scan bt</a></span><span class="mgrp mpol"><span class="dim">mode</span><a href="#" id="modelink" class="mpref" onclick="toggleMode();return false" title="developer shows everything: diagnostics, drain tests, workbench, wanze, the compile cluster and bootloader steering.&#10;user hides the lab and leaves the fleet: onboarding, charge, flashing, backups, settings, WiFi/BT and orbit.&#10;&#10;A guard rail against clutter and misclicks, not a security boundary — the backend still accepts every op.">developer</a></span><span class="mgrp mpol"><span class="dim">usb</span><a href="#" id="usbpreflink" class="mpref" onclick="toggleUsbPref();return false" title="Fleet USB-mode preference &mdash; how a watch that comes up on its own in the wrong mode is auto-corrected:&#10;&#10;&bull; prefer ADB (standard): a stray SSH watch is switched back to adb &mdash; faster, and how a stock flash enumerates&#10;&bull; prefer SSH: a stray watch is given its own SSH IP so several can run SSH at once &mdash; needed for WiFi/workbench work, but updates are slower&#10;&#10;A watch you switched by hand is left alone. Click to switch.">prefer ADB</a></span></p>
   <div id="sweeplog" style="display:none;position:fixed;right:14px;bottom:14px;width:min(560px,92vw);max-height:60vh;overflow:auto;background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:10px 12px;font:12px monospace;color:#c9d1d9;white-space:pre-wrap;z-index:300;box-shadow:0 6px 30px rgba(0,0,0,.6)"><a href="#" onclick="document.getElementById('sweeplog').style.display='none';return false" style="float:right;color:#6e7681">close</a><a href="#" onclick="sweepSkip();return false" style="float:right;color:#d29922;margin-right:12px" title="give up on the current port's boot-wait and move to the next socket">skip port</a><b style="color:#3fb950">onboard sweep</b>\\n<span id="sweeplogbody"></span></div>
   </div>
   <div class="tblwrap">
@@ -539,6 +540,27 @@ _WEB_TEMPLATE = """\
   <div id="btmask" class="regmask" style="display:none" onclick="closeBt()"></div>
   <div id="bt" class="regpanel" style="display:none"></div>
 <script>
+// USER vs DEVELOPER mode.
+//
+// A GUARD RAIL, not a security boundary — moWerk's call. The backend still
+// accepts every op; this only decides what the page offers. Say so plainly
+// rather than implying protection it does not give: flashing is available in
+// user mode by design, so a wipe is still two clicks away. What carries that
+// safety is arming, not the mode.
+//
+// What it removes is the LAB: instrumentation and diagnosis. User mode
+// operates the fleet; developer mode instruments it.
+let uiMode=(function(){try{return localStorage.getItem('adb-mode')||'developer'}catch(e){return 'developer'}})();
+function isDev(){return uiMode!=='user';}
+function devOnly(html){return isDev()?html:'';}
+function toggleMode(){
+  uiMode=isDev()?'user':'developer';
+  try{localStorage.setItem('adb-mode',uiMode)}catch(e){}
+  const l=document.getElementById('modelink');
+  if(l){l.textContent=isDev()?'developer':'user';l.classList.toggle('usermode',!isDev());}
+  closeMenu();
+  if(lastData)render(lastData);
+}
 const srcs={};
 const chargeEnd={};
 // Onboarding in flight, per slot: {t0, dur} — drives the Onboard pill's timed
@@ -1315,7 +1337,8 @@ function render(data){
   // The Machine Room sits below Orbit: physical hubs, then watches in orbit,
   // then the compute the asteroid itself runs on. Renders nothing at all when
   // this host is not part of a compile cluster.
-  renderMachineRoom(data&&data.machineroom, rows);
+  // The compile cluster is developer furniture — it says nothing about a watch.
+  renderMachineRoom(isDev()&&data&&data.machineroom, rows);
   reconcileRows(tb, rows);
   seenSerials=present; firstStatus=false;
   Object.keys(srcs).forEach(c=>{const b=document.getElementById('log-'+c);if(b)b.classList.add('show');});
@@ -2721,7 +2744,7 @@ function renderRegistry(d){
     // Fleet-scope ACTIONS live here, not in the top row. The top row carries
     // persistent UI state (view toggles, the USB-mode policy); a sweep is a
     // rare one-shot operation and does not belong beside them.
-    `<div class="reg-foot">${sweepControl()}</div>`;
+    devOnly(`<div class="reg-foot">${sweepControl()}</div>`);
 }
 // The sweep's whole lifecycle on one control.
 //
@@ -2868,7 +2891,7 @@ function grpPower(slot,charging,draining,powered,noSw){
     '<div class="menu-sep"></div>'+
     (powered?mi('po','Power off',`doPoweroff('${slot}')`):'')+
     mi('rb','Reboot',`doReboot('${slot}')`)+
-    mi('bl','Bootloader',`doBootloader('${slot}')`);
+    devOnly(mi('bl','Bootloader',`doBootloader('${slot}')`));
 }
 // A watch in the bootloader used to get no Power menu at all — a dead end in
 // the UI exactly where the watch needs steering. The same intents apply, they
@@ -2912,7 +2935,7 @@ function grpWorkbench(slot,serial,wb,mode,sshIp,draining,noSw,hasWanze){
 }
 function grpCapture(slot,serial){
   return mi('','Backup data',`doBackup('${slot}')`)+
-    mi('info','Fastboot report',`doFbReport('${slot}')`)+
+    devOnly(mi('info','Fastboot report',`doFbReport('${slot}')`))+
     mi('dr','Dump mmcblk0',`doDump('${serial||''}')`,!serial,'takes a full-disk backup in the background; the watch is held for the duration so nothing else disturbs the copy');
 }
 // WIPES THE WATCH — every item here destroys data on the device and none of
@@ -2952,7 +2975,7 @@ function menuExecute(ev,slot,isFb,charging,draining,powered,noSw,serial,wb,mode,
     // (mkstrip only draws one for a mapped codename) and would otherwise have
     // no route to Continue boot at all.
     (isFb?grpHd('Bootloader')+grpBox(grpPowerFb(slot,powered)):'')+
-    (!isFb?grpHd('Workbench')+grpBox(grpWorkbench(slot,serial,wb,mode,sshIp,draining,noSw,hasWanze)):'')+
+    (!isFb?devOnly(grpHd('Workbench')+grpBox(grpWorkbench(slot,serial,wb,mode,sshIp,draining,noSw,hasWanze))):'')+
     // Ordered by consequence, not by category. Capture (produces a file, changes
     // nothing) sits above the wipes, and the wipes sit LAST — they used to be
     // second of five, so every trip to Workbench dragged the cursor across
@@ -3219,6 +3242,10 @@ function toggleShowHidden(){
   refresh();
 }
 let usbPref='adb';   // fleet USB-mode preference, mirrored from status
+function paintMode(){
+  const l=document.getElementById('modelink');
+  if(l){l.textContent=isDev()?'developer':'user';l.classList.toggle('usermode',!isDev());}
+}
 function toggleUsbPref(){
   const next=usbPref==='ssh'?'adb':'ssh';
   fetch('/api/usb-preference/'+next,{method:'POST'}).then(()=>refresh());
@@ -3340,6 +3367,7 @@ seedStars();
 // ms and the server caps rebuilds at one per 2s across every tab — except
 // when its topology fingerprint sees a device appear/vanish, which busts
 // the cache instantly. Enumeration changes land in ~1.5-3s.
+paintMode();
 refresh();setInterval(refresh,3000);
 </script>
 </body>
