@@ -553,6 +553,36 @@ _WEB_TEMPLATE = """\
 let uiMode=(function(){try{return localStorage.getItem('adb-mode')||'developer'}catch(e){return 'developer'}})();
 function isDev(){return uiMode!=='user';}
 function devOnly(html){return isDev()?html:'';}
+// The vocabulary layer. User mode is not about danger — it is about a
+// newcomer not being handed developer nomenclature. Same data, same controls,
+// plain words: ux('ppps','switchable') reads the first in developer mode and
+// the second in user mode.
+function ux(dev,user){return isDev()?dev:user;}
+// Codename -> the product a person actually owns. a-d-b shows codenames
+// because they match asteroidos.org and because the MACHINE image is what gets
+// flashed — but "lenok" means nothing to someone holding an LG G Watch R.
+// Kept here rather than in watch_variants.json: that file is the ground-truth
+// exceptions list for hardware sharing ONE image, a different question.
+const WATCH_PRODUCT={
+  beluga:'OPPO Watch', belugaxl:'OPPO Watch 46mm', catfish:'TicWatch Pro',
+  bass:'LG Watch Urbane', carp:'Moto 360 (2015)', dory:'LG G Watch',
+  lenok:'LG G Watch R', narwhal:'LG Watch W7', smelt:'Moto 360 (2015)',
+  sparrow:'Asus ZenWatch 2', sturgeon:'Huawei Watch', anthias:'Asus ZenWatch',
+  pike:'Polar M600', ray:'Fossil Gen 4', firefish:'Fossil Gen 4',
+  rubyfish:'TicWatch Pro 3', rover:'TicWatch Pro 3 LTE', sawfish:'Huawei Watch 2',
+  skipjack:'TicWatch C2', tunny:'TicWatch E2', hoki:'Fossil Gen 6',
+  mooneye:'TicWatch E', swift:'Asus ZenWatch 3', triggerfish:'Fossil Gen 5',
+  koi:'Casio WSD-F10', nemo:'LG Watch Urbane 2nd Ed.', minnow:'Moto 360 (2014)',
+  rinato:'Samsung Gear 2', sprat:'Samsung Gear Live', tetra:'Sony SmartWatch 3',
+  sol:'Sony SmartWatch 3'
+};
+// What to CALL a watch. Developer mode keeps the codename (it is the image
+// name, and two units can share one). User mode leads with the product and
+// keeps the codename in the tooltip, so nothing is lost — just not shouted.
+function watchName(codename){
+  if(isDev()||!codename)return codename||'';
+  return WATCH_PRODUCT[String(codename).toLowerCase()]||codename;
+}
 function toggleMode(){
   uiMode=isDev()?'user':'developer';
   try{localStorage.setItem('adb-mode',uiMode)}catch(e){}
@@ -609,8 +639,8 @@ function mksmart(p,slot,dis){
   // red NO!). Untested shows the power-cycle in its place, because the cycle
   // IS the test — one click cuts and restores power and records the verdict —
   // so the control lives exactly where its result will land.
-  if(p.smart===true)return '<span class="cbadge ppps" title="PPPS — this port switches its own VBUS (per-port power switching)">ppps</span>';
-  if(p.smart===false)return '<span class="cbadge no" title="port cannot switch its own power (not smart)">NO!</span>';
+  if(p.smart===true)return `<span class="cbadge ppps" title="${ux('PPPS — this port switches its own VBUS (per-port power switching)','this socket can switch its own power on and off')}">${ux('ppps','switchable')}</span>`;
+  if(p.smart===false)return `<span class="cbadge no" title="${ux('port cannot switch its own power (not smart)','this socket is always powered — it cannot be switched off')}">${ux('NO!','always on')}</span>`;
   return `<button class="cbadge unk"${dis} onclick="pulseSelf(this);doCy('${slot}')" title="smart capability not tested — click to power-cycle the port and detect it">&#x21BA;</button>`;
 }
 function pulseSelf(el){
@@ -912,8 +942,8 @@ function mkadb(adb,fbprod,os,serial,sshIp,name){
     const brand=WEAR_SHORT[os]||'';
     const ttl=`ADB mode${os==='asteroidos'?' — AsteroidOS':(known?' — '+esc(WEAR_LONG[os]||os):'')}`;
     if(!known&&serial)
-      return `<button class="cbadge adb" onclick="openNC('${jsq(serial)}','${nm}',event,'${jsq(sshIp||'')}','device')" title="${ttl} — click for network details">${logo}ADB${ser}</button>`;
-    return `<span class="cbadge adb" title="${ttl}">${logo}${brand?brand+' ':''}ADB${ser}</span>`;
+      return `<button class="cbadge adb" onclick="openNC('${jsq(serial)}','${nm}',event,'${jsq(sshIp||'')}','device')" title="${ttl} — click for network details">${logo}${ux('ADB','connected')}${ser}</button>`;
+    return `<span class="cbadge adb" title="${ttl}">${logo}${brand?brand+' ':''}${ux('ADB','connected')}${ser}</span>`;
   }
   if(adb==='ssh'){
     // An allocated address is one a-d-b handed out and can reach. WITHOUT one
@@ -923,10 +953,10 @@ function mkadb(adb,fbprod,os,serial,sshIp,name){
     // is rendered as what it is — an error — and the guess stays in the
     // tooltip where it is labelled as a guess.
     if(sshIp)
-      return `<button class="cbadge ssh" onclick="openNC('${jsq(serial||'')}','${nm}',event,'${jsq(sshIp)}','ssh')" title="SSH/developer USB mode at ${esc(sshIp)} (its own address) — click for network details">${AOSLOGO}SSH${` <span class="dim">${esc(sshIp)}</span>`}</button>`;
-    return `<button class="cbadge ssh noaddr" onclick="openNC('${jsq(serial||'')}','${nm}',event,'','ssh')" title="Enumerated in SSH/developer mode but a-d-b has NO usable address for it, so no command can reach it. It was never given an address of its own, so it should be on the shared default ${USB_SSH_IP} — but that is unverified, and it has not answered there. Typically the host has not completed DHCP on this link (check that the interface got an IPv4 address), or another watch is shadowing the shared address.">${AOSLOGO}SSH <b>no address</b></button>`;
+      return `<button class="cbadge ssh" onclick="openNC('${jsq(serial||'')}','${nm}',event,'${jsq(sshIp)}','ssh')" title="SSH/developer USB mode at ${esc(sshIp)} (its own address) — click for network details">${AOSLOGO}${ux('SSH','connected')}${isDev()?` <span class="dim">${esc(sshIp)}</span>`:''}</button>`;
+    return `<button class="cbadge ssh noaddr" onclick="openNC('${jsq(serial||'')}','${nm}',event,'','ssh')" title="Enumerated in SSH/developer mode but a-d-b has NO usable address for it, so no command can reach it. It was never given an address of its own, so it should be on the shared default ${USB_SSH_IP} — but that is unverified, and it has not answered there. Typically the host has not completed DHCP on this link (check that the interface got an IPv4 address), or another watch is shadowing the shared address.">${AOSLOGO}${ux('SSH','connected')} <b>${ux('no address','not reachable')}</b></button>`;
   }
-  if(adb==='fastboot'){const l=fbprod?`fastboot: ${esc(fbprod)}`:'fastboot';return `<span class="cbadge fb" title="watch is in the bootloader (fastboot) — flash/backup only, no ADB or watch functions">${l}</span>`;}
+  if(adb==='fastboot'){const l=fbprod?`${ux('fastboot','update mode')}: ${esc(fbprod)}`:ux('fastboot','update mode');return `<span class="cbadge fb" title="watch is in the bootloader (fastboot) — flash/backup only, no ADB or watch functions">${l}</span>`;}
   if(adb)return `<span class="dim">${esc(adb)}</span>`;
   return '<span class="dim">&mdash;</span>';
 }
@@ -1143,7 +1173,7 @@ function renderOrbit(hub,rows,lo,hi){
       `<td class="smtc"></td>`+
       `<td class="connc">${orbitBadge(p)}</td>`+
       `<td class="thumb">${mkthumb(p)}</td>`+
-      `<td><b class="cn${p.reachable?'':' offname'}" onclick="openCC('${jsq(p.serial)}','${jsq(p.codename)}',event)" title="open Control Center over WiFi (stale if offline)">${esc(p.codename)}</b> <span class="dim orbit-ip">${esc(p.ip||'')}</span></td>`+
+      `<td><b class="cn${p.reachable?'':' offname'}" onclick="openCC('${jsq(p.serial)}','${jsq(p.codename)}',event)" title="${isDev()?'open Control Center over WiFi (stale if offline)':'codename '+esc(p.codename)+' — click for details'}">${esc(watchName(p.codename))}</b> <span class="dim orbit-ip">${esc(p.ip||'')}</span></td>`+
       `<td class="stats"></td>`+
       `<td class="batc" id="bat-orbit-${esc(p.serial)}">${mkbatCell(p,lo,hi)}</td>`+
       `<td class="actc"><button class="btn" onclick="deorbit('${jsq(p.serial)}','${jsq(p.codename)}')" title="remove from Orbit — the watch itself is untouched">de-orbit</button></td>`+
@@ -1322,8 +1352,8 @@ function render(data){
           `<td class="connc"${p.serial?` id="conn-${esc(p.serial)}"`:''}>${adb}</td>` +
           `<td class="thumb">${mkthumb(p)}</td>` +
           `<td>`+(p.serial
-            ?`<b class="cn${p.adb?'':' offname'}" onclick="openCC('${jsq(p.serial)}','${jsq(p.codename)}',event)" title="open Control Center (stale if offline)">${esc(p.codename)}</b>`
-            :`<b class="${p.adb?'':'offname'}">${esc(p.codename)}</b>`)+mklife(p)+mkheld(p)+(p.screen_forced?`<span class="scrn" onclick="releaseScreen('${jsq(p.serial)}')" title="screen forced ON (draining) — click to release">screen</span>`:'')+`</td>` +
+            ?`<b class="cn${p.adb?'':' offname'}" onclick="openCC('${jsq(p.serial)}','${jsq(p.codename)}',event)" title="${isDev()?'open Control Center (stale if offline)':'codename '+esc(p.codename)+' — click for details'}">${esc(watchName(p.codename))}</b>`
+            :`<b class="${p.adb?'':'offname'}" title="${isDev()?'':'codename '+esc(p.codename)}">${esc(watchName(p.codename))}</b>`)+mklife(p)+mkheld(p)+(p.screen_forced?`<span class="scrn" onclick="releaseScreen('${jsq(p.serial)}')" title="screen forced ON (draining) — click to release">screen</span>`:'')+`</td>` +
           `<td class="stats">${mkstrip(p,wearH)}</td>` +
           `<td class="batc" id="bat-${slot}">${bat}</td>` +
           `<td class="actc" id="act-${slot}">` +
@@ -2744,7 +2774,7 @@ function renderRegistry(d){
     // Fleet-scope ACTIONS live here, not in the top row. The top row carries
     // persistent UI state (view toggles, the USB-mode policy); a sweep is a
     // rare one-shot operation and does not belong beside them.
-    devOnly(`<div class="reg-foot">${sweepControl()}</div>`);
+    `<div class="reg-foot">${sweepControl()}</div>`;
 }
 // The sweep's whole lifecycle on one control.
 //
@@ -2759,16 +2789,16 @@ function renderRegistry(d){
 let sweepState='idle',sweepPorts=0,sweepHeld='';
 function sweepControl(){
   if(sweepState==='armed')
-    return `<div class="sweep armed"><b>&#9888; sweep armed &mdash; all ${sweepPorts} sockets are OFF</b>`+
+    return `<div class="sweep armed"><b>&#9888; ${ux('sweep armed','ready')} &mdash; all ${sweepPorts} sockets are OFF</b>`+
       (sweepHeld?`<div class="dim">${esc(sweepHeld)}</div>`:'')+
       `<div class="dim">Equip every socket with a watch, then run it. Watches left unpowered keep their charge; they are not draining.</div>`+
-      `<div class="sweep-acts"><button class="btn" onclick="sweepRun()">Run the sweep</button>`+
+      `<div class="sweep-acts"><button class="btn" onclick="sweepRun()">${ux('Run the sweep','Set them up')}</button>`+
       `<button class="btn" onclick="sweepRestore()">Restore power &mdash; cancel</button></div></div>`;
   if(sweepState==='running')
-    return `<div class="sweep"><b>sweeping&hellip;</b> <span class="dim">one socket at a time</span>`+
-      `<div class="sweep-acts"><button class="btn" onclick="sweepSkip()">Skip this port</button></div></div>`;
-  return `<div class="sweep"><button class="btn sweep-arm" onclick="sweepArm()">&#9888; Onboard sweep</button>`+
-    `<div class="dim">Powers every socket off, then onboards them one at a time. You confirm once the sockets are equipped.</div></div>`;
+    return `<div class="sweep"><b>${ux('sweeping','setting up')}&hellip;</b> <span class="dim">one socket at a time</span>`+
+      `<div class="sweep-acts"><button class="btn" onclick="sweepSkip()">${ux('Skip this port','Skip this socket')}</button></div></div>`;
+  return `<div class="sweep"><button class="btn sweep-arm" onclick="sweepArm()">&#9888; ${ux('Onboard sweep','Set up all sockets')}</button>`+
+    `<div class="dim">${ux('Powers every socket off, then onboards them one at a time. You confirm once the sockets are equipped.','Switches every socket off, then sets up your watches one at a time. Put a watch in each socket, then confirm.')}</div></div>`;
 }
 function sweepPaint(){const p=document.getElementById('reg');if(p&&p.style.display!=='none')renderRegistry();}
 function sweepArm(){
@@ -2936,7 +2966,7 @@ function grpWorkbench(slot,serial,wb,mode,sshIp,draining,noSw,hasWanze){
 function grpCapture(slot,serial){
   return mi('','Backup data',`doBackup('${slot}')`)+
     devOnly(mi('info','Fastboot report',`doFbReport('${slot}')`))+
-    mi('dr','Dump mmcblk0',`doDump('${serial||''}')`,!serial,'takes a full-disk backup in the background; the watch is held for the duration so nothing else disturbs the copy');
+    mi('dr',ux('Dump mmcblk0','Full backup (whole watch)'),`doDump('${serial||''}')`,!serial,'takes a full-disk backup in the background; the watch is held for the duration so nothing else disturbs the copy');
 }
 // WIPES THE WATCH — every item here destroys data on the device and none of
 // them can be undone. They arm before they commit (see midanger); the group

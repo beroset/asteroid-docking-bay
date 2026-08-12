@@ -2589,8 +2589,13 @@ def test_user_mode_hides_the_lab_but_keeps_the_fleet(tmp_path):
     assert "Bootloader" in out["dev"]["dot"] and "Bootloader" not in out["usr"]["dot"]
 
     # The fleet stays — including flashing, which moWerk wants in user mode.
-    for kept in ("Flash nightly", "Backup data", "Dump mmcblk0", "Arm wear"):
+    for kept in ("Flash nightly", "Backup data", "Arm wear"):
         assert kept in out["usr"]["menu"], f"user mode lost {kept!r}"
+    # The whole-disk backup is KEPT but renamed — "mmcblk0" is a block device,
+    # not something a person owns.
+    assert "Dump mmcblk0" in out["dev"]["menu"]
+    assert "Dump mmcblk0" not in out["usr"]["menu"], "user mode still says mmcblk0"
+    assert "Full backup" in out["usr"]["menu"], "the whole-disk backup vanished"
     for kept in ("Charge", "Reboot", "Power off"):
         assert kept in out["usr"]["dot"], f"user mode lost {kept!r}"
 
@@ -2605,3 +2610,59 @@ def test_the_mode_toggle_is_in_the_status_row_and_persists():
     # It must not claim to be a security boundary.
     assert "not a security boundary" in _WEB_TEMPLATE, \
         "the tooltip should say plainly that this is a guard rail"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_user_mode_speaks_plainly_without_losing_anything(tmp_path):
+    """User mode is about NOMENCLATURE, not danger. A newcomer holding an
+    LG G Watch R should not have to learn that it is called "lenok", that its
+    socket does "ppps", or that a full backup is a "dump" of "mmcblk0".
+
+    Same data, same controls, plain words — and the developer vocabulary stays
+    reachable in the tooltip rather than being thrown away."""
+    import json
+    h = tmp_path / "vocab.js"
+    h.write_text(
+        _DOM_STUBS + JS +
+        "\nfunction shot(){return {name:watchName('lenok'),"
+        "  smartYes:mksmart({smart:true},'1-2:1',''),"
+        "  smartNo:mksmart({smart:false},'1-2:1',''),"
+        "  sweep:sweepControl()};}"
+        "\nuiMode='developer';const dev=shot();"
+        "\nuiMode='user';const usr=shot();"
+        "\nconsole.log(JSON.stringify({dev,usr}));\nprocess.exit(0);\n")
+    r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
+    assert r.returncode == 0, f"harness failed:\n{r.stderr[:600]}"
+    o = json.loads(r.stdout.strip().splitlines()[-1])
+
+    # The watch is called what the owner calls it.
+    assert o["dev"]["name"] == "lenok", "developer mode lost the codename"
+    assert o["usr"]["name"] == "LG G Watch R", "user mode still says lenok"
+
+    # The socket column explains itself. Only the LABEL and tooltip change —
+    # the css class stays `ppps`, since it drives the styling.
+    assert ">ppps<" in o["dev"]["smartYes"], "developer mode lost the ppps label"
+    assert ">ppps<" not in o["usr"]["smartYes"], "user mode still shows ppps"
+    assert ">switchable<" in o["usr"]["smartYes"]
+    assert "VBUS" not in o["usr"]["smartYes"], "the tooltip still says VBUS"
+    assert ">NO!<" in o["dev"]["smartNo"] and ">always on<" in o["usr"]["smartNo"]
+
+    # The guided setup flow is PRESENT in user mode — it is what a newcomer
+    # needs most — and named for what it does.
+    assert "sweepArm()" in o["usr"]["sweep"], \
+        "the guided setup flow is hidden from the people it exists for"
+    assert "Onboard sweep" in o["dev"]["sweep"]
+    assert "Set up all sockets" in o["usr"]["sweep"]
+
+
+def test_every_codename_the_rig_runs_has_a_product_name():
+    """The product table is the point of the vocabulary layer; a codename with
+    no entry falls through to the codename itself, which is correct but means
+    a user sees jargon. Pin the ones this rig actually carries."""
+    import re as _re
+    m = _re.search(r"const WATCH_PRODUCT=\{(.*?)\};", _WEB_TEMPLATE, _re.S)
+    assert m, "the product table is gone"
+    table = m.group(1)
+    for codename in ("lenok", "sturgeon", "catfish", "skipjack", "narwhal",
+                     "sawfish", "beluga", "nemo", "dory", "bass", "sol"):
+        assert f"{codename}:" in table, f"{codename} has no product name"
