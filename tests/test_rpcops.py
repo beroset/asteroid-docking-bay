@@ -105,7 +105,7 @@ def test_registered_ops_are_the_documented_contract():
         "watch.buzz", "watch.screen", "watch.screenshot", "screen.release_all",
         "watch.backup", "watch.restore", "watch.diagnostics", "watch.fbreport",
         "watch.image", "ssh.switch_adb", "watch.switch_ssh",
-        "port.set", "port.cycle", "port.poweroff", "port.reboot",
+        "port.set", "port.cycle", "port.poweroff", "port.declare_shelved", "port.reboot",
         "port.bootloader", "port.recovery", "port.continue",
         "port.hide", "hub.hide", "hub.rename", "socket.set",
         "charge.start", "charge.stop", "prefs.set_usb_mode",
@@ -713,6 +713,45 @@ def test_poweroff_over_ssh_marks_down_and_does_not_strand(monkeypatch):
     assert calls == [("192.168.13.37", "poweroff")], "did not power off over ssh"
     assert powered == [False], "port not cut after the ssh halt"
     assert marked.get("safe_off_ts"), "ssh poweroff did not stamp the down marker"
+
+
+def test_declare_shelved_records_the_state_without_touching_hardware(monkeypatch):
+    """The manual correction is bookkeeping ONLY.
+
+    It exists because a-d-b can vouch only for an off-state it delivered
+    itself. A watch powered down from the fastboot menu, by a held button, or
+    by mo cutting the hub's VBUS before a replug is equally off — but the host
+    saw none of it, so the row is stuck on a hedge no polling can settle.
+
+    Two things this pins. It must not actuate: if it cut or restored VBUS it
+    would be a power op wearing a bookkeeping label, and on a watch that
+    reboots on power (sawfish) the "just cycle it so a-d-b sees it" workaround
+    is exactly what this replaces. And it must stamp safe_off_ts WITHOUT
+    bumping last_live_ts — every reader compares the two, so touching the
+    latter would defeat the marker it just set (see lastseen.py)."""
+    import asteroid_docking_bay.rpcops as ro
+    marked, powered = {}, []
+    monkeypatch.setattr(ro, "find_serial_for_loc_port", lambda c, l, p: "S9")
+    monkeypatch.setattr(ro, "load_config", lambda: {})
+    monkeypatch.setattr(ro, "uhubctl_set_power",
+                        lambda l, p, on: powered.append(on) or True)
+    monkeypatch.setattr(ro.last_seen, "mark", lambda s, **k: marked.update(k))
+
+    d = ro.DISPATCH._data["port.declare_shelved"]({"loc": "1-2", "port": 1})
+    assert d["ok"] and d["serial"] == "S9", d
+    assert powered == [], "a bookkeeping op switched port power"
+    assert marked.get("safe_off_ts"), "the shelved marker was not stamped"
+    assert "last_live_ts" not in marked, (
+        "bumping last_live_ts defeats the very marker this op sets")
+    # Provenance is kept: a declared off-state and a delivered halt render the
+    # same but are not the same evidence.
+    assert marked.get("safe_off_declared") is True
+
+    # An unmapped port has no identity to record against, so it must refuse
+    # rather than silently stamp nothing and report success.
+    monkeypatch.setattr(ro, "find_serial_for_loc_port", lambda c, l, p: None)
+    d2 = ro.DISPATCH._data["port.declare_shelved"]({"loc": "1-2", "port": 9})
+    assert d2["ok"] is False and "no watch" in d2["error"], d2
 
 
 def test_set_usb_mode_preference_persists_and_validates(monkeypatch):

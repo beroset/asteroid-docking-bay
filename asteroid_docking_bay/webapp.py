@@ -68,6 +68,7 @@ _JSON_ROUTES = [
     ("POST", "/api/recovery/<loc>/<port:int>",     "port.recovery",   {},             False),
     ("POST", "/api/continue/<loc>/<port:int>",     "port.continue",   {},             False),
     ("POST", "/api/cycle/<loc>/<port:int>",        "port.cycle",      {},             True),
+    ("POST", "/api/declare-shelved/<loc>/<port:int>", "port.declare_shelved", {},      True),
     ("POST", "/api/hide/<loc>/<port:int>",         "port.hide",       {},             True),
     ("POST", "/api/hide-hub/<loc>",                "hub.hide",        {},             True),
     ("POST", "/api/charge/<loc>/<port:int>",       "charge.start",    {},             True),

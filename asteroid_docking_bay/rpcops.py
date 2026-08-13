@@ -1112,6 +1112,38 @@ def _port_poweroff(args):
     return {"ok": True, "adb_shutdown": graceful, "confirmed": confirmed}
 
 
+@DISPATCH.op("port.declare_shelved")
+def _port_declare_shelved(args):
+    """Record, on mo's word, that this watch is safely powered down.
+
+    Pure bookkeeping — it actuates nothing. It exists because a-d-b can only
+    vouch for an off-state it delivered itself (port.poweroff stamps the same
+    marker after a confirmed halt). A watch powered off from the fastboot
+    menu, by a held button, or by a pulled cradle is equally off, but the host
+    saw none of it, so the row sits on a hedge — "draining in fastboot?" or a
+    bare dash — that no amount of polling can resolve. This is the one input
+    that can: the operator looking at the watch.
+
+    Deliberately NOT gated by _refuse_if_busy and taking no oplock: nothing is
+    actuated, and while an op owns the slot the UI does not offer this at all
+    (see webstatus._declarable_off).
+
+    Self-correcting in both directions, so no undo is needed: a wrong claim
+    dies the moment the watch is next seen live, because last_live_ts advances
+    past the marker and every reader compares the two; and powering the port
+    on clears the marker outright and stamps the boot instead.
+    """
+    loc, port = args["loc"], args["port"]
+    serial = find_serial_for_loc_port(load_config(), loc, port)
+    if not serial:
+        return {"ok": False, "error": "no watch is mapped to this port, so "
+                                      "there is no identity to record it against"}
+    # safe_off_ts only — bumping last_live_ts here would defeat the very
+    # comparison that makes the marker mean anything (see lastseen.py).
+    last_seen.mark(serial, safe_off_ts=time.time(), safe_off_declared=True)
+    return {"ok": True, "serial": serial}
+
+
 def _mark_booting(serial, commanded=False):
     """Stamp when we deliberately (re)boot a known watch, so the connection
     column can show "booting up" through the ~40s window and a hedged "boot

@@ -210,6 +210,75 @@ def test_fb_draining_flags_a_watch_left_in_the_bootloader(monkeypatch, tmp_path)
     assert flag(op_owns_slot=True) is False
     # No watch mapped, nothing to warn about.
     assert flag(serial=None) is False
+    # Answered by hand: once mo has confirmed the watch is actually off, the
+    # hedge is settled and must stop crying wolf.
+    assert flag(shelved=True) is False
+    # A worn watch is on a wrist and running; it is not a candidate for "off".
+    assert flag(worn=True) is False
+
+
+def test_manual_shelve_offer_covers_every_state_a_d_b_cannot_observe(monkeypatch):
+    """The override is offered on ANY unreadable off-state, not just fastboot.
+
+    The rig arrives here in bulk — mo cuts the hubs' VBUS by hand before a
+    replug and every watch goes down unobserved, so most rows sit on a bare
+    dash rather than the loud fastboot hedge. If the correction were wired
+    only to `fb_draining`, none of those rows could be corrected at all.
+
+    It stays a PER-WATCH act: "many watches look ambiguous" is never evidence
+    that any one of them is off — that is the verification this button
+    records, so the predicate only ever describes one port."""
+    from asteroid_docking_bay import webstatus as ws
+
+    def offer(**over):
+        args = dict(serial="S1", power=False, adb_state=None,
+                    op_owns_slot=False, shelved=False, worn=False)
+        args.update(over)
+        return ws._declarable_off(**args)
+
+    assert offer() is True, "the replugged-rig case cannot be corrected at all"
+    # fb_draining is the loud SUBSET: same base, plus the fastboot sighting.
+    assert ws._fb_draining("S1", False, None, False, "fastboot") is True
+    assert ws._fb_draining("S1", False, None, False, "device") is False
+
+    # Everything a-d-b CAN see for itself is excluded — the offer exists only
+    # where polling has no answer.
+    assert offer(power=True) is False       # port live: readable
+    assert offer(adb_state="device") is False   # still talking
+    assert offer(op_owns_slot=True) is False    # we cut it deliberately
+    assert offer(serial=None) is False          # no identity to record against
+    assert offer(shelved=True) is False         # already recorded
+    assert offer(worn=True) is False            # on a wrist, running
+
+
+def test_a_stale_safe_off_marker_does_not_silence_a_live_watch(monkeypatch, tmp_path):
+    """`shelved` must mean "off since we last saw it", not "was off once".
+
+    A watch shelved last week and since booted carries an old safe_off_ts. A
+    bare truthiness check would treat that stale marker as a standing claim and
+    suppress a REAL draining warning — the sturgeon failure, silently
+    un-warned.
+
+    Calls the production predicate directly. An earlier version of this test
+    re-implemented the comparison inline and therefore passed against a
+    deliberately broken webstatus — it was testing its own copy."""
+    from asteroid_docking_bay import webstatus as ws
+
+    def shelved_of(safe_off_ts, last_live_ts):
+        return ws._is_shelved({"safe_off_ts": safe_off_ts,
+                               "last_live_ts": last_live_ts})
+
+    assert shelved_of(1000.0, 900.0) is True      # off after it was last live
+    assert shelved_of(1000.0, 1000.0) is True     # stamped at the sighting
+    assert shelved_of(900.0, 1000.0) is False     # LIVE since → stale marker
+    assert shelved_of(0, 1000.0) is False         # never shelved
+
+    # And the same input must make _lifecycle agree, or the badge and the
+    # warning would contradict each other on the same row.
+    monkeypatch.setattr(ws, "last_seen", type("L", (), {
+        "get": staticmethod(lambda s: {"safe_off_ts": 900.0, "last_live_ts": 1000.0})})())
+    assert ws._lifecycle("S1", present=False, power=False) != "down", (
+        "a stale marker still claimed the watch was shelved")
 
 
 def test_last_conn_state_is_not_erased_by_an_offline_poll(tmp_path):

@@ -1027,6 +1027,49 @@ def test_power_dot_is_the_first_stats_dot_coloured_by_state(tmp_path):
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_the_manual_shelve_override_is_offered_on_every_unreadable_state(tmp_path):
+    """The connection badge becomes the way to correct a state a-d-b could not
+    observe — on BOTH shapes that state takes.
+
+    The loud one is the fastboot hedge. The quiet one is a bare dash, which is
+    what most of the rig shows after mo cuts the hubs' VBUS by hand for a
+    replug: every watch went down unobserved. Wiring the override only to the
+    fastboot warning would leave exactly those rows uncorrectable.
+
+    It stays PER WATCH: the offer is a property of one port's row, and the
+    action posts that one port. Many ambiguous rows are not evidence that any
+    of them is off — the click IS the verification."""
+    import json
+    h = tmp_path / "shelve.js"
+    h.write_text(_DOM_STUBS + JS +
+                 "\nconst base={codename:'sawfish',serial:'S9',slot_loc:'1-3',port:2,"
+                 "adb:null,power:false,connected:false};"
+                 "console.log(JSON.stringify({"
+                 "fb:mkadbrow({...base,fb_draining:true,can_shelve:true}),"
+                 "dash:mkadbrow({...base,can_shelve:true}),"
+                 "fbNo:mkadbrow({...base,fb_draining:true,can_shelve:false}),"
+                 "dashNo:mkadbrow({...base,can_shelve:false}),"
+                 "shelved:mkadbrow({...base,lifecycle:'down',can_shelve:false})}));"
+                 "\nprocess.exit(0);\n")
+    r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
+    assert r.returncode == 0, r.stderr[:400]
+    out = json.loads(r.stdout.strip().splitlines()[-1])
+
+    # Offered on both unreadable states, and it targets THIS port only.
+    for k in ("fb", "dash"):
+        assert "menuShelve(" in out[k], f"no manual override offered on {k}"
+        assert "1-3:2" in out[k], f"the {k} override does not name its own port"
+    # The loud warning keeps its colour — the wrapper must not repaint it.
+    assert 'class="err"' in out["fb"], "wrapping the warning flattened its colour"
+    assert "draining in fastboot?" in out["fb"]
+
+    # Not offered where a-d-b already knows the answer, or where the state is
+    # not ours to declare.
+    for k in ("fbNo", "dashNo", "shelved"):
+        assert "menuShelve(" not in out[k], f"override wrongly offered on {k}"
+    assert "shelved" in out["shelved"], "the corrected state does not read back"
+
+
 def test_boot_pill_shows_in_connection_column_and_outranks_no_link(tmp_path):
     """A triggered boot paints a white pulsing 'booting up' pill in the
     connection column, escalating to a red-flashing 'boot failed?' once the

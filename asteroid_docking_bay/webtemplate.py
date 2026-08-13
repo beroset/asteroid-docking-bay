@@ -315,6 +315,13 @@ _WEB_TEMPLATE = """\
        table — wider than the viewport. min-height (not height) holds the
        single-line size; a wrapped pill grows past it. */
     .cbadge{display:inline-block;box-sizing:border-box;min-height:var(--pill-h);padding:2px var(--pill-px);border-radius:var(--pill-r);font-size:var(--pill-fs);line-height:1.5;border:1px solid;vertical-align:middle;background:transparent;font-family:inherit}
+    /* Manual state correction: carries no colour of its own, so the badge it
+       wraps keeps encoding the consequence. The dotted underline is the only
+       affordance — enough to invite the click without competing with the
+       warning it sits on. */
+    .shelvable{border:none;background:none;padding:0;font:inherit;color:inherit;cursor:pointer;
+      border-bottom:1px dotted #6e7681;vertical-align:middle}
+    .shelvable:hover{border-bottom-color:#c9d1d9;background:rgba(88,166,255,.10)}
     .cbadge.fb{border-color:#f0883e;color:#f0883e}
     .cbadge.adb{border-color:#3fb950;color:#3fb950}
     .cbadge.ssh{border-color:#f0883e;color:#f0883e}
@@ -970,7 +977,8 @@ function mkadbrow(p){
   // does not stop a watch in the bootloader — it keeps running on battery,
   // invisible, until flat. That is how sturgeon reached 0%.
   if(p.fb_draining)
-    return '<span class="err" title="last seen in FASTBOOT, port now unpowered — a watch in the bootloader does NOT stop when power is cut, it keeps running on battery until flat and is invisible while it does. Power the port back on, then either boot it or power it off from the on-screen fastboot menu.">draining in fastboot?</span>';
+    return shelveWrap(p,'<span class="err">draining in fastboot?</span>',
+      'last seen in FASTBOOT, port now unpowered — a watch in the bootloader does NOT stop when power is cut, it keeps running on battery until flat and is invisible while it does. Power the port back on, then either boot it or power it off from the on-screen fastboot menu.');
   // A running standby drain test: the watch is deliberately off the bus (port
   // cut, on battery), so without this the row falls through to a bare dash /
   // "no link". Name it AND the feature combo under test, so the connection
@@ -1006,7 +1014,41 @@ function mkadbrow(p){
     return '<span class="cbadge life down" title="shelved — gracefully powered down, port off, not draining (a deliberate, safe off)">shelved</span>';
   if(p.adb===null&&p.lifecycle==='worn')
     return '<span class="cbadge life worn" title="worn — off the rig via the wear toggle; port held for re-docking">worn</span>';
+  // The unpowered no-claim case: a-d-b has nothing to read and says so with a
+  // dash. That dash is honest but useless when mo KNOWS the watch is off, so
+  // it is the second place the manual correction is offered.
+  if(p.can_shelve&&p.adb===null)
+    return shelveWrap(p,'<span class="dim">&mdash;</span>',
+      'port is off and nothing is reachable, so a-d-b makes no claim about this watch — it cannot tell a safely halted watch from one running flat on battery. Click to record what you know.');
   return mkadb(p.adb,null,p.os,p.serial,p.ssh_ip,p.codename);
+}
+// The manual state correction. a-d-b can only vouch for an off-state it
+// delivered itself; however else a watch ended up powered down — the fastboot
+// menu, a held button, a pulled cradle — the host never saw it, and no amount
+// of polling resolves that. So the ambiguous badge becomes the way in, per the
+// rule that an action belongs to the indicator that changes when it succeeds:
+// this one turns the badge into "shelved".
+function shelveWrap(p,inner,tip){
+  if(!p.can_shelve)return `<span title="${tip}">${inner}</span>`;
+  // A bare wrapper, NOT a .cbadge: the badge inside already carries the colour
+  // that encodes the consequence (red for the draining warning, dim for the
+  // no-claim dash) and re-skinning it here would flatten that.
+  return `<button class="shelvable" title="${tip}&#10;&#10;a-d-b cannot verify this — click to correct the state by hand" `+
+    `onclick="menuShelve(event,'${jsq(p.slot_loc+':'+p.port)}','${jsq(p.codename||'')}')">${inner}</button>`;
+}
+function menuShelve(ev,slot,codename){
+  ev.stopPropagation();
+  openMenu(ev,menuIdent(codename,slot,'watch')+
+    `<div class="menu-hd">correct the state a-d-b could not observe</div>`+
+    grpBox(mi('po','Actually powered down &mdash; mark shelved',`shelveGo('${jsq(slot)}')`))+
+    `<div class="menu-hd heldnote">recorded on your word, not measured. It clears itself: powering the port on, or simply seeing the watch live again, drops the claim.</div>`);
+}
+function shelveGo(slot){
+  fetch('/api/declare-shelved/'+_api(slot),{method:'POST'}).then(r=>r.json()).then(d=>{
+    if(d.ok)toast('recorded as shelved — safely powered down');
+    else toast('could not record: '+(d.error||'unknown'));
+    refresh();
+  }).catch(()=>toast('could not record the state'));
 }
 // Keyed row reconcile: replacing the whole tbody innerHTML every refresh
 // destroyed and recreated every product <img>, so each thumbnail reloaded and

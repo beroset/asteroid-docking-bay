@@ -62,8 +62,44 @@ _enum_stuck_since: dict[str, float] = {}
 _ENUM_STUCK_GRACE_SEC = 60  # normal boots enumerate well within this
 
 
+def _is_shelved(ls: dict) -> bool:
+    """Whether a LastSeen entry claims the watch is safely off RIGHT NOW.
+
+    The comparison is the whole point: safe_off_ts must be at or after the last
+    live sighting. A bare truthiness check would let a marker from an earlier
+    shelve stand for a watch that has been up since — which would silence a
+    real draining warning with a week-old fact. One definition, used by both
+    _lifecycle's "down" claim and the fastboot warning, so the pill and the
+    warning can never contradict each other on the same row.
+    """
+    so = ls.get("safe_off_ts") or 0
+    return bool(so and so >= (ls.get("last_live_ts") or 0))
+
+
+def _declarable_off(serial, power, adb_state, op_owns_slot: bool,
+                    shelved: bool, worn: bool) -> bool:
+    """Whether a-d-b has NO way to know this watch's real power state, so the
+    only thing that can settle it is mo telling us.
+
+    The port is off, so there is nothing left to read; nothing is talking on
+    any transport; and no op owns the slot, so the off-state was not something
+    we did deliberately. However the watch got there — a fastboot menu
+    poweroff, a button-held halt, a pulled cradle, a battery that went flat —
+    the host cannot see it, and a-d-b's honest position is "no claim".
+
+    Excluded: a watch already marked shelved (nothing to correct) and a WORN
+    watch (it is on a wrist and running, so declaring it off would be a lie).
+
+    This is the offer behind the connection column's manual override; the
+    caller turns it into a clickable badge.
+    """
+    return bool(serial and not power and adb_state is None
+                and not op_owns_slot and not shelved and not worn)
+
+
 def _fb_draining(serial, power, adb_state, op_owns_slot: bool,
-                 last_conn_state) -> bool:
+                 last_conn_state, shelved: bool = False,
+                 worn: bool = False) -> bool:
     """Whether this port's watch is running flat in the bootloader, unseen.
 
     Cutting VBUS does NOT stop a watch in fastboot — LK keeps running on
@@ -79,9 +115,20 @@ def _fb_draining(serial, power, adb_state, op_owns_slot: bool,
     A standalone function because inlining it left the whole condition
     untestable — the test that named this failure only checked a LastSeen
     round-trip and would have passed with any clause inverted.
+
+    `shelved` is what mo's manual override sets: once he has told us the watch
+    is safely off, this warning is answered and must stop. It is the SAME
+    predicate _lifecycle uses (safe_off_ts >= last_live_ts), not a bare
+    truthiness check — a stale marker from an earlier shelve must not silence
+    a real draining watch that has been live since.
+
+    Expressed on top of _declarable_off because it is exactly that state plus
+    one fact: the watch was last seen in the bootloader. Sharing the base
+    keeps the two from drifting apart.
     """
-    return bool(serial and not power and adb_state is None
-                and not op_owns_slot and last_conn_state == "fastboot")
+    return (_declarable_off(serial, power, adb_state, op_owns_slot,
+                            shelved, worn)
+            and last_conn_state == "fastboot")
 
 
 def _enum_stuck(slot: str, power, adb_state, present: bool, now: float) -> bool:
@@ -517,11 +564,7 @@ def _lifecycle(serial: "str | None", present: bool, power: "bool | None") -> "st
             return "booting"
     if power:
         return None
-    so = ls.get("safe_off_ts") or 0
-    llt = ls.get("last_live_ts") or 0
-    if so and so >= llt:
-        return "down"
-    return None
+    return "down" if _is_shelved(ls) else None
 
 
 def _maybe_measure_boot(serial: "str | None", adb_state: str) -> None:
@@ -832,9 +875,17 @@ def _web_status_data(cfg: dict) -> list[dict]:
             op_owns_slot = any(
                 not tasks.get(slot, {}).get("done", True)
                 for tasks in (_charge_tasks, _drain_tasks, _workbench_tasks))
+            _ls = last_seen.get(serial) or {}
+            _shelved = _is_shelved(_ls)
+            _worn = bool(_ls.get("wear"))
             fb_draining = _fb_draining(
                 serial, power, adb_state, op_owns_slot,
-                (last_seen.get(serial) or {}).get("last_conn_state"))
+                _ls.get("last_conn_state"), _shelved, _worn)
+            # Whatever state the watch is really in, with the port off a-d-b
+            # cannot see it — offer mo the manual correction (see
+            # _declarable_off). fb_draining is the loud subset of this.
+            can_shelve = _declarable_off(
+                serial, power, adb_state, op_owns_slot, _shelved, _worn)
             # task_active, not a bare done-check: a remap whose worker died
             # would otherwise dim this row for the life of the service.
             flashing  = ((slot in _flash_tasks and not _flash_tasks[slot].get("done", True))
@@ -909,6 +960,7 @@ def _web_status_data(cfg: dict) -> list[dict]:
                 "screen_forced": screen_forced,
                 "not_enumerating": not_enumerating,
                 "fb_draining": fb_draining,
+                "can_shelve": can_shelve,
                 "flashing": flashing, "empty": False,
                 "charging_active": charging_active,
                 "charge_end_ts": charge_end_ts,
