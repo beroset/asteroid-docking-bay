@@ -198,7 +198,21 @@ _WEB_TEMPLATE = """\
       background:none;border:none;color:#8b949e;font:inherit;font-size:11px;cursor:pointer;
       text-decoration:underline dotted}
     .tmsg-all:hover{color:#c9d1d9}
-    .msg-row{display:flex;gap:10px;padding:5px 2px;border-bottom:1px solid #21262d;font-size:12px}
+    .gstep{display:flex;gap:12px;padding:11px 4px;border-bottom:1px solid #21262d;align-items:flex-start}
+    .gstep:last-child{border-bottom:none}
+    .gnum{flex:none;width:24px;height:24px;border-radius:50%;border:1px solid #30363d;color:#8b949e;
+      display:inline-flex;align-items:center;justify-content:center;font-size:11px}
+    .gstep.now .gnum{border-color:#58a6ff;color:#58a6ff}
+    .gstep.done .gnum{border-color:#3fb950;color:#3fb950}
+    .gstep.todo{opacity:.45}
+    .gbody{flex:1;min-width:0}
+    .gtitle{font-weight:700}
+    .ginstr{color:#c9d1d9;margin:5px 0 7px}
+    .gread{font-size:12px;color:#8b949e;border-left:2px solid #30363d;padding:3px 0 3px 9px;margin:6px 0;white-space:pre-wrap}
+    .gread.pass{border-left-color:#3fb950;color:#c9d1d9}
+    .gread.hold{border-left-color:#d29922}
+    .gread.stop{border-left-color:#f85149;color:#ffa198}
+        .msg-row{display:flex;gap:10px;padding:5px 2px;border-bottom:1px solid #21262d;font-size:12px}
     .msg-row:last-child{border-bottom:none}
     .msg-when{color:#6e7681;white-space:nowrap;font-variant-numeric:tabular-nums}
     .msg-row.err .msg-what{color:#ffa198}
@@ -557,7 +571,7 @@ _WEB_TEMPLATE = """\
   <div id="alert" class="alert"></div>
   <div class="hdr">
   <h1><span class="hdim">&#x2728;  &#x22C6;  &#x02DA; </span>&#x2726;<span class="htxt">  asteroid-docking-bay  </span>&#x2726;<span class="hdim"> &#x02DA;  &#x22C6;  &#x2728;</span></h1>
-  <p class="meta"><span class="mgrp"><a href="#" id="histlink" class="vtog" onclick="toggleHistory();return false">drain history</a><a href="#" id="hidlink" class="vtog" onclick="toggleShowHidden();return false">all ports</a></span><span class="mgrp"><a href="#" id="reglink" class="mopen" onclick="openRegistry();return false" title="the Fleet Registry &mdash; every watch the rig has ever seen (docked or in orbit), its identity, first/last sighting, and a Log of what changed (kernel, Qt, MACs, resolution) over time. Fleet-wide actions live here too.">fleet registry</a><a href="#" id="btlink" class="mopen" onclick="openBtScan();return false" title="scan for AsteroidOS watches over Bluetooth (they advertise their codename) and pair them &mdash; the first rung of Bluetooth in the Orbit port">scan bt</a><a href="#" id="msglink" class="mopen" onclick="openMsgs();return false" title="every message this session, newest first &mdash; progress, results and errors. Errors stay on screen until dismissed; everything else lands here after it fades, so a message you looked away from is still readable.">messages</a></span><span class="mgrp mpol"><span class="dim">mode</span><a href="#" id="modelink" class="mpref" onclick="toggleMode();return false" title="developer shows everything: diagnostics, drain tests, workbench, wanze, the compile cluster and bootloader steering.&#10;user hides the lab and leaves the fleet: onboarding, charge, flashing, backups, settings, WiFi/BT and orbit.&#10;&#10;A guard rail against clutter and misclicks, not a security boundary — the backend still accepts every op.">developer</a></span><span class="mgrp mpol"><span class="dim">usb</span><a href="#" id="usbpreflink" class="mpref" onclick="toggleUsbPref();return false" title="Fleet USB-mode preference &mdash; how a watch that comes up on its own in the wrong mode is auto-corrected:&#10;&#10;&bull; prefer ADB (standard): a stray SSH watch is switched back to adb &mdash; faster, and how a stock flash enumerates&#10;&bull; prefer SSH: a stray watch is given its own SSH IP so several can run SSH at once &mdash; needed for WiFi/workbench work, but updates are slower&#10;&#10;A watch you switched by hand is left alone. Click to switch.">prefer ADB</a></span></p>
+  <p class="meta"><span class="mgrp"><a href="#" id="histlink" class="vtog" onclick="toggleHistory();return false">drain history</a><a href="#" id="hidlink" class="vtog" onclick="toggleShowHidden();return false">all ports</a></span><span class="mgrp"><a href="#" id="reglink" class="mopen" onclick="openRegistry();return false" title="the Fleet Registry &mdash; every watch the rig has ever seen (docked or in orbit), its identity, first/last sighting, and a Log of what changed (kernel, Qt, MACs, resolution) over time. Fleet-wide actions live here too.">fleet registry</a><a href="#" id="btlink" class="mopen" onclick="openBtScan();return false" title="scan for AsteroidOS watches over Bluetooth (they advertise their codename) and pair them &mdash; the first rung of Bluetooth in the Orbit port">scan bt</a><a href="#" id="msglink" class="mopen" onclick="openMsgs();return false" title="every message this session, newest first &mdash; progress, results and errors. Errors stay on screen until dismissed; everything else lands here after it fades, so a message you looked away from is still readable.">messages</a><a href="#" id="guidelink" class="mopen" onclick="openGuide();return false" title="guided setup &mdash; walks a new rig from nothing to a mapped fleet: empty the bus, replug the hub, map it bare, then onboard watches one at a time. Each step waits for the hardware to confirm it happened.">guided setup</a></span><span class="mgrp mpol"><span class="dim">mode</span><a href="#" id="modelink" class="mpref" onclick="toggleMode();return false" title="developer shows everything: diagnostics, drain tests, workbench, wanze, the compile cluster and bootloader steering.&#10;user hides the lab and leaves the fleet: onboarding, charge, flashing, backups, settings, WiFi/BT and orbit.&#10;&#10;A guard rail against clutter and misclicks, not a security boundary — the backend still accepts every op.">developer</a></span><span class="mgrp mpol"><span class="dim">usb</span><a href="#" id="usbpreflink" class="mpref" onclick="toggleUsbPref();return false" title="Fleet USB-mode preference &mdash; how a watch that comes up on its own in the wrong mode is auto-corrected:&#10;&#10;&bull; prefer ADB (standard): a stray SSH watch is switched back to adb &mdash; faster, and how a stock flash enumerates&#10;&bull; prefer SSH: a stray watch is given its own SSH IP so several can run SSH at once &mdash; needed for WiFi/workbench work, but updates are slower&#10;&#10;A watch you switched by hand is left alone. Click to switch.">prefer ADB</a></span></p>
   <div id="sweeplog" style="display:none;position:fixed;right:14px;bottom:14px;width:min(560px,92vw);max-height:60vh;overflow:auto;background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:10px 12px;font:12px monospace;color:#c9d1d9;white-space:pre-wrap;z-index:300;box-shadow:0 6px 30px rgba(0,0,0,.6)"><a href="#" onclick="document.getElementById('sweeplog').style.display='none';return false" style="float:right;color:#6e7681">close</a><a href="#" onclick="sweepSkip();return false" style="float:right;color:#d29922;margin-right:12px" title="give up on the current port's boot-wait and move to the next socket">skip port</a><b style="color:#3fb950">onboard sweep</b>\\n<span id="sweeplogbody"></span></div>
   </div>
   <div class="tblwrap">
@@ -579,6 +593,8 @@ _WEB_TEMPLATE = """\
   <div id="bt" class="regpanel" style="display:none"></div>
   <div id="msgsmask" class="regmask" style="display:none" onclick="closeMsgs()"></div>
   <div id="msgs" class="regpanel" style="display:none"></div>
+  <div id="guidemask" class="regmask" style="display:none" onclick="closeGuide()"></div>
+  <div id="guide" class="regpanel" style="display:none"></div>
 <script>
 // USER vs DEVELOPER mode.
 //
@@ -2802,6 +2818,144 @@ function loadShot(serial,res){
 function closeWatchImg(){document.getElementById('wimg').style.display='none';_compo=null;_handsDrag=null;_wimgDrag=null;_handsDevEl=null;handsMode='time';}
 document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeWatchImg();closeControl();closeMenu();closeRegistry();closeBt();}});
 // ── Fleet Registry: every watch ever seen, with a Log of what changed ────────
+// ── Guided setup ────────────────────────────────────────────────────────────
+// The rig's own discipline, encoded: empty the bus, replug the hub, map it
+// BARE, then onboard watches ONE AT A TIME. Every step gates on what the
+// hardware reports, never on the user asserting it happened — if a-d-b cannot
+// see the change, the step has not happened.
+let _gStep=0, _gSnap=null, _gBoxes=null, _gNoHub=false, _gSeated=[], _gRead={};
+const G_STEPS=[
+  {t:'Check the host',
+   i:'Nothing to unplug yet — this just confirms the tools and permissions a-d-b needs.'},
+  {t:'Empty the bus',
+   i:'Switch every physical port switch OFF and unplug every watch. Leave the hub plugged in.'},
+  {t:'Replug the hub',
+   i:'Unplug the hub from this computer, wait three seconds, and plug it back in.'},
+  {t:'Map the hub while it is empty',
+   i:'a-d-b will ask each port whether it can switch its own power. Safe now, because nothing is docked.'},
+  {t:'Add watches, one at a time',
+   i:'Dock exactly ONE watch and switch its port on. Repeat for each watch.'},
+  {t:'Done', i:''}
+];
+function openGuide(){
+  const p=document.getElementById('guide'),m=document.getElementById('guidemask');
+  if(!p)return; p.style.display='block'; m.style.display='block';
+  renderGuide();
+}
+function closeGuide(){
+  const p=document.getElementById('guide'),m=document.getElementById('guidemask');
+  if(p)p.style.display='none'; if(m)m.style.display='none';
+}
+function gRead(k,cls,text){ _gRead[k]={cls:cls,text:text}; renderGuide(); }
+function renderGuide(){
+  const p=document.getElementById('guide'); if(!p)return;
+  const rows=G_STEPS.map((st,n)=>{
+    const cls=n<_gStep?'done':(n===_gStep?'now':'todo');
+    const r=_gRead[n];
+    const body=n===_gStep
+      ? `<div class="ginstr">${st.i}</div>`+
+        (r?`<div class="gread ${r.cls}">${r.text}</div>`:'')+
+        gActions(n)
+      : (n<_gStep&&r?`<div class="gread ${r.cls}">${r.text}</div>`:'');
+    return `<div class="gstep ${cls}"><span class="gnum">${n<_gStep?'&#10003;':n+1}</span>`+
+           `<div class="gbody"><div class="gtitle">${st.t}</div>${body}</div></div>`;
+  }).join('');
+  p.innerHTML='<div class="reg-hd"><b>Guided setup</b>'+
+    `<span class="dim">${_gNoHub?'no smart hub — power features unavailable':'step '+(_gStep+1)+' of '+G_STEPS.length}</span>`+
+    '<a href="#" class="reg-x" onclick="closeGuide();return false">&times;</a></div>'+
+    '<div class="reg-body" style="padding:6px 14px 14px">'+rows+'</div>';
+}
+function gActions(n){
+  if(n===0)return `<button class="btn" onclick="gCheckHost()">Check the host</button>`;
+  if(n===1)return `<button class="btn" onclick="gCheckEmpty()">Check now</button>`;
+  if(n===2)return `<button class="btn" onclick="gCheckHubs()">Check now</button>`;
+  if(n===3)return `<button class="btn" onclick="gMapBare()">Map the ports</button>`+
+    ` <button class="btn" onclick="gSkipMap()">I have no smart hub</button>`;
+  if(n===4)return `<button class="btn" onclick="gCheckWatch()">Check now</button>`+
+    ` <button class="btn" onclick="gFinish()">Finish</button>`;
+  return `<button class="btn" onclick="closeGuide()">Close</button>`;
+}
+function gCheckHost(){
+  fetch('/api/onboard/guide/preflight').then(r=>r.json()).then(d=>{
+    const lines=(d.checks||[]).map(c=>(c.ok?'✓ ':'✗ ')+c.id+' — '+c.detail+
+      (c.ok?'':'\\n    fix: '+c.fix)).join('\\n');
+    if(d.ready){ gRead(0,'pass',lines); _gStep=1; renderGuide(); }
+    else gRead(0,'hold',lines);
+  }).catch(()=>gRead(0,'stop','could not reach a-d-b'));
+}
+function gCheckEmpty(){
+  fetch('/api/onboard/guide/bus').then(r=>r.json()).then(d=>{
+    const w=d.watches||[];
+    if(!w.length){ _gSnap=[]; gRead(1,'pass','no watches on the bus — good'); _gStep=2; renderGuide(); }
+    else gRead(1,'hold',w.length+' still connected:\\n'+
+      w.map(x=>'    '+x.path+'  '+(x.product||'?')+'  '+(x.serial||'')).join('\\n'));
+  }).catch(()=>gRead(1,'stop','could not read the bus'));
+}
+function gCheckHubs(){
+  fetch('/api/onboard/guide/hubs').then(r=>r.json()).then(d=>{
+    const b=d.boxes||[];
+    if(!b.length){ gRead(2,'hold','no switchable hub found yet. If your hub cannot switch its ports, choose "I have no smart hub" on the next step.'); _gStep=3; renderGuide(); return; }
+    _gBoxes=b;
+    gRead(2,'pass',b.map(x=>'✓ one hub box at '+x.root+' — '+x.ports+' ports'+
+      (x.chips.length>1?' across '+x.chips.length+' internal chips (normal: one box reports as several hubs)':'')).join('\\n'));
+    _gStep=3; renderGuide();
+  }).catch(()=>gRead(2,'stop','could not read the hubs'));
+}
+function gSkipMap(){
+  _gNoHub=true;
+  gRead(3,'hold','No smart hub. Watches can still be onboarded, but charge, drain, shelve and automatic recovery cycles are unavailable — they all need a port that can switch its own power.');
+  _gStep=4; renderGuide();
+}
+// Serialized on purpose: one port at a time, never a burst.
+function gMapBare(){
+  if(!_gBoxes||!_gBoxes.length){ gSkipMap(); return; }
+  const ports=[];
+  _gBoxes.forEach(b=>b.chips.forEach(c=>c.ports.forEach(pn=>ports.push([c.location,pn]))));
+  const results=[];
+  gRead(3,'hold','probing '+ports.length+' ports, one at a time…');
+  const next=i=>{
+    if(i>=ports.length){
+      const smart=results.filter(r=>r.responds).length;
+      _gNoHub=(smart===0);
+      gRead(3,smart?'pass':'hold',
+        smart+' of '+ports.length+' ports switch power.\\n'+
+        results.map(r=>(r.responds?'✓ ':'✗ ')+r.loc+' p'+r.port+
+          (r.responds?'':' — dumb port')).join('\\n')+
+        '\\n\\nThis is the power register answering. Whether VBUS really drops is confirmed on the next step, by the first watch reporting that it is charging.');
+      _gStep=4; renderGuide(); return;
+    }
+    const [loc,pn]=ports[i];
+    fetch('/api/onboard/guide/probe/'+loc+'/'+pn,{method:'POST'}).then(r=>r.json()).then(d=>{
+      results.push({loc:loc,port:pn,responds:!!d.responds});
+      next(i+1);
+    }).catch(()=>{results.push({loc:loc,port:pn,responds:false});next(i+1);});
+  };
+  next(0);
+}
+function gCheckWatch(){
+  fetch('/api/onboard/guide/bus').then(r=>r.json()).then(d=>{
+    const seen=(d.watches||[]).map(w=>w.path);
+    const known=new Set((_gSnap||[]).concat(_gSeated.map(s=>s.path)));
+    const fresh=(d.watches||[]).filter(w=>!known.has(w.path));
+    if(fresh.length===0){
+      gRead(4,'hold','No new watch yet. Check the port’s physical switch, the cradle seating, and that the port is powered on.');
+    }else if(fresh.length>1){
+      gRead(4,'stop','More than one watch appeared — switch the others off and add them one at a time:\\n'+
+        fresh.map(w=>'    '+w.path+'  '+(w.product||'?')).join('\\n'));
+    }else{
+      const w=fresh[0];
+      _gSeated.push(w);
+      gRead(4,'pass','✓ '+(w.product||'watch')+' at '+w.path+
+        (w.serial?'  serial '+w.serial:'')+
+        '\\n'+_gSeated.length+' watch(es) added. Dock the next one, or Finish.');
+    }
+  }).catch(()=>gRead(4,'stop','could not read the bus'));
+}
+function gFinish(){
+  _gStep=5;
+  gRead(5,'pass',_gSeated.length+' watch(es) set up'+(_gNoHub?' (no smart hub: power features unavailable)':'')+'.');
+  renderGuide();
+}
 function openRegistry(){
   const p=document.getElementById('reg'),m=document.getElementById('regmask');
   if(!p)return;

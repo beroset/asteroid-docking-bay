@@ -43,7 +43,7 @@ from .config import (_config_lock, _store_smart_verdict, allocate_ssh_ip,
 from .usb import (_sysfs_hub_scan, _sysfs_path_to_serial_map, adb_usb_paths,
                   _sysfs_serial_at, xhci_slots,
                   test_port_power_switching, uhubctl_cycle, uhubctl_set_power, watch_devices_on_bus,
-                  uhubctl_list)
+                  uhubctl_list, uhubctl_get_power, port_device_info)
 from . import drainlog, wifi
 from .watchctl import BACKUP_ROOT, DIAG_ROOT, Watch, _watch_os
 from .ops import ChargeOp, DrainOp, WorkbenchOp, _flash_one_watch
@@ -881,6 +881,34 @@ def _onboard_guide(args):
             box["ports"] += len(hub.get("ports") or [])
         return {"ok": True, "boxes": sorted(boxes.values(),
                                             key=lambda b: b["root"])}
+
+    if action == "probe":
+        # Step 3: does this port respond to a power command AT ALL. Only the
+        # register can answer on a bare hub — with nothing docked there is no
+        # device whose disappearance would prove VBUS actually dropped, and
+        # test_port_power_switching needs exactly that. So this reports what it
+        # is: a register read, not proof of delivered power. Step 4 gets the
+        # real proof from the first docked watch reporting Charging.
+        loc, port = args.get("loc"), int(args.get("port") or 0)
+        if not loc or not port:
+            return {"ok": False, "error": "loc and port are required"}
+        # Refuse on an occupied port. Step 3 is the BARE-hub step; toggling a
+        # port with a watch on it is the one thing this flow exists to avoid.
+        if port_device_info(loc, port) is not None:
+            return {"ok": False, "occupied": True,
+                    "error": f"{loc}:p{port} has a device on it — unplug it "
+                             f"first, this step maps an empty hub"}
+        before = uhubctl_get_power(loc, port)
+        want = not bool(before)
+        uhubctl_set_power(loc, port, want)
+        time.sleep(0.4)
+        after = uhubctl_get_power(loc, port)
+        uhubctl_set_power(loc, port, bool(before))   # leave it as we found it
+        responds = after is not None and bool(after) == want
+        return {"ok": True, "loc": loc, "port": port, "responds": responds,
+                "before": before, "after": after,
+                "note": "register responded" if responds else
+                        "register did not change — treat this port as dumb"}
 
     if action != "preflight":
         return {"ok": False, "error": f"unknown action: {action}"}

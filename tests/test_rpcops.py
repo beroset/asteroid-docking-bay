@@ -828,6 +828,41 @@ def test_onboard_guide_reads_hardware_not_assumptions(monkeypatch):
     assert bad["ok"] is False and "unknown action" in bad["error"]
 
 
+def test_the_bare_hub_probe_refuses_an_occupied_port(monkeypatch):
+    """Step 3 maps an EMPTY hub, and must enforce that itself.
+
+    The probe toggles the port to see whether its power register responds. On
+    a bare hub that is harmless; on a port with a watch on it, it is a VBUS
+    cut on a running device — the single thing this whole flow is designed to
+    avoid, and the failure the rig has actually suffered. So an occupied port
+    is refused rather than probed, and the refusal says what to do.
+
+    It also restores whatever power state it found. A probe that left ports
+    energised would leave the rig in the all-on state the flow spends step 1
+    getting out of."""
+    import asteroid_docking_bay.rpcops as ro
+    switched = []
+    monkeypatch.setattr(ro, "uhubctl_set_power",
+                        lambda l, p, on: switched.append(on) or True)
+
+    # occupied -> refuse, and touch nothing
+    monkeypatch.setattr(ro, "port_device_info", lambda l, p: {"serial": "S1"})
+    d = ro.DISPATCH._data["onboard.guide"](
+        {"action": "probe", "loc": "1-3", "port": 2})
+    assert d["ok"] is False and d.get("occupied") is True, d
+    assert switched == [], "probed a port with a device on it"
+
+    # empty -> probe, and leave the port as it was found (off)
+    monkeypatch.setattr(ro, "port_device_info", lambda l, p: None)
+    seq = iter([False, True])          # before=off, after=on
+    monkeypatch.setattr(ro, "uhubctl_get_power", lambda l, p: next(seq))
+    d2 = ro.DISPATCH._data["onboard.guide"](
+        {"action": "probe", "loc": "1-3", "port": 2})
+    assert d2["ok"] and d2["responds"] is True, d2
+    assert switched == [True, False], (
+        f"probe did not restore the port's original power state: {switched}")
+
+
 def test_declare_shelved_records_the_state_without_touching_hardware(monkeypatch):
     """The manual correction is bookkeeping ONLY.
 

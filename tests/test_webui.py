@@ -2450,6 +2450,78 @@ def test_no_css_class_is_styled_but_never_emitted():
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_guided_setup_gates_on_hardware_not_on_the_user(tmp_path):
+    """The guide advances on what the bus reports, never on a click.
+
+    Two gates carry the whole value of the flow and both are easy to write
+    permissively by accident:
+
+    1. **The bus must be EMPTY before it proceeds.** Every later read-back is a
+       diff against that empty snapshot, so a guide that advances with watches
+       still attached silently mis-attributes them later.
+    2. **Exactly one new watch at step 4.** Two appearing at once is the flood
+       that crashes adb and half-enumerates cascades — the failure this entire
+       sequence exists to prevent — so it must HARD STOP rather than seat the
+       first one it happens to see.
+    """
+    import json
+    h = tmp_path / "guide.js"
+    h.write_text(_DOM_STUBS + JS + r"""
+      const calls=[];
+      global.fetch=(u)=>{calls.push(u);
+        let body={ok:true};
+        if(u.endsWith('/bus'))body={ok:true,watches:global.__BUS};
+        return Promise.resolve({json:()=>Promise.resolve(body)});};
+      const out={};
+      // step 1 with watches still on the bus -> must NOT advance
+      global.__BUS=[{path:'1-3.2',serial:'S1',product:'hoki'}];
+      _gStep=1; _gRead={};
+      gCheckEmpty();
+      setTimeout(()=>{
+        out.stepAfterBusy=_gStep;
+        out.busyClass=(_gRead[1]||{}).cls;
+        // now empty -> advances, and snapshots
+        global.__BUS=[];
+        gCheckEmpty();
+        setTimeout(()=>{
+          out.stepAfterEmpty=_gStep;
+          // step 4 with TWO new watches -> hard stop, seats nothing
+          _gStep=4; _gRead={}; _gSeated=[];
+          global.__BUS=[{path:'1-3.2',product:'a'},{path:'1-3.3',product:'b'}];
+          gCheckWatch();
+          setTimeout(()=>{
+            out.twoClass=(_gRead[4]||{}).cls;
+            out.seatedAfterTwo=_gSeated.length;
+            // exactly one -> seats it
+            _gRead={}; _gSeated=[];
+            global.__BUS=[{path:'1-3.2',product:'a',serial:'S9'}];
+            gCheckWatch();
+            setTimeout(()=>{
+              out.oneClass=(_gRead[4]||{}).cls;
+              out.seatedAfterOne=_gSeated.length;
+              console.log(JSON.stringify(out));
+              process.exit(0);
+            },5);
+          },5);
+        },5);
+      },5);
+    """)
+    r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
+    assert r.returncode == 0, r.stderr[:500]
+    out = json.loads(r.stdout.strip().splitlines()[-1])
+
+    assert out["stepAfterBusy"] == 1, "advanced past step 1 with watches still attached"
+    assert out["busyClass"] == "hold"
+    assert out["stepAfterEmpty"] == 2, "did not advance once the bus was empty"
+
+    assert out["twoClass"] == "stop", "two watches at once was not a hard stop"
+    assert out["seatedAfterTwo"] == 0, (
+        "seated a watch during a multi-watch flood — the exact failure this "
+        "sequence exists to prevent")
+    assert out["oneClass"] == "pass" and out["seatedAfterOne"] == 1
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
 def test_user_mode_hides_the_drain_dot_entirely(tmp_path):
     """User mode must not advertise a feature it does not expose.
 
