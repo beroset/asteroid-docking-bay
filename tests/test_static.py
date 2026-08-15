@@ -205,6 +205,36 @@ def test_web_template_has_no_raw_newline_escapes():
         "import and breaks the JS string containing it:\n  " + "\n  ".join(hits))
 
 
+def test_install_escalates_exactly_once():
+    """install.sh must ask for the password ONCE, in one block up front.
+
+    mo's requirement for the "noob" install: everything set up including udev
+    rules, "one sudo block up front, not scattered escalations". Scattered
+    `sudo` calls are how an install stops halfway through asking for a
+    password the user did not expect, and the older script did not escalate at
+    all — it printed the udev and group commands and left them undone, which
+    is why fresh installs silently ran in the slow fallback path.
+
+    Counts real invocations only; the word also appears in printed guidance
+    for the manual path (--no-root, no-sudo-installed)."""
+    import re
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "install.sh").read_text()
+    calls = [ln.strip() for ln in src.splitlines()
+             if re.search(r"(^|[;&|(]|\bthen\b|\bif\b)\s*sudo\s", ln)
+             and not ln.strip().startswith("#")
+             and "echo" not in ln]
+    assert len(calls) == 1, (
+        f"install.sh escalates {len(calls)} times, must be exactly one block: {calls}")
+    assert "bash -s" in calls[0], (
+        "the single escalation should run one root block, not one command — "
+        "otherwise the next privileged step becomes a second password prompt")
+
+    # ...and it must actually DO the two privileged things, not just print them
+    assert "udevadm control --reload-rules" in src and "usermod -aG users" in src, (
+        "install.sh no longer performs the udev/group setup it exists to do")
+
+
 def test_no_child_process_inherits_stdin():
     """`adb shell` READS STDIN. A child that inherits it will swallow the
     caller's remaining input — when a-d-b is driven from a script or a
