@@ -158,6 +158,38 @@ def is_a_codename(value: "str | None") -> bool:
     return bool(value) and value.strip().lower() not in NOT_A_CODENAME
 
 
+# Characters no device serial can contain, and which make a value dangerous to
+# carry: whitespace and quotes break shell words, `/` and `\` turn a serial
+# into a path, `=` marks it as a key=value fragment rather than an identity.
+_IMPOSSIBLE_IN_SERIAL = set(" \t\r\n/\\='\"`$;|&<>*?")
+
+
+def is_a_serial(value: "str | None") -> bool:
+    """Whether a value can be stored and used as a device serial.
+
+    Deliberately a BLOCKLIST, not a whitelist of allowed characters: serials
+    come from device USB descriptors and vendors put odd things there, so
+    rejecting a real but unusual serial would make a watch permanently
+    unmappable — a worse failure than the one this prevents.
+
+    What it exists to stop, found live on 2026-08-15: the config had a port
+    bound to `systempart=/dev/mapper/system`, a kernel cmdline fragment. Most
+    plausibly a watch mid-port supplied gibberish while enumerating. It then
+    broke every serial-keyed fastboot command for that port and reached a
+    filename builder, where the slashes would have escaped the target dir.
+    """
+    if not value:
+        return False
+    s = value.strip()
+    # Only an upper bound. A minimum length is NOT the discriminator — the
+    # value this exists to reject is 28 characters long, while short serials
+    # are perfectly legitimate — and a lower bound only risks rejecting a real
+    # one. The impossible characters do the actual work.
+    if len(s) > 64:
+        return False
+    return not any(c in _IMPOSSIBLE_IN_SERIAL for c in s)
+
+
 def get_watch_codename(serial: str) -> str | None:
     """
     Read the AsteroidOS codename from the watch.

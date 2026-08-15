@@ -33,7 +33,7 @@ from . import bench
 from . import icecc, oplock, wanze
 from . import aodcheck
 from .util import _run, log
-from .adb import _adb_state, adb_devices, get_watch_codename
+from .adb import _adb_state, adb_devices, get_watch_codename, is_a_serial
 from .config import (_config_lock, _store_smart_verdict, allocate_ssh_ip,
                      charge_config, ssh_ip_for_serial, usb_mode_preference,
                      find_codename_for_loc_port, find_serial_for_loc_port,
@@ -2070,6 +2070,13 @@ def _onboard_stream(loc: str, port: int):
                 _emit(f"Waiting for the watch to boot and expose ADB "
                       f"(up to {wait_each} s)…")
                 found_serial: "str | None" = _wait_for_watch(wait_each)
+                if found_serial and not is_a_serial(found_serial):
+                    _emit(f"The watch enumerated with an unusable serial "
+                          f"({found_serial!r}) — refusing to onboard it under "
+                          f"an identity that cannot address it.")
+                    log.warning("onboard %s:p%s: unusable serial %r",
+                                loc, port, found_serial)
+                    found_serial = None
                 if not found_serial:
                     _emit("No ADB yet — power-cycling the port to retry "
                           "enumeration…")
@@ -2296,6 +2303,14 @@ def _sweep_wait_adb(sysfs_path: str, secs: int, emit) -> "tuple[str | None, str 
 
 
 def _sweep_map_to_port(loc, port, serial, codename, ssh_ip, emit):
+    if not is_a_serial(serial):
+        # Same rule as the status path: refuse the binding rather than record
+        # an identity that cannot address the device (see adb.is_a_serial).
+        log.warning("refusing to map %s:p%s — %r is not a usable serial",
+                    loc, port, serial)
+        emit(f"{loc}:p{port}: the watch reported an unusable serial "
+             f"({serial!r}) — not mapped")
+        return
     """Map the watch to its port, clearing any stale seat the same serial held
     elsewhere. The fleet-registry write is done by the caller from the full CC
     read (kernel/Qt/MACs/battery), not here."""

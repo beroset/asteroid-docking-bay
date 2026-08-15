@@ -13,7 +13,8 @@ from .flap import flaps
 from . import oplock
 from . import wanze as wanze_mod
 from .adb import (_adb_state, _resolve_conn_state, adb_devices, adb_shell,
-                  battery_and_screen, get_watch_codename, is_a_codename)
+                  battery_and_screen, get_watch_codename, is_a_codename,
+                  is_a_serial)
 from .boottime import measure_boot
 from .config import (_config_lock, charge_config, find_codename_for_serial,
                      find_serial_for_loc_port,
@@ -398,6 +399,15 @@ def _soft_remap(cfg: dict, online_by_path: dict[str, str]) -> "dict | None":
     now = time.time()
     moves: list[tuple[str, str, str]] = []
     for path, serial in online_by_path.items():
+        # A watch mid-port can enumerate with gibberish where its serial should
+        # be. Binding a port to one is worse than not mapping it: every
+        # serial-keyed command then targets a device that does not exist, and
+        # the row looks correctly mapped while doing so (2026-08-15, a port
+        # bound to `systempart=/dev/mapper/system`). Unidentifiable is a state
+        # a-d-b can show honestly; misidentified is not.
+        if not is_a_serial(serial):
+            log.warning("ignoring %s: %r is not a usable serial", path, serial)
+            continue
         parsed = _parse_hub_port_path(path)
         recent_unknown = now - _soft_remap_unknown.get(serial, 0) < _SOFT_REMAP_RETRY_S
         if parsed is None or parsed[0] not in hub_locs or recent_unknown:

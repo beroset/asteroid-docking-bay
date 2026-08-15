@@ -281,6 +281,50 @@ def test_a_stale_safe_off_marker_does_not_silence_a_live_watch(monkeypatch, tmp_
         "a stale marker still claimed the watch was shelved")
 
 
+def test_a_gibberish_serial_is_never_bound_to_a_port(monkeypatch):
+    """A watch that enumerates with nonsense must be left unmapped.
+
+    Found live 2026-08-15: a port was bound to `systempart=/dev/mapper/system`,
+    a kernel cmdline fragment — most likely a watch mid-port supplying garbage
+    while enumerating. The row then LOOKED correctly mapped while every
+    serial-keyed command targeted a device that does not exist (the fastboot
+    report answered "no fastboot device" about a watch sitting in the
+    bootloader), and the value reached a filename builder where its slashes
+    would have escaped the target directory.
+
+    Unidentifiable is a state a-d-b can show honestly. Misidentified is not.
+
+    The guard is a BLOCKLIST on purpose — vendors put odd things in USB
+    descriptors, and rejecting a real serial would make a watch permanently
+    unmappable, a worse failure than the one being prevented. So real serials
+    off this rig must all pass, including short and lowercase-hex ones."""
+    from asteroid_docking_bay.adb import is_a_serial
+
+    # every one of these is a real serial observed on the rig
+    for good in ("K6F1041337B1510", "38201RTJWW78L7", "4C111JEAYW00RJ",
+                 "GANZCY00C10744C", "604KPMZ003491", "0123456789ABCDEF",
+                 "22979c8c", "0393ed6402a24539", "MQB7N15C09000847", "S1"):
+        assert is_a_serial(good) is True, f"rejected a REAL serial: {good}"
+
+    # the value that actually got stored, plus its close relatives
+    assert is_a_serial("systempart=/dev/mapper/system") is False
+    assert is_a_serial("/dev/mapper/system") is False       # a path
+    assert is_a_serial("androidboot.serialno=X") is False   # a cmdline pair
+    assert is_a_serial("two words") is False                # breaks shell words
+    assert is_a_serial("../../etc/passwd") is False         # traversal
+    assert is_a_serial("") is False
+    assert is_a_serial(None) is False
+    assert is_a_serial("A" * 65) is False                   # absurd length
+
+    # ...and the status path must skip such a device rather than bind it
+    from asteroid_docking_bay import webstatus as ws
+    cfg = {"hubs": [{"location": "1-3", "ports": {}, "port_serials": {}}],
+           "serials": {}}
+    out = ws._soft_remap(cfg, {"1-3.2": "systempart=/dev/mapper/system"})
+    assert out is None, "a gibberish serial was mapped to a port anyway"
+    assert cfg["hubs"][0]["port_serials"] == {}, "the bad serial was persisted"
+
+
 def test_last_conn_state_is_not_erased_by_an_offline_poll(tmp_path):
     """record() ignores None fields, so a poll that sees nothing must not wipe
     the remembered state — that is precisely when the warning is needed."""
