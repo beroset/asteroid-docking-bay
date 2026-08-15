@@ -273,6 +273,18 @@ _WEB_TEMPLATE = """\
     .dev-shot{position:absolute;z-index:1;object-fit:contain}   /* preserve aspect (no squish) and never over-scale past the cutout */
     .dev-fill{position:absolute;z-index:0;background:#000}
     .dev-hands{position:absolute;z-index:1;pointer-events:none}   /* over the shot, under the bezel */
+    /* Grab dots for the free/calibrate hand drag. They ride a ring outside the
+       watch so neither hand can occlude the other's hit area, and they are
+       told apart by size and colour the way the hands themselves are: the hour
+       marker is the shorter, heavier one. */
+    .hgrab{position:absolute;transform:translate(-50%,-50%);border-radius:50%;
+      border:1px solid;background:#0d1117;color:inherit;cursor:grab;
+      font:600 10px/1 inherit;display:flex;align-items:center;justify-content:center;
+      padding:0;touch-action:none;user-select:none;box-shadow:0 2px 8px rgba(0,0,0,.6)}
+    .hgrab:active{cursor:grabbing}
+    .hgrab-hr{width:22px;height:22px;border-color:#d6c7ff;color:#d6c7ff}
+    .hgrab-min{width:17px;height:17px;border-color:#8b949e;color:#c9d1d9}
+    .hgrab:hover{background:#161b22}
     .hmodes{gap:4px;align-items:center}
     .hmode{background:#0d1420;border:1px solid #30363d;color:#8b949e;border-radius:6px;padding:2px 9px;font-size:12px;cursor:pointer;font-family:inherit}
     .hmode.on{border-color:#a78bfa;color:#d6c7ff;background:rgba(167,139,250,.12)}
@@ -2653,7 +2665,17 @@ function onProdLoad(codename,serial,isRound,res){
 // motor-zero offset (cal) maps a clock angle to a motor value. Hand art 80% of
 // the frame (mo eyeballed 100% as ~20% too big).
 const HANDS_SIZE=80;
+// Radius of the grab-dot ring, as a % of half the frame — i.e. how far OUTSIDE
+// the watch body the dots sit. Eyeball-tunable like HANDS_SIZE.
+const HANDS_RING=46;
+// Never leave more than this long between position updates while dragging.
+// Streaming the drag is not a nicety: a single large jump is resolved by the
+// shortest path, so dragging more than half a turn sends the hands the OTHER
+// way round (moWerk). Small, frequent steps keep every move under half a turn,
+// so the hands track the direction the drag is actually going.
+const HANDS_SEND_MS=160;
 let _handsSerial=null, _handsCodename=null, _handsDevEl=null, _handsDrag=null;
+let _handsBusy=false, _handsPending=false, _handsSent=0;
 let handsMode='time';
 let handsCal={min_deg:102,hr_deg:108};   // physical degrees at motor value 0, per hand
 let handsVal={min:0,hr:0};               // current motor values (0..179)
@@ -2705,12 +2727,41 @@ function _renderHands(){
   const el=_handsDevEl, cn=_handsCodename; if(!el||!cn)return;
   const drag=handsMode==='free'||handsMode==='calibrate';
   el.style.cssText='position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;z-index:2';
+  // Display only. Dragging happens on the ring dots below — the hand art
+  // carries no handler, so nothing here can swallow a grab meant for the other
+  // hand the way the minute hand used to.
   const hand=(part,which)=>`<img class="hand-svg" alt="" draggable="false" onerror="this.remove()" `+
-    `src="/api/watch-hand/${encodeURIComponent(cn)}/${part}" onpointerdown="handsDown(event,'${which}')" `+
+    `src="/api/watch-hand/${encodeURIComponent(cn)}/${part}" `+
     `style="position:absolute;left:50%;top:50%;width:${HANDS_SIZE}%;height:${HANDS_SIZE}%;`+
     `transform:translate(-50%,-50%) rotate(${_handsDispAngle(which).toFixed(1)}deg);transform-origin:center center;`+
-    `pointer-events:${drag?'auto':'none'};cursor:${drag?'grab':'default'};touch-action:none">`;
+    `pointer-events:none;touch-action:none">`;
   el.innerHTML=hand('hour','hr')+hand('minute','min');
+  _renderHandsRing(drag);
+}
+// The grab dots. Independent of the hand art on purpose: the minute hand is
+// drawn over the hour hand and swallowed every pointer event aimed at it, so
+// the hour hand could not be grabbed at all. Each dot rides a ring outside the
+// watch at its own hand's angle, so both are always reachable and neither can
+// occlude the other.
+function _renderHandsRing(drag){
+  const frame=document.getElementById('devframe'); if(!frame)return;
+  let ring=document.getElementById('handsring');
+  if(!drag){ if(ring)ring.remove(); return; }
+  if(!ring){
+    ring=document.createElement('div'); ring.id='handsring';
+    // Above the product image (z2), or the bezel would hide the dots.
+    ring.style.cssText='position:absolute;left:0;top:0;width:100%;height:100%;'+
+      'pointer-events:none;z-index:3';
+    frame.appendChild(ring);
+  }
+  const dot=(which,label,cls)=>{
+    const a=_handsDispAngle(which)*Math.PI/180;      // 0 = 12 o'clock
+    const x=50+HANDS_RING*Math.sin(a), y=50-HANDS_RING*Math.cos(a);
+    return `<button class="hgrab ${cls}" title="drag to set the ${label} hand" `+
+      `onpointerdown="handsDown(event,'${which}')" `+
+      `style="left:${x.toFixed(2)}%;top:${y.toFixed(2)}%">${label[0].toUpperCase()}</button>`;
+  };
+  ring.innerHTML=dot('hr','hour','hgrab-hr')+dot('min','minute','hgrab-min');
 }
 function handsDown(ev,which){
   if(handsMode!=='free'&&handsMode!=='calibrate')return;
@@ -2732,6 +2783,9 @@ function handsMoveDrag(ev){
   }else{
     const off=_handsDrag==='hr'?handsCal.hr_deg:handsCal.min_deg;
     handsVal[_handsDrag]=angleToVal(a,off);           // Free: drive the motor (snap 2 deg)
+    // Follow the drag instead of jumping at the end — see HANDS_SEND_MS.
+    const now=Date.now();
+    if(now-_handsSent>=HANDS_SEND_MS){_handsSent=now; handsCommit();}
   }
   _renderHands();
 }
@@ -2743,9 +2797,17 @@ function handsUpDrag(){
 }
 function handsCommit(){
   if(!_handsSerial)return;
+  // One move in flight at a time. A drag produces positions far faster than the
+  // watch can be commanded, so overlapping requests would queue up and the
+  // hands would keep moving long after the pointer stopped. Coalesce instead:
+  // note that another is wanted, and when the current one returns send the
+  // values as they are THEN — always the newest, never a backlog of stale ones.
+  if(_handsBusy){_handsPending=true;return;}
+  _handsBusy=true;
   fetch('/api/watch/'+encodeURIComponent(_handsSerial)+'/hands-move/'+handsVal.min+'/'+handsVal.hr,{method:'POST'})
     .then(r=>r.json()).then(d=>{if(!d||!d.ok)toastErr('hands move failed'+(d&&d.error?' - '+d.error:''));})
-    .catch(()=>toastErr('hands move failed'));
+    .catch(()=>toastErr('hands move failed'))
+    .then(()=>{_handsBusy=false; if(_handsPending){_handsPending=false; handsCommit();}});
 }
 function handsSetMode(m){
   handsMode=m;

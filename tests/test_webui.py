@@ -1598,10 +1598,16 @@ def test_network_toggle_also_pulses_while_in_flight(tmp_path):
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
 def test_live_view_hands_render_over_base_and_are_draggable(tmp_path):
-    """A hands watch lays the real hour/minute SVG art over the hands-removed base,
-    each rotated by valToAngle(value, offset) = (offset + 2·value) mod 360, and in
-    Free mode each hand carries the drag handle. minute 45@100°→190°, hour
-    135@110°→20° (380 mod 360)."""
+    """A hands watch lays the real hour/minute SVG art over the hands-removed
+    base, each rotated by valToAngle(value, offset) = (offset + 2·value) mod
+    360. minute 45@100°→190°, hour 135@110°→20° (380 mod 360).
+
+    The art is display-only: it used to carry the drag handle itself, which
+    made the hour hand ungrabbable because the minute hand is drawn over it and
+    took every pointer event. Dragging moved to dots on a ring outside the
+    watch — see test_each_hand_is_grabbable_and_the_drag_is_streamed — so a
+    handler reappearing here is the regression that would bring the fault
+    back."""
     import json
     h = tmp_path / "hands.js"
     h.write_text(_DOM_CAPTURE + JS +
@@ -1622,7 +1628,9 @@ def test_live_view_hands_render_over_base_and_are_draggable(tmp_path):
     assert "rotate(190.0deg)" in o["html"] and "rotate(20.0deg)" in o["html"], o["html"][:300]
     assert "/api/watch-hand/narwhal/hour" in o["html"]
     assert "/api/watch-hand/narwhal/minute" in o["html"]
-    assert "handsDown(event,'min')" in o["html"] and "handsDown(event,'hr')" in o["html"]
+    assert "handsDown" not in o["html"], (
+        "the hand art carries a drag handle again — the minute hand will "
+        "swallow every grab aimed at the hour hand")
     assert o["base"].endswith("/api/watch-hand/narwhal/base")   # handless base swapped in
 
 
@@ -2447,6 +2455,91 @@ def test_no_css_class_is_styled_but_never_emitted():
     assert not orphans, (
         f"CSS classes styled but never emitted: {orphans} — either dead weight "
         f"or decoy vocabulary that contradicts the live rules")
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_each_hand_is_grabbable_and_the_drag_is_streamed(tmp_path):
+    """Free-hand setting, after the three faults mo hit on narwhal.
+
+    1. **Only the minute hand could be grabbed.** It is drawn over the hour
+       hand and swallowed every pointer event aimed at it, so the hour hand had
+       no reachable hit area at all. The controls are now dots on a ring
+       OUTSIDE the watch, one per hand at its own angle, and the hand art takes
+       no pointer events — neither hand can occlude the other.
+
+    2. **The position was only sent when the drag ended.** A single large jump
+       is resolved by the shortest path, so dragging more than half a turn sent
+       the hands the other way round. Positions now stream during the drag, so
+       each step is small and travels the way the drag is going.
+
+    3. **A drag produces positions far faster than the watch can be
+       commanded**, so sends must coalesce rather than queue — otherwise the
+       hands keep moving after the pointer has stopped, working through a
+       backlog of stale positions."""
+    import json
+    h = tmp_path / "hands.js"
+    h.write_text(_DOM_STUBS + JS + r"""
+      const posts=[]; let resolvers=[];
+      global.fetch=(u)=>{posts.push(u);
+        return new Promise(res=>resolvers.push(()=>res({json:()=>Promise.resolve({ok:true})})));};
+      const frame={id:'devframe',
+        getBoundingClientRect:()=>({left:0,top:0,width:200,height:200}),
+        appendChild(c){this.kid=c;}, kid:null};
+      let ring=null;
+      // only these two may be absent; everything else gets the generic stub so
+      // the background poll does not throw and mask the behaviour under test
+      global.document.getElementById=id=>
+        id==='devframe'?frame:(id==='handsring'?ring:el());
+      global.document.createElement=()=>({id:'',style:{cssText:''},innerHTML:'',
+        remove(){},appendChild(){}});
+      _handsSerial='S9'; _handsCodename='narwhal';
+      _handsDevEl={style:{cssText:''},innerHTML:''};
+      handsMode='free'; handsVal={min:0,hr:0}; handsCal={min_deg:0,hr_deg:0};
+
+      _renderHands();
+      ring=frame.kid;                       // the ring the render just created
+      const out={ringHtml:ring?ring.innerHTML:'', handHtml:_handsDevEl.innerHTML};
+
+      // drag the HOUR dot: two moves far apart in time must both send
+      handsDown({preventDefault(){},stopPropagation(){}},'hr');
+      out.grabbed=_handsDrag;
+      _handsSent=0;
+      handsMoveDrag({clientX:200,clientY:100});      // 3 o'clock
+      out.afterFirst=posts.length;
+      // a second move while the first request is still in flight must NOT queue
+      _handsSent=0;
+      handsMoveDrag({clientX:100,clientY:200});      // 6 o'clock
+      out.whileBusy=posts.length;
+      resolvers.shift()();                            // let the first finish
+      setTimeout(()=>{
+        out.afterDrain=posts.length;
+        out.lastUrl=posts[posts.length-1];
+        console.log(JSON.stringify(out));
+        process.exit(0);
+      },10);
+    """)
+    r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
+    assert r.returncode == 0, r.stderr[:500]
+    o = json.loads(r.stdout.strip().splitlines()[-1])
+
+    # 1. a dot per hand, and the hand art is inert
+    assert "hgrab-hr" in o["ringHtml"] and "hgrab-min" in o["ringHtml"], o["ringHtml"]
+    assert "handsDown(event,'hr')" in o["ringHtml"], "the hour hand has no grab dot"
+    assert "pointer-events:none" in o["handHtml"], (
+        "the hand art still takes pointer events — the minute hand will keep "
+        "swallowing clicks aimed at the hour hand")
+    assert "handsDown" not in o["handHtml"], "the hand art is still a drag target"
+    assert o["grabbed"] == "hr", "grabbing the hour dot did not select the hour hand"
+
+    # 2. the drag streams rather than waiting for release
+    assert o["afterFirst"] == 1, "the first drag move sent nothing — not streaming"
+
+    # 3. and coalesces instead of queueing
+    assert o["whileBusy"] == 1, (
+        "a second move queued a request while one was in flight — the hands "
+        "would keep moving after the pointer stopped")
+    assert o["afterDrain"] == 2, "the coalesced move was dropped instead of sent"
+    assert "/hands-move/" in o["lastUrl"]
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
