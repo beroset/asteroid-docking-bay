@@ -48,7 +48,7 @@ from .watchctl import BACKUP_ROOT, DIAG_ROOT, Watch, _watch_os
 from .ops import ChargeOp, DrainOp, WorkbenchOp, _flash_one_watch
 from .fastboot import (_switch_ssh_to_adb, _usb_moded_switch_failed,
                        _detect_rndis, _fastboot_list, bootloader_unlocked,
-                       fastboot_getvar_all,
+                       fastboot_getvar_all, parse_getvar,
                        ssh_reach_ip)
 from .transport import SshTransport, USB_SSH_IP
 from .watchimg import watch_image_bytes
@@ -823,6 +823,20 @@ def _watch_diagnostics(args):
     return res
 
 
+def _safe_name(part: str) -> str:
+    """One path-safe filename component.
+
+    Not theoretical: the config on this rig held a recorded "serial" of
+    `systempart=/dev/mapper/system` — a kernel cmdline fragment — and that
+    value is a fallback for the report's filename. Interpolated raw it would
+    have written outside DIAG_ROOT, and a value containing `..` could aim
+    anywhere. Whatever produced that string, the filename builder should not
+    be the thing that trusts it.
+    """
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", (part or "").strip()).strip("-.")
+    return cleaned[:64] or "unknown"
+
+
 @DISPATCH.op("watch.fbreport")
 def _watch_fbreport(args):
     """Save `fastboot getvar all` as a downloadable text report — the
@@ -832,7 +846,16 @@ def _watch_fbreport(args):
     report you can still take from a bricked or bootlooping unit."""
     loc, port = args["loc"], int(args["port"])
     cfg = load_config()
-    serial = find_serial_for_loc_port(cfg, loc, port)
+    # Resolve by USB PATH first, exactly as the power actions do. A watch's
+    # bootloader serial is not its adb serial, and the port's mapping may be
+    # stale or wrong outright — aurora arrived on a port still mapped to sol
+    # with a recorded "serial" of `systempart=/dev/mapper/system`, a kernel
+    # cmdline fragment. Keying off that ran `fastboot -s <that> getvar all`
+    # against a device that does not exist, and the watch — sitting in the
+    # bootloader in plain sight — was told "no fastboot device". The path is
+    # the one identity that survives the adb/fastboot boundary AND a bad map.
+    serial = (_fastboot_serial_for_port(loc, port)
+              or find_serial_for_loc_port(cfg, loc, port))
     if not serial:
         return {"ok": False, "error": "no watch mapped to this port"}
     text = fastboot_getvar_all(serial)
@@ -846,11 +869,18 @@ def _watch_fbreport(args):
     # answered up front.
     registry.note(serial, source="fastboot",
                   bootloader_unlocked=bootloader_unlocked(text))
-    codename = find_codename_for_loc_port(cfg, loc, port) or serial
+    # Label the file from the BOOTLOADER's own answer where it gave one. The
+    # port map can be stale — aurora's port was still recorded as sol — and a
+    # report full of aurora's MACs and partition table filed under "sol" is the
+    # same class of lie as a truncated dump that looks complete.
+    fb_product = parse_getvar(text).get("product")
+    codename = (fb_product or find_codename_for_loc_port(cfg, loc, port)
+                or serial)
     DIAG_ROOT.mkdir(parents=True, exist_ok=True)
-    name = f"{codename}-{time.strftime('%Y%m%d-%H%M%S')}-fastboot.txt"
+    name = f"{_safe_name(codename)}-{time.strftime('%Y%m%d-%H%M%S')}-fastboot.txt"
     (DIAG_ROOT / name).write_text(text + "\n")
-    return {"ok": True, "name": name, "lines": len(text.splitlines())}
+    return {"ok": True, "name": name, "lines": len(text.splitlines()),
+            "serial": serial, "product": fb_product}
 
 
 @DISPATCH.op("watch.screenshot")

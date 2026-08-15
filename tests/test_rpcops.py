@@ -715,6 +715,62 @@ def test_poweroff_over_ssh_marks_down_and_does_not_strand(monkeypatch):
     assert marked.get("safe_off_ts"), "ssh poweroff did not stamp the down marker"
 
 
+def test_fbreport_resolves_the_device_by_port_not_by_the_stale_map(monkeypatch, tmp_path):
+    """The fastboot report must find the watch that is PHYSICALLY on the port.
+
+    Live case, 2026-08-15: aurora (a Pixel Watch 2) was docked on a port whose
+    config entry still said `sol`, with a recorded "serial" of
+    `systempart=/dev/mapper/system` — a kernel cmdline fragment, not an
+    identity. Keying the report off that map ran
+    `fastboot -s systempart=/dev/mapper/system getvar all` against a device
+    that does not exist, so a watch sitting in the bootloader in plain sight
+    was told "no fastboot device — put the watch in bootloader first".
+
+    A bootloader serial is not an adb serial, so the USB PATH is the only
+    identity that survives both the adb/fastboot boundary and a wrong map.
+    port.poweroff already resolves this way; this is the same fix, and the
+    docstring there ("the power actions must too") is why it is not new.
+
+    Two more things this pins. The report is labelled from the BOOTLOADER's
+    own `product`, because filing aurora's MACs and partition table under
+    "sol" is the same class of lie as a truncated dump that looks complete.
+    And the filename component is sanitised — that cmdline fragment contains
+    slashes and was a fallback for the filename, so raw interpolation would
+    have written outside DIAG_ROOT."""
+    import asteroid_docking_bay.rpcops as ro
+    calls = []
+    monkeypatch.setattr(ro, "load_config", lambda: {})
+    # the map is WRONG in exactly the way the rig was
+    monkeypatch.setattr(ro, "find_serial_for_loc_port",
+                        lambda c, l, p: "systempart=/dev/mapper/system")
+    monkeypatch.setattr(ro, "find_codename_for_loc_port", lambda c, l, p: "sol")
+    # ...but the bootloader is really there, under its own serial
+    monkeypatch.setattr(ro, "_fastboot_list", lambda: {"38201RTJWW78L7": "1-3.4.2"})
+    monkeypatch.setattr(ro, "DIAG_ROOT", tmp_path / "diag")
+    monkeypatch.setattr(ro.registry, "note", lambda *a, **k: None)
+
+    def _getvar(serial):
+        calls.append(serial)
+        if serial != "38201RTJWW78L7":
+            return ""          # a serial that is not a device answers nothing
+        return "product: aurora\nserialno: 38201RTJWW78L7\nunlocked: yes"
+    monkeypatch.setattr(ro, "fastboot_getvar_all", _getvar)
+
+    d = ro.DISPATCH._data["watch.fbreport"]({"loc": "1-3.4", "port": 2})
+    assert d["ok"], f"a watch sitting in fastboot was not found: {d}"
+    assert calls == ["38201RTJWW78L7"], (
+        f"queried the stale map's serial instead of the port's device: {calls}")
+    # labelled by the bootloader, not by the stale map
+    assert d["name"].startswith("aurora-"), d["name"]
+    assert "sol" not in d["name"]
+    assert (tmp_path / "diag" / d["name"]).exists()
+
+    # A corrupt value must never escape DIAG_ROOT via the filename.
+    assert ro._safe_name("systempart=/dev/mapper/system") == "systempart-dev-mapper-system"
+    assert "/" not in ro._safe_name("../../etc/passwd")
+    assert ro._safe_name("") == "unknown"
+
+
 def test_declare_shelved_records_the_state_without_touching_hardware(monkeypatch):
     """The manual correction is bookkeeping ONLY.
 
