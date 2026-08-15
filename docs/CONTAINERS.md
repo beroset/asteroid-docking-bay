@@ -103,6 +103,7 @@ Deliberately mirrors the existing `/api/*` routes and module seams — the
 | `status.get` | webstatus document + thresholds |
 | `port.set / port.cycle` | usb.set_power / cycle |
 | `port.declare_shelved` | record, per watch on the operator's word, that a watch a-d-b could not observe going down is safely powered off (bookkeeping only, actuates nothing) |
+| `onboard.guide` | hardware read-backs for the guided onboarding: preflight checks, watches currently on the bus, hub tree grouped into physical boxes (read-only) |
 | `watch.poweroff / reboot / bootloader` | existing endpoints |
 | `port.recovery / port.continue` | boot recovery / resume boot chain (fastboot) |
 | `watch.cc / toggle / settime / notify / buzz / screen / screenshot` | Watch methods |

@@ -112,7 +112,7 @@ def test_registered_ops_are_the_documented_contract():
         "workbench.start", "workbench.stop", "wear.set",
         "drain.start", "drain.stop", "drain.history",
         "flash.start", "onboard.start", "onboard.sweep_prepare", "onboard.sweep_run",
-        "onboard.sweep_skip", "onboard.sweep_restore",
+        "onboard.sweep_skip", "onboard.sweep_restore", "onboard.guide",
     }
 
 
@@ -769,6 +769,63 @@ def test_fbreport_resolves_the_device_by_port_not_by_the_stale_map(monkeypatch, 
     assert ro._safe_name("systempart=/dev/mapper/system") == "systempart-dev-mapper-system"
     assert "/" not in ro._safe_name("../../etc/passwd")
     assert ro._safe_name("") == "unknown"
+
+
+def test_onboard_guide_reads_hardware_not_assumptions(monkeypatch):
+    """The guided onboarding advances on OBSERVED state, so its read-backs must
+    describe the bus rather than the config's idea of it.
+
+    Three properties, each of which a plausible implementation gets wrong:
+
+    1. `hubs` groups cascaded chips into physical BOXES. One box is several
+       hub entries sharing an auto-assigned name — the rig's A16 is five chips
+       and twenty ports — and a guide that lists five hubs teaches the user
+       the wrong model at the exact moment they are forming one.
+    2. `preflight` reads group membership from THIS PROCESS, not /etc/group.
+       A usermod that has not been re-logged-in appears in the file and does
+       not apply to the running service, and it is the running service whose
+       port writes must work. Reading the file would report ready while
+       nothing works.
+    3. an unknown action is refused rather than silently treated as preflight.
+    """
+    import asteroid_docking_bay.rpcops as ro
+
+    # 1. a five-chip box must read as ONE box
+    monkeypatch.setattr(ro, "uhubctl_list", lambda: [
+        {"location": "1-3", "ports": [1, 2], "description": "A16"},
+        {"location": "1-3.3", "ports": [1, 2, 3, 4], "description": "A16"},
+        {"location": "1-3.3.3", "ports": [1, 2, 3, 4], "description": "A16"},
+        {"location": "1-3.4", "ports": [1, 2, 3, 4], "description": "A16"},
+        {"location": "1-9", "ports": [1, 2, 3], "description": "dock"},
+    ])
+    d = ro.DISPATCH._data["onboard.guide"]({"action": "hubs"})
+    assert d["ok"]
+    boxes = {b["root"]: b for b in d["boxes"]}
+    assert set(boxes) == {"1-3", "1-9"}, (
+        f"cascaded chips were not grouped into boxes: {sorted(boxes)}")
+    assert len(boxes["1-3"]["chips"]) == 4 and boxes["1-3"]["ports"] == 14
+    assert len(boxes["1-9"]["chips"]) == 1
+
+    # 2. the bus read-back is whatever sysfs says, untouched by config
+    monkeypatch.setattr(ro, "watch_devices_on_bus",
+                        lambda: [{"path": "1-3.2", "serial": "S1",
+                                  "product": "hoki", "pid": "d001"}])
+    b = ro.DISPATCH._data["onboard.guide"]({"action": "bus"})
+    assert b["ok"] and len(b["watches"]) == 1 and b["watches"][0]["serial"] == "S1"
+
+    # 3. preflight uses the process's own groups
+    import os
+    monkeypatch.setattr(os, "getgroups", lambda: [])
+    p = ro.DISPATCH._data["onboard.guide"]({"action": "preflight"})
+    grp_check = next(c for c in p["checks"] if c["id"] == "group")
+    assert grp_check["ok"] is False, (
+        "group membership was not read from the running process — a usermod "
+        "without a re-login would report ready while port writes still fail")
+    assert p["ready"] is False, "ready must require every check"
+
+    # 4. an unknown action is refused, not silently defaulted
+    bad = ro.DISPATCH._data["onboard.guide"]({"action": "wat"})
+    assert bad["ok"] is False and "unknown action" in bad["error"]
 
 
 def test_declare_shelved_records_the_state_without_touching_hardware(monkeypatch):

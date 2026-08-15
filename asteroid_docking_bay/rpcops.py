@@ -42,7 +42,8 @@ from .config import (_config_lock, _store_smart_verdict, allocate_ssh_ip,
                      hands_cal_for, set_hands_cal, set_hub_name)
 from .usb import (_sysfs_hub_scan, _sysfs_path_to_serial_map, adb_usb_paths,
                   _sysfs_serial_at, xhci_slots,
-                  test_port_power_switching, uhubctl_cycle, uhubctl_set_power)
+                  test_port_power_switching, uhubctl_cycle, uhubctl_set_power, watch_devices_on_bus,
+                  uhubctl_list)
 from . import drainlog, wifi
 from .watchctl import BACKUP_ROOT, DIAG_ROOT, Watch, _watch_os
 from .ops import ChargeOp, DrainOp, WorkbenchOp, _flash_one_watch
@@ -835,6 +836,80 @@ def _safe_name(part: str) -> str:
     """
     cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", (part or "").strip()).strip("-.")
     return cleaned[:64] or "unknown"
+
+
+@DISPATCH.op("onboard.guide")
+def _onboard_guide(args):
+    """Read-backs for the guided onboarding: what the HARDWARE says right now.
+
+    The guide advances on observed device state, never on a ticked box — if
+    a-d-b cannot see the change, the step has not happened whatever the user
+    believes. Each action here answers exactly one such question, so the UI
+    holds the step sequence and this holds no state at all.
+
+    Actions:
+      preflight — tools, udev rule, group membership. Everything install.sh
+                  sets up, re-checked from the running service's point of view
+                  (a rule installed but never triggered, or a group added but
+                  not yet applied to this login, both read as NOT ready here —
+                  which is the truth that matters).
+      bus       — every watch enumerated anywhere, from sysfs alone. Used both
+                  for "the bus is empty" and, diffed against a snapshot, for
+                  "exactly one watch appeared".
+      hubs      — the hub tree grouped into BOXES. One physical box is several
+                  cascaded chips sharing a name, so the guide groups by
+                  root = location.split(".")[0] and says so, rather than
+                  letting a 16-port hub look like five hubs.
+    """
+    import grp
+    import os
+    import shutil
+    action = args.get("action") or "preflight"
+
+    if action == "bus":
+        return {"ok": True, "watches": watch_devices_on_bus()}
+
+    if action == "hubs":
+        boxes: dict = {}
+        for hub in uhubctl_list():
+            loc = hub.get("location") or ""
+            root = loc.split(".")[0]
+            box = boxes.setdefault(root, {"root": root, "chips": [], "ports": 0,
+                                          "description": hub.get("description")})
+            box["chips"].append({"location": loc,
+                                 "ports": sorted(hub.get("ports") or [])})
+            box["ports"] += len(hub.get("ports") or [])
+        return {"ok": True, "boxes": sorted(boxes.values(),
+                                            key=lambda b: b["root"])}
+
+    if action != "preflight":
+        return {"ok": False, "error": f"unknown action: {action}"}
+
+    rules = "/etc/udev/rules.d/70-asteroid-docking-bay.rules"
+    try:
+        in_users = "users" in {grp.getgrgid(g).gr_name for g in os.getgroups()}
+    except (KeyError, OSError):
+        in_users = False
+    checks = [
+        {"id": "adb", "ok": bool(shutil.which("adb")),
+         "detail": shutil.which("adb") or "not found",
+         "fix": "install android-tools (Arch) / adb (Debian)"},
+        {"id": "uhubctl", "ok": bool(shutil.which("uhubctl")),
+         "detail": shutil.which("uhubctl") or "not found",
+         "fix": "install uhubctl — without it only sysfs port control works"},
+        {"id": "udev-rules", "ok": os.path.exists(rules),
+         "detail": rules if os.path.exists(rules) else "not installed",
+         "fix": "run ./install.sh — it installs the rule in one sudo block"},
+        # Group membership is read from THIS process, not from /etc/group: a
+        # usermod that has not been re-logged-in shows in the file and not
+        # here, and it is here that decides whether port writes work.
+        {"id": "group", "ok": in_users,
+         "detail": "in 'users'" if in_users else
+                   "not in 'users' for this session (re-login after usermod)",
+         "fix": "sudo usermod -aG users $USER, then log out and back in"},
+    ]
+    return {"ok": True, "checks": checks,
+            "ready": all(c["ok"] for c in checks)}
 
 
 @DISPATCH.op("watch.fbreport")

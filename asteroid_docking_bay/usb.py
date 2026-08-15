@@ -520,6 +520,33 @@ def _port_device_present(location: str, port: int) -> bool:
 _WATCH_VENDOR = "18d1"
 
 
+def watch_devices_on_bus() -> "list[dict]":
+    """Every watch currently enumerated anywhere on the bus, from sysfs alone.
+
+    The guided onboarding's read-backs need "what is plugged in RIGHT NOW",
+    independent of adb, of fastboot, and of the config's idea of the fleet — a
+    watch that is present but wedged, in the bootloader, or entirely unknown
+    still counts as something the user must unplug before the bus is empty.
+
+    Returns [{path, serial, product, pid}], sorted by path so a diff between
+    two calls is stable.
+    """
+    out = []
+    for dev in sorted(_SYSFS_USB.glob("*")):
+        try:
+            if (dev / "idVendor").read_text().strip().lower() != _WATCH_VENDOR:
+                continue
+        except OSError:
+            continue          # disappeared mid-scan, or not a device dir
+        out.append({
+            "path": dev.name,
+            "serial": _read_attr(dev / "serial"),
+            "product": _read_attr(dev / "product"),
+            "pid": _read_attr(dev / "idProduct").lower(),
+        })
+    return out
+
+
 def port_foreign_device(location: str, port: int,
                         known_serials: "set[str] | None" = None) -> "str | None":
     """A human-readable description of a non-watch device enumerated on this
