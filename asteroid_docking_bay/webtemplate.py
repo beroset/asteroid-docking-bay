@@ -139,7 +139,11 @@ _WEB_TEMPLATE = """\
        and the one fleet-wide policy. One-shot ACTIONS were removed from this
        row entirely — the onboard sweep now lives with the registry. Colour is
        no longer inline and no longer arbitrary: a link looks like a link. */
-    .meta{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 22px}
+    /* Centred under the title. This row became a flex container when it was
+       grouped, and a flex container defaults to flex-start — so it silently
+       went left-aligned while every other rule kept working. It reads as a
+       caption to the header, not as a toolbar. */
+    .meta{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:center;gap:6px 22px}
     .mgrp{display:inline-flex;align-items:baseline;gap:14px}
     .meta a{text-decoration:none}
     .vtog{color:#6e7681;border-bottom:1px dotted #4d5561;padding-bottom:1px}
