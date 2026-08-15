@@ -866,14 +866,20 @@ function mkstrip(p,wearH){
   // 1. wearable verdict from the last drain test; an untested watch shows a
   //    grey "?" (like the battery-graph dot is grey with no history yet).
   //    Clicking it opens the drain-test / wear actions.
+  // Developer mode only. The drain test lives in the Workbench, which user
+  // mode does not expose, so this dot advertised a feature with no way in —
+  // and its click target is the drain/wear menu. A "?" inviting a click that
+  // leads nowhere is worse than no dot (moWerk, reviewing user mode).
   const dl=p.drain_last;
-  if(dl&&dl.est_h!=null){
-    const ok=dl.est_h>=wearH;
-    const when=new Date(dl.ts*1000).toLocaleDateString();
-    const tip=`holds ~${fmtDur(dl.est_h)} standby (100&rarr;15%, drain test ${when})`+(ok?' — wearable':` — below ${wearH}h: battery swap candidate`)+' · click for drain/wear';
-    out+=sdot(ok?'on':'err',svgicon(ok?'watch':'batterydead'),tip,wearClk);
-  }else if(p.codename){
-    out+=sdot('dim','?','never drain-tested — click to run a drain test',wearClk);
+  if(isDev()){
+    if(dl&&dl.est_h!=null){
+      const ok=dl.est_h>=wearH;
+      const when=new Date(dl.ts*1000).toLocaleDateString();
+      const tip=`holds ~${fmtDur(dl.est_h)} standby (100&rarr;15%, drain test ${when})`+(ok?' — wearable':` — below ${wearH}h: battery swap candidate`)+' · click for drain/wear';
+      out+=sdot(ok?'on':'err',svgicon(ok?'watch':'batterydead'),tip,wearClk);
+    }else if(p.codename){
+      out+=sdot('dim','?','never drain-tested — click to run a drain test',wearClk);
+    }
   }
   // 2. the connection shame badge — reconnects since this port was last
   //    powered. A clean dock enumerates ONCE and reads 0; every count above

@@ -2450,6 +2450,48 @@ def test_no_css_class_is_styled_but_never_emitted():
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_user_mode_hides_the_drain_dot_entirely(tmp_path):
+    """User mode must not advertise a feature it does not expose.
+
+    The drain test lives in the Workbench, which is developer-only, but the
+    stats strip still carried its verdict dot — and an untested watch showed a
+    grey "?" whose tooltip says "click to run a drain test", opening a menu
+    user mode has no way to reach. mo, reviewing user mode: it "suggests a
+    complex feature that's not exposed".
+
+    Both variants must go, which is the trap: hiding only the verdict makes
+    the else-branch fire and shows the "?" instead — strictly worse, since the
+    "?" is the one that actively invites the click."""
+    import json
+    h = tmp_path / "drain.js"
+    h.write_text(_DOM_STUBS + JS +
+                 "\nconst base={codename:'skipjack',serial:'S9',slot_loc:'1-3',port:1,"
+                 "adb:'device',power:true};"
+                 "const tested={...base,drain_last:{est_h:120,ts:1750000000}};"
+                 "uiMode='developer';"
+                 "const devUntested=mkstrip(base,72), devTested=mkstrip(tested,72);"
+                 "uiMode='user';"
+                 "const userUntested=mkstrip(base,72), userTested=mkstrip(tested,72);"
+                 "console.log(JSON.stringify({devUntested,devTested,userUntested,userTested}));"
+                 "\nprocess.exit(0);\n")
+    r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
+    assert r.returncode == 0, r.stderr[:400]
+    out = json.loads(r.stdout.strip().splitlines()[-1])
+
+    # developer mode keeps both variants
+    assert "never drain-tested" in out["devUntested"], "dev mode lost the ? dot"
+    assert "drain test" in out["devTested"], "dev mode lost the verdict dot"
+    # user mode shows NEITHER — not the verdict, and not the "?" that replaces it
+    assert "never drain-tested" not in out["userUntested"], (
+        "user mode shows the '?' inviting a click into a menu it cannot reach")
+    assert "never drain-tested" not in out["userTested"]
+    assert "drain/wear" not in out["userTested"], (
+        "user mode shows the drain verdict dot")
+    assert "menuWear" not in out["userUntested"] and "menuWear" not in out["userTested"], (
+        "user mode still wires the drain/wear menu")
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
 def test_an_error_message_stays_until_dismissed_and_never_overwrites(tmp_path):
     """The behaviour beroset asked for, asserted at runtime.
 
