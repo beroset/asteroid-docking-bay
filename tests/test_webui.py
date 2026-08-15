@@ -2450,6 +2450,65 @@ def test_no_css_class_is_styled_but_never_emitted():
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_user_mode_removes_the_instrument_links_from_the_status_row(tmp_path):
+    """Drain history and BT scan instrument the fleet; user mode operates it.
+
+    Both are developer-only by the same rule that hid the drain dot: a drain
+    test is a measurement rig user mode does not expose at all, and a BT scan
+    is the Orbit port's first rung rather than a way to use a watch.
+
+    Two things this pins beyond "the link is hidden":
+
+    1. **Toggling the mode must repaint them.** `toggleMode` used to repaint the
+       mode label inline instead of calling `paintMode`, so anything added to
+       the painter applied on page load and NOT on an actual toggle — the one
+       moment that matters.
+    2. **An open drain-history table must close.** The link is only a toggle for
+       a sibling table; hiding the link while the table is still showing leaves
+       user mode displaying exactly what the link was removed for."""
+    import json
+    h = tmp_path / "devlinks.js"
+    h.write_text(_DOM_STUBS + JS + r"""
+      const els={};
+      ['histlink','btlink','modelink','hist'].forEach(id=>{
+        els[id]={id:id,style:{display:''},textContent:'',
+                 classList:{add(){},remove(){},toggle(){},contains:()=>false},
+                 innerHTML:''};});
+      // unknown ids fall back to the generic stub, so unrelated helpers
+      // (closeMenu, render) do not throw and mask what is being tested
+      global.document.getElementById=id=>els[id]||el();
+      global.render=()=>{}; global.lastData=null;
+      const out={};
+      uiMode='developer'; paintMode();
+      out.devHist=els.histlink.style.display;
+      out.devBt=els.btlink.style.display;
+      // pretend the drain history table is open, then switch to user mode
+      histShown=true;
+      toggleMode();                         // developer -> user
+      out.mode=uiMode;
+      out.userHist=els.histlink.style.display;
+      out.userBt=els.btlink.style.display;
+      out.histStillShown=histShown;
+      toggleMode();                         // back to developer
+      out.backHist=els.histlink.style.display;
+      console.log(JSON.stringify(out));
+      process.exit(0);
+    """)
+    r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
+    assert r.returncode == 0, r.stderr[:500]
+    out = json.loads(r.stdout.strip().splitlines()[-1])
+
+    assert out["mode"] == "user"
+    assert out["devHist"] == "" and out["devBt"] == "", "hidden in developer mode"
+    assert out["userHist"] == "none", "drain history still offered in user mode"
+    assert out["userBt"] == "none", "scan bt still offered in user mode"
+    assert out["histStillShown"] is False, (
+        "the drain-history table stayed open in user mode — hiding the link "
+        "alone leaves the thing it toggles on screen")
+    assert out["backHist"] == "", "switching back to developer did not restore it"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
 def test_guided_setup_gates_on_hardware_not_on_the_user(tmp_path):
     """The guide advances on what the bus reports, never on a click.
 

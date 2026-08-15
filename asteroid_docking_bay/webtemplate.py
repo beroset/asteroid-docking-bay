@@ -652,8 +652,10 @@ function watchName(codename){
 function toggleMode(){
   uiMode=isDev()?'user':'developer';
   try{localStorage.setItem('adb-mode',uiMode)}catch(e){}
-  const l=document.getElementById('modelink');
-  if(l){l.textContent=isDev()?'developer':'user';l.classList.toggle('usermode',!isDev());}
+  // One painter, called from here AND at load — the label used to be repainted
+  // inline here, so anything added to paintMode applied on refresh but not on
+  // an actual toggle.
+  paintMode();
   closeMenu();
   if(lastData)render(lastData);
 }
@@ -3589,6 +3591,22 @@ let usbPref='adb';   // fleet USB-mode preference, mirrored from status
 function paintMode(){
   const l=document.getElementById('modelink');
   if(l){l.textContent=isDev()?'developer':'user';l.classList.toggle('usermode',!isDev());}
+  paintDevLinks();
+}
+// The status row's developer-only entries. Both instrument the fleet rather
+// than operate it: a drain test is a measurement rig user mode does not
+// expose at all (its dot is hidden too), and a BT scan is the Orbit port's
+// first rung, not a way to use a watch.
+// Hiding the drain-history LINK is not enough on its own — the table it
+// toggles is a sibling that stays open if it was already showing, which would
+// leave user mode displaying the very thing the link was removed for.
+function paintDevLinks(){
+  const dev=isDev();
+  ['histlink','btlink'].forEach(id=>{
+    const e=document.getElementById(id);
+    if(e)e.style.display=dev?'':'none';
+  });
+  if(!dev&&typeof histShown!=='undefined'&&histShown)toggleHistory();
 }
 function toggleUsbPref(){
   const next=usbPref==='ssh'?'adb':'ssh';
