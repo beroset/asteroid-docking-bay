@@ -397,7 +397,14 @@ _WEB_TEMPLATE = """\
     .slots.idle i{background:#30363d}
     .drain-cfg{color:#a78bfa;font-size:10px;letter-spacing:.3px}
     .regmask{position:fixed;inset:0;background:rgba(2,6,14,.6);z-index:40}
-    .regpanel{position:fixed;top:5vh;left:50%;transform:translateX(-50%);width:min(880px,94vw);max-height:88vh;z-index:41;background:rgba(13,20,32,.97);border:1px solid #30363d;border-radius:10px;box-shadow:0 12px 40px rgba(0,0,0,.5);display:flex;flex-direction:column}
+    /* Same window affordances as the Control Center: drag by the title bar,
+       resize from the corner. A user who has learned one floating window here
+       expects the next to behave the same way. overflow:hidden (not visible)
+       is what makes `resize` legal at all; the body inside does the scrolling,
+       so there is no second scrollbar. */
+    .regpanel{position:fixed;top:5vh;left:50%;transform:translateX(-50%);width:min(880px,94vw);max-height:88vh;z-index:41;background:rgba(13,20,32,.97);border:1px solid #30363d;border-radius:10px;box-shadow:0 12px 40px rgba(0,0,0,.5);display:flex;flex-direction:column;
+      min-width:340px;min-height:120px;overflow:hidden;resize:both}
+    .reg-hd{cursor:move}
     .reg-hd{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid #21262d}
     .reg-hd b{color:#58a6ff}
     .reg-x{margin-left:auto;color:#8b949e;text-decoration:none;font-size:20px;line-height:1}
@@ -1555,7 +1562,7 @@ function spark(id,min,max,bad){
 function _ncpu(d){const m=(d.cores||'').match(/([0-9]+) *$/);return m?(+m[1]+1):1;}
 function _memPct(d){const t=+d.memtotal;return t?Math.round((t-(+d.memfree||0))/t*100):null;}
 function _load1(d){const x=parseFloat((d.load||'').split(/ +/)[0]);return isNaN(x)?null:x;}
-let wimgAX=0, wimgAY=0, _wimgDrag=null, _wimgMoved=false;
+let wimgAX=0, wimgAY=0, _wimgMoved=false;
 let _compo=null;   // {boxW, target, aspect} for an open composite, else null
 function sizeComposite(){
   // Set the product width so the screen hole shows the screenshot at `target`
@@ -1611,20 +1618,56 @@ function ctlPlace(lock){
 // rebuilt every render, so drag-start is an inline handler on it; a manual drag
 // sets ctlMoved, and ctlPlace() then leaves the window put across tab switches
 // and polls. mousemove/mouseup live on the document for the drag's duration.
+// ONE drag mechanism for every floating window. Each used to keep its own
+// state variable with an identical {dx,dy} computation, and the mousemove
+// handler disambiguated them with a ternary — so adding a window meant editing
+// the dispatcher too. The drag now carries its own target, and the dispatcher
+// never has to learn about a new window again.
+function dragStart(id,cx,cy){
+  const el=document.getElementById(id); if(!el)return null;
+  const r=el.getBoundingClientRect();
+  _drag={id:id, dx:cx-r.left, dy:cy-r.top};
+  return _drag;
+}
 function ctlDragStart(e){
   if(e.target.classList&&e.target.classList.contains('cc-x'))return;   // not the close X
-  const cc=document.getElementById('cc'), r=cc.getBoundingClientRect();
-  _drag={dx:e.clientX-r.left, dy:e.clientY-r.top}; ctlMoved=true; e.preventDefault();
+  dragStart('cc',e.clientX,e.clientY);
+  ctlMoved=true; e.preventDefault();
 }
+// Drag any floating panel (Fleet Registry, bt scan, messages, guided setup) by
+// its title bar, exactly like the Control Center. Delegated rather than wired
+// into each header, because every one of those headers is rebuilt on render —
+// the guided setup rebuilds its own on every step — and an inline handler would
+// have to be re-added correctly in four places forever.
+// A standalone function because the interesting part — turning the centring
+// transform into real coordinates — is invisible inside a listener, and the
+// jump it prevents only shows on a real mouse.
+function panDragFrom(t,cx,cy){
+  if(!t||!t.closest)return null;
+  if(t.classList&&t.classList.contains('reg-x'))return null;   // not the close X
+  const hd=t.closest('.reg-hd'); if(!hd)return null;
+  const panel=hd.closest('.regpanel'); if(!panel)return null;
+  const r=panel.getBoundingClientRect();
+  // The panel is centred with translateX(-50%). Dragging sets left/top, so the
+  // transform has to become real coordinates first or the window jumps half its
+  // own width on the first pixel of movement.
+  panel.style.transform='none';
+  panel.style.left=r.left+'px';
+  panel.style.top=r.top+'px';
+  return dragStart(panel.id,cx,cy);
+}
+document.addEventListener('mousedown',e=>{
+  if(panDragFrom(e.target,e.clientX,e.clientY))e.preventDefault();
+});
 document.addEventListener('mousemove',e=>{
-  // One handler drags both floating windows: the Control Center (_drag) and the
-  // live view (_wimgDrag). A single listener keeps them from shadowing each other.
-  const d=_drag||_wimgDrag; if(!d)return;
-  const o=document.getElementById(_drag?'cc':'wimg'), w=o.offsetWidth, h=o.offsetHeight;
+  // One handler, one state: whichever window started the drag named itself.
+  const d=_drag; if(!d)return;
+  const o=document.getElementById(d.id); if(!o)return;
+  const w=o.offsetWidth, h=o.offsetHeight;
   o.style.left=Math.min(Math.max(0,e.clientX-d.dx),window.innerWidth-w)+'px';
   o.style.top=Math.min(Math.max(0,e.clientY-d.dy),window.innerHeight-h)+'px';
 });
-document.addEventListener('mouseup',()=>{_drag=null;_wimgDrag=null;});
+document.addEventListener('mouseup',()=>{_drag=null;});
 // First open of a watch has no client cache, so instead of a "loading…" wait
 // paint the server's last-known values immediately — the /stale endpoint reads
 // them with no device I/O, so it returns at once (amber, marked stale). The
@@ -2788,8 +2831,8 @@ function wimgPlace(){
 // wimgPlace() stops re-anchoring it on image loads.
 function wimgDragStart(e){
   if(e.target.classList&&e.target.classList.contains('wimg-x'))return;   // not the close X
-  const o=document.getElementById('wimg'), r=o.getBoundingClientRect();
-  _wimgDrag={dx:e.clientX-r.left, dy:e.clientY-r.top}; _wimgMoved=true; e.preventDefault();
+  dragStart('wimg',e.clientX,e.clientY);
+  _wimgMoved=true; e.preventDefault();
 }
 // Re-grab the live screen. The composite already knows how to paint it, so
 // this is just loadShot again with a fresh cache-buster.
@@ -2827,7 +2870,7 @@ function loadShot(serial,res){
       const c=document.getElementById('shotcap');if(c){c.className='wimg-cap';c.textContent='screen off';}
     });
 }
-function closeWatchImg(){document.getElementById('wimg').style.display='none';_compo=null;_handsDrag=null;_wimgDrag=null;_handsDevEl=null;handsMode='time';}
+function closeWatchImg(){document.getElementById('wimg').style.display='none';_compo=null;_handsDrag=null;_drag=null;_handsDevEl=null;handsMode='time';}
 document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeWatchImg();closeControl();closeMenu();closeRegistry();closeBt();}});
 // ── Fleet Registry: every watch ever seen, with a Log of what changed ────────
 // ── Guided setup ────────────────────────────────────────────────────────────

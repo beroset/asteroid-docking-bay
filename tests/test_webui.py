@@ -2450,6 +2450,65 @@ def test_no_css_class_is_styled_but_never_emitted():
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_panels_drag_by_the_title_bar_like_the_control_center(tmp_path):
+    """Floating panels drag like the Control Center — users expect the second
+    window to behave like the first.
+
+    The part worth testing is invisible in a listener: the panels are centred
+    with `transform: translateX(-50%)`, and dragging sets left/top. Unless the
+    transform is turned into real coordinates on grab, the window jumps half
+    its own width on the first pixel of movement. Hence panDragFrom is a named
+    function rather than an inline handler.
+
+    Also pinned: the close X does not start a drag, and the whole thing is
+    inert outside a panel header — the listener is delegated on the document,
+    so a careless selector would make every click anywhere begin a drag."""
+    import json
+    h = tmp_path / "pandrag.js"
+    h.write_text(_DOM_STUBS + JS + r"""
+      function mkPanel(id){
+        const panel={id:id,style:{transform:'translateX(-50%)',left:'',top:''},
+          getBoundingClientRect:()=>({left:200,top:80}),
+          closest:sel=>sel==='.regpanel'?panel:null};
+        const hd={classList:{contains:()=>false},
+          closest:sel=>sel==='.reg-hd'?hd:(sel==='.regpanel'?panel:null)};
+        hd.closest=sel=>sel==='.reg-hd'?hd:(sel==='.regpanel'?panel:null);
+        return {panel:panel,hd:hd};
+      }
+      const {panel,hd}=mkPanel('reg');
+      global.__els={reg:panel};
+      global.document.getElementById=id=>global.__els[id]||null;
+
+      const d=panDragFrom(hd,260,100);
+      const out={
+        started:!!d, id:d&&d.id, dx:d&&d.dx, dy:d&&d.dy,
+        transform:panel.style.transform, left:panel.style.left, top:panel.style.top
+      };
+      // the close X must not begin a drag
+      const x={classList:{contains:c=>c==='reg-x'},closest:()=>hd};
+      out.fromX=!!panDragFrom(x,10,10);
+      // nor should anything outside a panel header
+      out.fromElsewhere=!!panDragFrom({classList:{contains:()=>false},
+                                       closest:()=>null},10,10);
+      console.log(JSON.stringify(out));
+      process.exit(0);
+    """)
+    r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
+    assert r.returncode == 0, r.stderr[:500]
+    o = json.loads(r.stdout.strip().splitlines()[-1])
+
+    assert o["started"] is True and o["id"] == "reg"
+    assert o["transform"] == "none", (
+        "the centring transform was left in place — the window would jump half "
+        "its width on the first pixel of the drag")
+    assert o["left"] == "200px" and o["top"] == "80px", (
+        "grab did not convert the centred position into real coordinates")
+    assert o["dx"] == 60 and o["dy"] == 20, "grab offset lost"
+    assert o["fromX"] is False, "the close X started a drag"
+    assert o["fromElsewhere"] is False, "a click outside a panel header started a drag"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
 def test_user_mode_removes_the_instrument_links_from_the_status_row(tmp_path):
     """Drain history and BT scan instrument the fleet; user mode operates it.
 
