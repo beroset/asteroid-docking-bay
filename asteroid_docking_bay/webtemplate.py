@@ -2858,11 +2858,23 @@ function loadShot(serial,res){
       const ts=+r.headers.get('X-Screenshot-Ts')||0;
       return r.blob().then(b=>({b,st,ts}));})
     .then(({b,st,ts})=>{const img=document.getElementById('shotimg'),
-      cap=document.getElementById('shotcap'); if(!img)return;
+      cap=document.getElementById('shotcap');
+      // The caption is set to "capturing…" before the fetch, so EVERY path out
+      // of here has to resolve it. Returning early on a missing image left it
+      // saying "capturing…" forever on a hands watch (narwhal): the composite
+      // removes the screenshot layers on purpose to show the physical dial, so
+      // the fetch succeeds and there is simply nothing to paint it into.
+      if(!cap&&!img)return;
+      if(!img){
+        cap.className='wimg-cap';
+        cap.textContent='hands view — the dial is drawn, not photographed';
+        return;
+      }
       img.onload=wimgPlace; img.src=URL.createObjectURL(b);
+      if(!cap)return;
       if(st){img.classList.add('shot-stale');cap.className='wimg-cap warn';
         cap.textContent='stale screen'+(ts?' · '+fmtAge(ts)+' ago':'')+suffix;}
-      else{cap.textContent='live screen'+suffix;}})
+      else{cap.className='wimg-cap';cap.textContent='live screen'+suffix;}})
     .catch(()=>{
       const box=document.getElementById('shotbox');
       if(box){box.remove();return;}                      // side-by-side: drop the box

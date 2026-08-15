@@ -2450,6 +2450,70 @@ def test_no_css_class_is_styled_but_never_emitted():
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_the_live_view_caption_always_resolves(tmp_path):
+    """"capturing…" is a promise the code has to keep on every path.
+
+    shotRefresh sets the caption to "capturing…" and then fetches. loadShot
+    returned early when there was no #shotimg to paint into — and on a HANDS
+    watch there deliberately isn't one: the composite removes the
+    screenshot-through-hole layers to draw the physical dial instead. So on
+    narwhal the fetch succeeded, nothing was painted, and the caption sat on
+    "capturing…" for ever (moWerk, live view on narwhal).
+
+    Also pinned: a caption that went stale must drop its warn styling when a
+    live frame arrives, or one stale read leaves it amber for the rest of the
+    session."""
+    import json
+    h = tmp_path / "shot.js"
+    h.write_text(_DOM_STUBS + JS + r"""
+      function cap(){return {id:'shotcap',className:'wimg-cap',textContent:''};}
+      function img(){return {id:'shotimg',className:'',src:'',onload:null,
+        classList:{_s:new Set(),add(c){this._s.add(c);},remove(c){this._s.delete(c);},
+                   contains(c){return this._s.has(c);}}};}
+      global.URL={createObjectURL:()=>'blob:x'};
+      global.wimgPlace=()=>{};
+      let els={};
+      // Only the two ids under test may be absent; everything else gets a
+      // generic stub so unrelated code (the poll's refresh()) does not throw
+      // and mask the behaviour being checked.
+      global.document.getElementById=id=>
+        (id==='shotimg'||id==='shotcap')?(els[id]||null):el();
+      // preWarn: the caption is ALREADY amber from an earlier stale read —
+      // that is the state a live frame has to clear, and giving each run a
+      // fresh caption would never exercise it.
+      function run(hasImg,stale,done,preWarn){
+        els={shotcap:cap()};
+        if(hasImg)els.shotimg=img();
+        if(preWarn)els.shotcap.className='wimg-cap warn';
+        global.fetch=()=>Promise.resolve({ok:true,
+          headers:{get:k=>k==='X-Screenshot-Stale'?(stale?'1':null):'1700000000'},
+          blob:()=>Promise.resolve({})});
+        shotRefresh('S9','360x360');
+        setTimeout(()=>done(els.shotcap),8);
+      }
+      const out={};
+      // hands watch: no #shotimg at all
+      run(false,false,c=>{ out.handsText=c.textContent;
+        // normal watch, live frame after a previous stale one
+        run(true,false,c2=>{ out.liveText=c2.textContent; out.liveClass=c2.className;
+          run(true,true,c3=>{ out.staleText=c3.textContent; out.staleClass=c3.className;
+            console.log(JSON.stringify(out)); process.exit(0); });},true);});
+    """)
+    r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
+    assert r.returncode == 0, r.stderr[:500]
+    o = json.loads(r.stdout.strip().splitlines()[-1])
+
+    assert "capturing" not in o["handsText"], (
+        "a hands watch left the caption stuck on 'capturing…' — the narwhal bug")
+    assert "hands" in o["handsText"]
+    assert o["liveText"].startswith("live screen")
+    assert "warn" not in o["liveClass"], (
+        "a live frame kept the amber styling of an earlier stale read")
+    assert o["staleText"].startswith("stale screen")
+    assert "warn" in o["staleClass"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
 def test_panels_drag_by_the_title_bar_like_the_control_center(tmp_path):
     """Floating panels drag like the Control Center — users expect the second
     window to behave like the first.
