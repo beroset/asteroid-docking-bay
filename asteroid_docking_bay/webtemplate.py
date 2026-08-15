@@ -173,8 +173,31 @@ _WEB_TEMPLATE = """\
     .exgrp{padding-left:9px}
     /* Prominent, non-clickable IP banner at the top of the workbench menu —
        the address you actually need to reach the watch over SSH/WiFi. */
-    #toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(20px);background:#161b22;border:1px solid #30363d;color:#c9d1d9;padding:9px 16px;border-radius:7px;font-size:12px;opacity:0;pointer-events:none;transition:.2s;z-index:200}
-    #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+    /* A STACK, not one slot. The old #toast was a single element whose
+       textContent each new message overwrote, so a two-step action ("reading
+       bootloader…" then the result) destroyed its own first message, and an
+       error arriving beside anything else was simply lost. beroset had to
+       re-trigger a failing dump to read why it failed. */
+    #toasts{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:200;
+      display:flex;flex-direction:column;align-items:center;gap:6px;width:max-content;max-width:min(680px,92vw)}
+    .tmsg{background:#161b22;border:1px solid #30363d;color:#c9d1d9;padding:9px 16px;border-radius:7px;
+      font-size:12px;opacity:0;transform:translateY(20px);transition:.2s;display:flex;align-items:center;
+      gap:10px;box-shadow:0 4px 18px rgba(0,0,0,.5);text-align:left}
+    .tmsg.show{opacity:1;transform:translateY(0)}
+    /* An error is the one message that must not vanish on its own, so it is
+       the one that carries a dismiss control and the warning colour. */
+    .tmsg.err{border-color:#f85149;color:#ffa198}
+    .tmsg-x{background:none;border:none;color:inherit;opacity:.65;cursor:pointer;font:inherit;
+      font-size:15px;line-height:1;padding:0 2px;flex:none}
+    .tmsg-x:hover{opacity:1}
+    .tmsg-all{position:fixed;left:50%;bottom:4px;transform:translateX(-50%);z-index:201;
+      background:none;border:none;color:#8b949e;font:inherit;font-size:11px;cursor:pointer;
+      text-decoration:underline dotted}
+    .tmsg-all:hover{color:#c9d1d9}
+    .msg-row{display:flex;gap:10px;padding:5px 2px;border-bottom:1px solid #21262d;font-size:12px}
+    .msg-row:last-child{border-bottom:none}
+    .msg-when{color:#6e7681;white-space:nowrap;font-variant-numeric:tabular-nums}
+    .msg-row.err .msg-what{color:#ffa198}
     /* Watch product-photo thumbnail + click-to-enlarge overlay */
     td.thumb{width:34px;padding:2px 2px 2px 0}
     .thumbwrap{position:relative;display:inline-block;line-height:0;vertical-align:middle}
@@ -530,7 +553,7 @@ _WEB_TEMPLATE = """\
   <div id="alert" class="alert"></div>
   <div class="hdr">
   <h1><span class="hdim">&#x2728;  &#x22C6;  &#x02DA; </span>&#x2726;<span class="htxt">  asteroid-docking-bay  </span>&#x2726;<span class="hdim"> &#x02DA;  &#x22C6;  &#x2728;</span></h1>
-  <p class="meta"><span class="mgrp"><a href="#" id="histlink" class="vtog" onclick="toggleHistory();return false">drain history</a><a href="#" id="hidlink" class="vtog" onclick="toggleShowHidden();return false">all ports</a></span><span class="mgrp"><a href="#" id="reglink" class="mopen" onclick="openRegistry();return false" title="the Fleet Registry &mdash; every watch the rig has ever seen (docked or in orbit), its identity, first/last sighting, and a Log of what changed (kernel, Qt, MACs, resolution) over time. Fleet-wide actions live here too.">fleet registry</a><a href="#" id="btlink" class="mopen" onclick="openBtScan();return false" title="scan for AsteroidOS watches over Bluetooth (they advertise their codename) and pair them &mdash; the first rung of Bluetooth in the Orbit port">scan bt</a></span><span class="mgrp mpol"><span class="dim">mode</span><a href="#" id="modelink" class="mpref" onclick="toggleMode();return false" title="developer shows everything: diagnostics, drain tests, workbench, wanze, the compile cluster and bootloader steering.&#10;user hides the lab and leaves the fleet: onboarding, charge, flashing, backups, settings, WiFi/BT and orbit.&#10;&#10;A guard rail against clutter and misclicks, not a security boundary — the backend still accepts every op.">developer</a></span><span class="mgrp mpol"><span class="dim">usb</span><a href="#" id="usbpreflink" class="mpref" onclick="toggleUsbPref();return false" title="Fleet USB-mode preference &mdash; how a watch that comes up on its own in the wrong mode is auto-corrected:&#10;&#10;&bull; prefer ADB (standard): a stray SSH watch is switched back to adb &mdash; faster, and how a stock flash enumerates&#10;&bull; prefer SSH: a stray watch is given its own SSH IP so several can run SSH at once &mdash; needed for WiFi/workbench work, but updates are slower&#10;&#10;A watch you switched by hand is left alone. Click to switch.">prefer ADB</a></span></p>
+  <p class="meta"><span class="mgrp"><a href="#" id="histlink" class="vtog" onclick="toggleHistory();return false">drain history</a><a href="#" id="hidlink" class="vtog" onclick="toggleShowHidden();return false">all ports</a></span><span class="mgrp"><a href="#" id="reglink" class="mopen" onclick="openRegistry();return false" title="the Fleet Registry &mdash; every watch the rig has ever seen (docked or in orbit), its identity, first/last sighting, and a Log of what changed (kernel, Qt, MACs, resolution) over time. Fleet-wide actions live here too.">fleet registry</a><a href="#" id="btlink" class="mopen" onclick="openBtScan();return false" title="scan for AsteroidOS watches over Bluetooth (they advertise their codename) and pair them &mdash; the first rung of Bluetooth in the Orbit port">scan bt</a><a href="#" id="msglink" class="mopen" onclick="openMsgs();return false" title="every message this session, newest first &mdash; progress, results and errors. Errors stay on screen until dismissed; everything else lands here after it fades, so a message you looked away from is still readable.">messages</a></span><span class="mgrp mpol"><span class="dim">mode</span><a href="#" id="modelink" class="mpref" onclick="toggleMode();return false" title="developer shows everything: diagnostics, drain tests, workbench, wanze, the compile cluster and bootloader steering.&#10;user hides the lab and leaves the fleet: onboarding, charge, flashing, backups, settings, WiFi/BT and orbit.&#10;&#10;A guard rail against clutter and misclicks, not a security boundary — the backend still accepts every op.">developer</a></span><span class="mgrp mpol"><span class="dim">usb</span><a href="#" id="usbpreflink" class="mpref" onclick="toggleUsbPref();return false" title="Fleet USB-mode preference &mdash; how a watch that comes up on its own in the wrong mode is auto-corrected:&#10;&#10;&bull; prefer ADB (standard): a stray SSH watch is switched back to adb &mdash; faster, and how a stock flash enumerates&#10;&bull; prefer SSH: a stray watch is given its own SSH IP so several can run SSH at once &mdash; needed for WiFi/workbench work, but updates are slower&#10;&#10;A watch you switched by hand is left alone. Click to switch.">prefer ADB</a></span></p>
   <div id="sweeplog" style="display:none;position:fixed;right:14px;bottom:14px;width:min(560px,92vw);max-height:60vh;overflow:auto;background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:10px 12px;font:12px monospace;color:#c9d1d9;white-space:pre-wrap;z-index:300;box-shadow:0 6px 30px rgba(0,0,0,.6)"><a href="#" onclick="document.getElementById('sweeplog').style.display='none';return false" style="float:right;color:#6e7681">close</a><a href="#" onclick="sweepSkip();return false" style="float:right;color:#d29922;margin-right:12px" title="give up on the current port's boot-wait and move to the next socket">skip port</a><b style="color:#3fb950">onboard sweep</b>\\n<span id="sweeplogbody"></span></div>
   </div>
   <div class="tblwrap">
@@ -550,6 +573,8 @@ _WEB_TEMPLATE = """\
   <div id="reg" class="regpanel" style="display:none"></div>
   <div id="btmask" class="regmask" style="display:none" onclick="closeBt()"></div>
   <div id="bt" class="regpanel" style="display:none"></div>
+  <div id="msgsmask" class="regmask" style="display:none" onclick="closeMsgs()"></div>
+  <div id="msgs" class="regpanel" style="display:none"></div>
 <script>
 // USER vs DEVELOPER mode.
 //
@@ -1046,9 +1071,9 @@ function menuShelve(ev,slot,codename){
 function shelveGo(slot){
   fetch('/api/declare-shelved/'+_api(slot),{method:'POST'}).then(r=>r.json()).then(d=>{
     if(d.ok)toast('recorded as shelved — safely powered down');
-    else toast('could not record: '+(d.error||'unknown'));
+    else toastErr('could not record: '+(d.error||'unknown'));
     refresh();
-  }).catch(()=>toast('could not record the state'));
+  }).catch(()=>toastErr('could not record the state'));
 }
 // Keyed row reconcile: replacing the whole tbody innerHTML every refresh
 // destroyed and recreated every product <img>, so each thumbnail reloaded and
@@ -1235,14 +1260,14 @@ function launchOrbit(){
     .then(r=>r.json()).then(d=>{
       el.disabled=false;
       if(d&&d.ok){toast('launched '+(d.member.codename||d.member.serial)+' into orbit');el.value='';refresh();}
-      else{toast((d&&d.error)||'launch failed — is the watch on WiFi in SSH mode?');el.focus();}
-    }).catch(()=>{el.disabled=false;toast('launch failed');el.focus();});
+      else{toastErr((d&&d.error)||'launch failed — is the watch on WiFi in SSH mode?');el.focus();}
+    }).catch(()=>{el.disabled=false;toastErr('launch failed');el.focus();});
 }
 function deorbit(serial,name){
   if(!confirm('De-orbit '+name+'? The watch itself is untouched - this only forgets how to reach it over the air.'))return;
   fetch('/api/orbit/deorbit/'+encodeURIComponent(serial),{method:'POST'})
-    .then(r=>r.json()).then(d=>{if(d&&d.ok){toast('de-orbited '+name);refresh();}else toast('de-orbit failed');})
-    .catch(()=>toast('de-orbit failed'));
+    .then(r=>r.json()).then(d=>{if(d&&d.ok){toast('de-orbited '+name);refresh();}else toastErr('de-orbit failed');})
+    .catch(()=>toastErr('de-orbit failed'));
 }
 function render(data){
   lastData=data;
@@ -1613,7 +1638,7 @@ function doDump(serial){
   if(!confirm('Take a full-disk backup of this watch? It runs in the background and can take many minutes. The watch is held until it finishes, so other actions on it will be refused.')) return;
   fetch('/api/watch/'+encodeURIComponent(serial)+'/dump/start',{method:'POST'})
     .then(r=>r.json()).then(d=>{
-      if(!d.ok){ toast(d.error||'could not start the dump'); return; }
+      if(!d.ok){ toastErr(d.error||'could not start the dump'); return; }
       toast('dump started: '+d.dest);
       refresh();
     });
@@ -1994,15 +2019,15 @@ function wxSetLocation(){
   toast('locating '+city+'\\u2026');
   fetch('/api/weather/location/'+encodeURIComponent(city),{method:'POST'}).then(r=>r.json()).then(d=>{
     if(d.ok){toast('location: '+d.location.city);wxData=null;wxFetch();}
-    else toast(d.error||'city not found');
-  }).catch(()=>toast('set location failed'));
+    else toastErr(d.error||'city not found');
+  }).catch(()=>toastErr('set location failed'));
 }
 function wxSync(serial){
   toast('syncing weather\\u2026');
   fetch('/api/watch/'+encodeURIComponent(serial)+'/weather-sync',{method:'POST'}).then(r=>r.json()).then(d=>{
-    toast(d.ok?('weather synced'+(d.city?': '+d.city:'')):('weather sync failed'+(d.error?' \\u2014 '+d.error:'')));
+    toastRes(d.ok, ('weather synced'+(d.city?': '+d.city:'')), ('weather sync failed'+(d.error?' \\u2014 '+d.error:'')));
     if(d.ok)wxFetchOnWatch(serial);   // refresh the on-watch line to what we just wrote
-  }).catch(()=>toast('weather sync failed'));
+  }).catch(()=>toastErr('weather sync failed'));
 }
 function _wxOnWatchLine(){
   const w=ctlSerial?wxOnWatch[ctlSerial]:undefined;
@@ -2191,8 +2216,8 @@ function settingsWrite(key,on){
   const s=ctlSerial;
   ctlPending.add('set:'+key); renderControl(ctlCache[s]||{});   // pulse until confirmed
   fetch('/api/watch/'+encodeURIComponent(s)+'/setting/'+(on?'on':'off')+key,{method:'POST'})
-    .then(r=>r.json()).then(d=>{if(!d.ok)toast('setting write failed');setTimeout(()=>settingsFetch(s),400);})
-    .catch(()=>{toast('setting write failed');settingsFetch(s);});
+    .then(r=>r.json()).then(d=>{if(!d.ok)toastErr('setting write failed');setTimeout(()=>settingsFetch(s),400);})
+    .catch(()=>{toastErr('setting write failed');settingsFetch(s);});
 }
 // Quick-panel toggle mirror: each toggle is an icon in a grey circle, dimmed
 // when the toggle is disabled in the watch's quick panel and full when enabled;
@@ -2224,8 +2249,8 @@ function quickpanelSet(id,on){
   const s=ctlSerial;
   ctlPending.add('qp:'+id); renderControl(ctlCache[s]||{});   // pulse until confirmed
   fetch('/api/watch/'+encodeURIComponent(s)+'/quickpanel/'+id+'/'+(on?'on':'off'),{method:'POST'})
-    .then(r=>r.json()).then(d=>{if(!d.ok)toast('quickpanel write failed');setTimeout(()=>settingsFetch(s),400);})
-    .catch(()=>{toast('quickpanel write failed');settingsFetch(s);});
+    .then(r=>r.json()).then(d=>{if(!d.ok)toastErr('quickpanel write failed');setTimeout(()=>settingsFetch(s),400);})
+    .catch(()=>{toastErr('quickpanel write failed');settingsFetch(s);});
 }
 // ── Clock (arbitrary time) — the top of the Settings tab ────────────────────
 // Spinners for hour/min and day/month/year, each reacting to the mouse wheel
@@ -2250,8 +2275,8 @@ function ctlDateApply(){
   const s=ctlSerial,z=n=>String(n).padStart(2,'0'),D=ctlDate;
   const when=`${D.y}-${z(D.mo)}-${z(D.d)} ${z(D.h)}:${z(D.mi)}:00`;
   fetch('/api/watch/'+encodeURIComponent(s)+'/datetime/'+encodeURIComponent(when),{method:'POST'})
-    .then(r=>r.json()).then(d=>toast(d.ok?'clock set: '+when:'set clock failed'))
-    .catch(()=>toast('set clock failed'));
+    .then(r=>r.json()).then(d=>toastRes(d.ok, 'clock set: '+when, 'set clock failed'))
+    .catch(()=>toastErr('set clock failed'));
 }
 function bodyClock(d){
   // Track the live clock until the user dials a spinner, then hold their pick —
@@ -2330,8 +2355,8 @@ function wakeSet(kind,value){
   const s=ctlSerial;
   ctlPending.add('wake:'+kind+value);renderControl(ctlCache[s]||{});
   fetch('/api/watch/'+encodeURIComponent(s)+'/wake/'+kind+'/'+value,{method:'POST'})
-    .then(r=>r.json()).then(d=>{if(!d.ok)toast('wake setting failed'+(d.error?': '+d.error:''));setTimeout(()=>settingsFetch(s),400);})
-    .catch(()=>{toast('wake setting failed');settingsFetch(s);});
+    .then(r=>r.json()).then(d=>{if(!d.ok)toastErr('wake setting failed'+(d.error?': '+d.error:''));setTimeout(()=>settingsFetch(s),400);})
+    .catch(()=>{toastErr('wake setting failed');settingsFetch(s);});
 }
 function langRows(){
   // System locale via localectl (what the watch itself reports; the settings
@@ -2348,8 +2373,8 @@ function localeSet(loc){
   const s=ctlSerial;
   ctlPending.add('loc:'+loc);renderControl(ctlCache[s]||{});
   fetch('/api/watch/'+encodeURIComponent(s)+'/locale/'+encodeURIComponent(loc),{method:'POST'})
-    .then(r=>r.json()).then(d=>{if(!d.ok)toast('locale set failed'+(d.error?': '+d.error:''));setTimeout(()=>settingsFetch(s),600);})
-    .catch(()=>{toast('locale set failed');settingsFetch(s);});
+    .then(r=>r.json()).then(d=>{if(!d.ok)toastErr('locale set failed'+(d.error?': '+d.error:''));setTimeout(()=>settingsFetch(s),600);})
+    .catch(()=>{toastErr('locale set failed');settingsFetch(s);});
 }
 function usbModeRows(d){
   // Doubled from Radios (mo): users coming from the on-watch settings app may
@@ -2389,21 +2414,21 @@ function avRecord(){
         '<button class="cc-act mini" onclick="avRecord()">re-record</button>';
     }else{
       box.innerHTML='<span class="err">record failed</span> <button class="cc-act mini" onclick="avRecord()">retry</button>';
-      toast('record failed'+(d&&d.error?': '+d.error:''));
+      toastErr('record failed'+(d&&d.error?': '+d.error:''));
     }
   }).catch(()=>{box.innerHTML='<span class="err">record failed</span> <button class="cc-act mini" onclick="avRecord()">retry</button>';});
 }
 function _avPost(path,fn){
   const s=ctlSerial;
   fetch('/api/watch/'+encodeURIComponent(s)+'/'+path,{method:'POST'})
-    .then(r=>r.json()).then(fn).catch(()=>toast('failed'));
+    .then(r=>r.json()).then(fn).catch(()=>toastErr('failed'));
 }
-function avBright(v){_avPost('brightness/'+v,d=>{if(avData[ctlSerial])avData[ctlSerial].brightness=+v;if(!d||!d.ok)toast('brightness failed');});}
-function avVol(v){_avPost('volume/'+v,d=>{if(avData[ctlSerial])avData[ctlSerial].volume=+v;if(!d||!d.ok)toast('volume failed');});}
+function avBright(v){_avPost('brightness/'+v,d=>{if(avData[ctlSerial])avData[ctlSerial].brightness=+v;if(!d||!d.ok)toastErr('brightness failed');});}
+function avVol(v){_avPost('volume/'+v,d=>{if(avData[ctlSerial])avData[ctlSerial].volume=+v;if(!d||!d.ok)toastErr('volume failed');});}
 function avMute(on){
   ctlPending.add('av:mute'); renderControl(ctlCache[ctlSerial]||{});
   _avPost('mute/'+(on?'on':'off'),d=>{ctlPending.delete('av:mute');
-    if(d&&d.ok&&avData[ctlSerial])avData[ctlSerial].muted=!!on; else toast('mute failed');
+    if(d&&d.ok&&avData[ctlSerial])avData[ctlSerial].muted=!!on; else toastErr('mute failed');
     renderControl(ctlCache[ctlSerial]||{});});
 }
 function closeControl(){const cc=document.getElementById('cc');cc.style.display='none';ctlSerial=null;if(ctlPoll){clearTimeout(ctlPoll);ctlPoll=null;}}
@@ -2632,8 +2657,8 @@ function handsUpDrag(){
 function handsCommit(){
   if(!_handsSerial)return;
   fetch('/api/watch/'+encodeURIComponent(_handsSerial)+'/hands-move/'+handsVal.min+'/'+handsVal.hr,{method:'POST'})
-    .then(r=>r.json()).then(d=>{if(!d||!d.ok)toast('hands move failed'+(d&&d.error?' - '+d.error:''));})
-    .catch(()=>toast('hands move failed'));
+    .then(r=>r.json()).then(d=>{if(!d||!d.ok)toastErr('hands move failed'+(d&&d.error?' - '+d.error:''));})
+    .catch(()=>toastErr('hands move failed'));
 }
 function handsSetMode(m){
   handsMode=m;
@@ -2662,8 +2687,8 @@ function handsCalSave(){
   fetch('/api/watch/'+encodeURIComponent(_handsSerial)+'/hands-cal/'+minOff.toFixed(1)+'/'+hrOff.toFixed(1),{method:'POST'})
     .then(r=>r.json()).then(d=>{
       if(d&&d.ok){handsCal=d.cal; toast('hands calibrated'); handsSetMode('time');}
-      else toast('calibrate save failed');
-    }).catch(()=>toast('calibrate save failed'));
+      else toastErr('calibrate save failed');
+    }).catch(()=>toastErr('calibrate save failed'));
 }
 // Choreography — presets in the calibrated space; each drives motor_move_all.
 function handsGoto(minA,hrA){
@@ -2850,20 +2875,20 @@ function sweepPaint(){const p=document.getElementById('reg');if(p&&p.style.displ
 function sweepArm(){
   toast('powering all sockets off\u2026');
   fetch('/api/onboard-sweep/prepare',{method:'POST'}).then(r=>r.json()).then(d=>{
-    if(!d.ok){toast('sweep prepare failed');return;}
+    if(!d.ok){toastErr('sweep prepare failed');return;}
     sweepState='armed';sweepPorts=d.ports;
     sweepHeld=d.held?`${d.held} socket(s) left POWERED and skipped \u2014 ${d.held_detail}`:'';
     sweepPaint();refresh();
-  }).catch(()=>toast('sweep prepare failed'));
+  }).catch(()=>toastErr('sweep prepare failed'));
 }
 function sweepRestore(){
   // The way out of the armed state. Without this, aborting left every socket
   // dark and every watch quietly on battery.
   toast('restoring port power\u2026');
   fetch('/api/onboard-sweep/restore',{method:'POST'}).then(r=>r.json()).then(d=>{
-    toast(d.ok?`power restored to ${d.ports} socket(s)`:'restore failed \u2014 power ports on by hand');
+    toastRes(d.ok, `power restored to ${d.ports} socket(s)`, 'restore failed \u2014 power ports on by hand');
     sweepState='idle';sweepPaint();refresh();
-  }).catch(()=>{toast('restore failed \u2014 power ports on by hand');sweepState='idle';sweepPaint();});
+  }).catch(()=>{toastErr('restore failed \u2014 power ports on by hand');sweepState='idle';sweepPaint();});
 }
 function sweepRun(){
   sweepState='running';sweepPaint();
@@ -2912,9 +2937,9 @@ function btPair(mac,name){
   const p=document.getElementById('bt'),hd=p&&p.querySelector('.reg-hd .dim');
   if(hd)hd.textContent='pairing '+name+' — confirm on the watch…';
   fetch('/api/bt/pair/'+encodeURIComponent(mac),{method:'POST'}).then(r=>r.json()).then(d=>{
-    toast(d&&d.ok?('paired '+name):('pair failed'+(d&&d.error?': '+d.error:'')));
+    toastRes(d&&d.ok, ('paired '+name), ('pair failed'+(d&&d.error?': '+d.error:'')));
     _btData=null; btScan();
-  }).catch(()=>toast('pair failed'));
+  }).catch(()=>toastErr('pair failed'));
 }
 function mi(cls,label,fn,dis,title){return `<button class="menu-item ${cls}"${dis?` disabled title="${title||'not available yet'}"`:` onclick="${fn};closeMenu()"`}>${label}</button>`;}
 // A DESTRUCTIVE menu item: it arms on the first click and commits on the
@@ -3093,19 +3118,89 @@ function menuWear(ev,slot,draining,serial,wear,codename){
     grpHd('Drain test')+grpBox(draining?mi('dr','Stop drain test',`doStopDrain('${slot}')`):mi('dr','Drain test',`doDrain('${slot}')`))+
     (serial?grpHd('Wear')+grpBox(wearItem(slot,wear)):''));
 }
-function toast(msg){
+// Every message ever shown, newest last, so nothing is unreadable after the
+// fact — beroset's "show last error", generalised to every message rather than
+// only the last error.
+let _msgLog=[];
+const MSG_LOG_MAX=200;
+function toast(msg){ return _msg(msg,false); }
+// Errors do NOT time out. They are the messages worth reading, and the old
+// 2.4s fade meant a failing dump had to be re-run to find out why it failed.
+function toastErr(msg){ return _msg(msg,true); }
+// The overwhelmingly common call shape: one branch is a result, the other a
+// failure. Written as a helper rather than `toast(ok?a:b)` so the failure
+// branch cannot quietly inherit the auto-fading treatment of the success one.
+function toastRes(ok,okMsg,errMsg){ return ok?toast(okMsg):toastErr(errMsg); }
+function _msg(msg,isErr){
+  const text=String(msg==null?'':msg);
+  _msgLog.push({t:Date.now(),text:text,err:!!isErr});
+  if(_msgLog.length>MSG_LOG_MAX)_msgLog.shift();
   // Created on first use — every menu action toasts, and a missing element
   // here threw and silently killed the action itself (screenshot bug).
-  let t=document.getElementById('toast');
-  if(!t){t=document.createElement('div');t.id='toast';document.body.appendChild(t);}
-  t.textContent=msg;t.classList.add('show');
-  clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove('show'),2400);
+  let box=document.getElementById('toasts');
+  if(!box){box=document.createElement('div');box.id='toasts';document.body.appendChild(box);}
+  const el=document.createElement('div');
+  el.className='tmsg'+(isErr?' err':'');
+  const span=document.createElement('span');
+  span.textContent=text; el.appendChild(span);
+  if(isErr){
+    const x=document.createElement('button');
+    x.className='tmsg-x'; x.textContent='×';
+    x.title='dismiss';
+    x.onclick=()=>{el.remove();_msgAllBtn();};
+    el.appendChild(x);
+  }
+  box.appendChild(el);
+  // next frame, so the transition runs instead of the element appearing shown
+  setTimeout(()=>el.classList.add('show'),10);
+  if(!isErr)setTimeout(()=>{el.classList.remove('show');setTimeout(()=>el.remove(),250);},3200);
+  _msgAllBtn();
+  if(_msgOpen)renderMsgs();
+  return el;
+}
+// One control to clear a pile of errors, shown only when there IS a pile —
+// dismissing five failures one at a time is how people learn to dismiss
+// without reading, which is the habit this whole feature exists to prevent.
+function _msgAllBtn(){
+  const box=document.getElementById('toasts');
+  const n=box?box.querySelectorAll('.tmsg.err').length:0;
+  let b=document.getElementById('tmsgall');
+  if(n<2){ if(b)b.remove(); return; }
+  if(!b){
+    b=document.createElement('button');b.id='tmsgall';b.className='tmsg-all';
+    b.onclick=()=>{const bx=document.getElementById('toasts');
+      if(bx)bx.querySelectorAll('.tmsg.err').forEach(e=>e.remove());_msgAllBtn();};
+    document.body.appendChild(b);
+  }
+  b.textContent='dismiss '+n+' errors';
+}
+let _msgOpen=false;
+function openMsgs(){
+  _msgOpen=true;
+  const p=document.getElementById('msgs'),m=document.getElementById('msgsmask');
+  if(p)p.style.display='block'; if(m)m.style.display='block';
+  renderMsgs();
+}
+function closeMsgs(){
+  _msgOpen=false;
+  const p=document.getElementById('msgs'),m=document.getElementById('msgsmask');
+  if(p)p.style.display='none'; if(m)m.style.display='none';
+}
+function renderMsgs(){
+  const p=document.getElementById('msgs'); if(!p)return;
+  const rows=_msgLog.slice().reverse().map(e=>
+    `<div class="msg-row${e.err?' err':''}"><span class="msg-when">${esc(new Date(e.t).toLocaleTimeString())}</span>`+
+    `<span class="msg-what">${esc(e.text)}</span></div>`).join('');
+  p.innerHTML='<div class="reg-hd"><b>messages</b>'+
+    `<span class="dim">${_msgLog.length} this session &middot; newest first</span>`+
+    '<a href="#" class="reg-x" onclick="closeMsgs();return false">&times;</a></div>'+
+    '<div class="reg-body">'+(rows||'<div class="dim">no messages yet</div>')+'</div>';
 }
 function doSetTime(s){toast('syncing time…');fetch('/api/watch/'+encodeURIComponent(s)+'/settime',{method:'POST'}).then(()=>toast('time synced from host'));}
-function doNotify(s){fetch('/api/watch/'+encodeURIComponent(s)+'/notify',{method:'POST'}).then(r=>r.json()).then(d=>toast(d.ok?'notification sent to watch':'notify failed'));}
+function doNotify(s){fetch('/api/watch/'+encodeURIComponent(s)+'/notify',{method:'POST'}).then(r=>r.json()).then(d=>toastRes(d.ok, 'notification sent to watch', 'notify failed'));}
 function doScreenshot(s){toast('capturing…');window.open('/api/watch/'+encodeURIComponent(s)+'/screenshot.jpg?t='+Date.now(),'_blank');}
-function switchAdb(serial){toast('switching to ADB…');fetch('/api/switch-adb'+(serial?'/'+encodeURIComponent(serial):''),{method:'POST'}).then(r=>r.json()).then(d=>{toast(d.ok?'switching — watch re-enumerating on ADB…':('Switch to ADB failed — '+(d.error||'unknown')));if(d.ok){ctlSet(serial,'adb',null);setTimeout(refresh,5000);}else flashFail(connPill(serial))});}
-function switchSsh(serial){toast('switching to SSH…');fetch('/api/switch-ssh/'+encodeURIComponent(serial),{method:'POST'}).then(r=>r.json()).then(d=>{toast(d.ok?'switching — watch re-enumerating as SSH…':('Switch to SSH failed — '+(d.error||'unknown')));if(d.ok){ctlSet(serial,'ssh',d.ip);setTimeout(refresh,6000);}else flashFail(connPill(serial))});}
+function switchAdb(serial){toast('switching to ADB…');fetch('/api/switch-adb'+(serial?'/'+encodeURIComponent(serial):''),{method:'POST'}).then(r=>r.json()).then(d=>{toastRes(d.ok, 'switching — watch re-enumerating on ADB…', ('Switch to ADB failed — '+(d.error||'unknown')));if(d.ok){ctlSet(serial,'adb',null);setTimeout(refresh,5000);}else flashFail(connPill(serial))});}
+function switchSsh(serial){toast('switching to SSH…');fetch('/api/switch-ssh/'+encodeURIComponent(serial),{method:'POST'}).then(r=>r.json()).then(d=>{toastRes(d.ok, 'switching — watch re-enumerating as SSH…', ('Switch to SSH failed — '+(d.error||'unknown')));if(d.ok){ctlSet(serial,'ssh',d.ip);setTimeout(refresh,6000);}else flashFail(connPill(serial))});}
 // Keep an open Network tab in sync with a USB-mode switch made from it: the
 // mode and assigned IP change immediately, before the watch re-enumerates.
 function ctlSet(serial,mode,ip){
@@ -3127,28 +3222,27 @@ function doWanze(serial,remove){
   toast(remove?'removing wanze\\u2026':'deploying wanze\\u2026');
   fetch('/api/watch/'+encodeURIComponent(serial)+'/wanze/'+act,{method:'POST'})
     .then(r=>r.json()).then(d=>{
-      toast(d.ok?(remove?'wanze removed from the watch — its trace is kept until harvested'
-                        :'wanze deployed — it records on its own, without waking the watch')
-                :(d.error||('wanze '+(remove?'removal':'deploy')+' failed')));
+      toastRes(d.ok, (remove?'wanze removed from the watch — its trace is kept until harvested'
+                        :'wanze deployed — it records on its own, without waking the watch'), (d.error||('wanze '+(remove?'removal':'deploy')+' failed')));
       refresh();})
-    .catch(()=>toast('wanze '+(remove?'removal':'deploy')+' failed'));
+    .catch(()=>toastErr('wanze '+(remove?'removal':'deploy')+' failed'));
 }
 function doDiag(c){toast('collecting diagnostics…');fetch('/api/diagnostics/'+_api(c),{method:'POST'}).then(r=>r.json()).then(d=>{
   if(d.name){
     toast(d.ok?'diagnostics ready — downloading':'diagnostics partial — downloading what we have');
     const a=document.createElement('a');a.href='/api/diagnostics/download/'+encodeURIComponent(d.name);
     a.download=d.name;document.body.appendChild(a);a.click();a.remove();
-  }else{toast(d.error||'diagnostics failed');}
-}).catch(()=>toast('diagnostics failed'));}
+  }else{toastErr(d.error||'diagnostics failed');}
+}).catch(()=>toastErr('diagnostics failed'));}
 function doFbReport(c){toast('reading bootloader…');fetch('/api/fbreport/'+_api(c),{method:'POST'}).then(r=>r.json()).then(d=>{
   if(d.name){
     toast('fastboot report ('+d.lines+' lines) — downloading');
     const a=document.createElement('a');a.href='/api/diagnostics/download/'+encodeURIComponent(d.name);
     a.download=d.name;document.body.appendChild(a);a.click();a.remove();
-  }else{toast(d.error||'fastboot report failed');}
-}).catch(()=>toast('fastboot report failed'));}
-function doBackup(c){toast('backing up…');fetch('/api/backup/'+_api(c),{method:'POST'}).then(r=>r.json()).then(d=>toast(d.ok?'backup saved':'backup incomplete — see log')).catch(()=>toast('backup failed'));}
-function doRestore(c){if(!confirm('Restore backed-up data onto this watch?\\nOverwrites its current settings + WiFi credentials with the last backup.'))return;toast('restoring…');fetch('/api/restore/'+_api(c),{method:'POST'}).then(r=>r.json()).then(d=>toast(d.ok?'restore done — reconnecting WiFi':(d.error||'restore incomplete — see log'))).catch(()=>toast('restore failed'));}
+  }else{toastErr(d.error||'fastboot report failed');}
+}).catch(()=>toastErr('fastboot report failed'));}
+function doBackup(c){toast('backing up…');fetch('/api/backup/'+_api(c),{method:'POST'}).then(r=>r.json()).then(d=>toastRes(d.ok, 'backup saved', 'backup incomplete — see log')).catch(()=>toastErr('backup failed'));}
+function doRestore(c){if(!confirm('Restore backed-up data onto this watch?\\nOverwrites its current settings + WiFi credentials with the last backup.'))return;toast('restoring…');fetch('/api/restore/'+_api(c),{method:'POST'}).then(r=>r.json()).then(d=>toastRes(d.ok, 'restore done — reconnecting WiFi', (d.error||'restore incomplete — see log'))).catch(()=>toastErr('restore failed'));}
 // doDump is defined above (the real implementation). Restore-from-dump is
 // still a disabled, not-yet-implemented menu item, so it keeps its stub.
 function doRestoreDump(s){}
@@ -3222,7 +3316,7 @@ function doCy(c){
     if(d.smart===true)toast('port switches power (smart ✓)');
     else if(d.smart===false)toast('port does NOT cut power (not smart)');
     else if(d.ok)toast('power-cycled — smart still unverified');
-    else toast(d.error||'cycle failed');
+    else toastErr(d.error||'cycle failed');
     setTimeout(refresh,2500);
   }).catch(()=>setTimeout(refresh,2500));
 }
@@ -3363,8 +3457,8 @@ function doFl(c,channel){
 }
 function sweepSkip(){
   fetch('/api/onboard-sweep/skip',{method:'POST'}).then(r=>r.json())
-    .then(d=>toast(d.ok?'skipping port…':(d.error||'skip failed')))
-    .catch(()=>toast('skip failed'));
+    .then(d=>toastRes(d.ok, 'skipping port…', (d.error||'skip failed')))
+    .catch(()=>toastErr('skip failed'));
 }
 function doRemap(c){
   // Clicking while it's already onboarding STOPS it — onboarding never gives up

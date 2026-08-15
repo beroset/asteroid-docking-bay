@@ -2449,6 +2449,123 @@ def test_no_css_class_is_styled_but_never_emitted():
         f"or decoy vocabulary that contradicts the live rules")
 
 
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_an_error_message_stays_until_dismissed_and_never_overwrites(tmp_path):
+    """The behaviour beroset asked for, asserted at runtime.
+
+    Three properties, none of which the old single-element toast had:
+      1. messages STACK — a second message does not overwrite the first
+      2. an info message auto-fades, so routine actions stay click-free
+      3. an ERROR never times out, and carries its own dismiss control
+
+    Property 3 is the one a static test cannot see: dropping the `if(!isErr)`
+    guard on the fade timer leaves every call site looking correct while
+    errors silently vanish again."""
+    import json
+    harness = r"""
+      // a DOM real enough to observe structure, and timers we can run on demand
+      const timers=[];
+      global.setTimeout=(fn,ms)=>{timers.push({fn,ms});return timers.length;};
+      global.clearTimeout=()=>{};
+      const byId={};
+      function mkEl(tag){return{
+        tag:tag,id:'',className:'',textContent:'',title:'',onclick:null,style:{},
+        children:[],_removed:false,
+        classList:{_s:new Set(),
+          add(c){this._s.add(c);},remove(c){this._s.delete(c);},
+          contains(c){return this._s.has(c);},toggle(){}},
+        appendChild(c){this.children.push(c);if(c.id)byId[c.id]=c;return c;},
+        remove(){this._removed=true;},
+        querySelectorAll(sel){
+          const want=sel.replace(/\./g,' ').trim().split(/\s+/).pop();
+          return this.children.filter(c=>!c._removed&&(''+c.className).split(/\s+/).includes(want));
+        },
+        querySelector(){return null;},setAttribute(){},getAttribute(){return null;}};}
+      global.document={getElementById:id=>byId[id]||null,
+        createElement:mkEl,body:mkEl('body'),documentElement:mkEl('html'),
+        addEventListener(){}};
+
+      const a=toast('capturing…');
+      const b=toastErr('backup failed');
+      const box=byId['toasts'];
+      const out={
+        stacked: box.children.length,            // 2 = nothing overwrote anything
+        infoHasX: a.children.some(c=>c.className==='tmsg-x'),
+        errHasX:  b.children.some(c=>c.className==='tmsg-x'),
+        // the class is assigned via .className, not classList.add
+        infoIsErr: (''+a.className).split(/\s+/).includes('err'),
+        errIsErr:  (''+b.className).split(/\s+/).includes('err')
+      };
+      // run every timer (and any they schedule) — i.e. let all fades expire
+      for(let i=0;i<6;i++){const due=timers.splice(0);due.forEach(t=>t.fn());}
+      out.infoRemoved=a._removed;
+      out.errRemoved=b._removed;
+      out.logged=_msgLog.length;
+      console.log(JSON.stringify(out));
+      process.exit(0);
+    """
+    h = tmp_path / "msgs.js"
+    h.write_text(_DOM_STUBS + JS + "\n" + harness)
+    r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
+    assert r.returncode == 0, r.stderr[:600]
+    out = json.loads(r.stdout.strip().splitlines()[-1])
+
+    assert out["stacked"] == 2, "a message overwrote another instead of stacking"
+    assert out["errIsErr"] and not out["infoIsErr"], "error not marked as one"
+    assert out["errHasX"], "an error carries no dismiss control"
+    assert not out["infoHasX"], "an auto-fading message should need no dismiss"
+    assert out["infoRemoved"] is True, "the info message never faded"
+    assert out["errRemoved"] is False, (
+        "the ERROR faded on its own — this is beroset's bug: a failure message "
+        "that disappears before it can be read")
+    assert out["logged"] == 2, "messages did not reach the readable history"
+
+
+def test_failure_messages_never_use_the_auto_fading_toast():
+    """An error must not be able to vanish on its own.
+
+    beroset hit a failing dump whose message disappeared before he could read
+    it — he had to trigger the failure a SECOND time to find out why. The old
+    toast was worse than short-lived: it was a single element whose
+    textContent each new message overwrote, so a two-step action destroyed its
+    own first message and an error arriving beside anything else was lost
+    outright.
+
+    `toast()` still auto-fades, which is right for "capturing…". Failures go to
+    `toastErr()` (persists until dismissed) or `toastRes(ok, okMsg, errMsg)`.
+    This test is what stops the next failure message from being written as a
+    plain toast(), which would look completely normal in review."""
+    import re as _re
+    js = JS
+    bad = []
+    for m in _re.finditer(r"(?<![\w.])toast\(", js):
+        # balance parens to capture the whole call
+        i, depth, q = m.end(), 1, None
+        while i < len(js) and depth:
+            c = js[i]
+            if q:
+                if c == "\\":
+                    i += 2
+                    continue
+                if c == q:
+                    q = None
+            elif c in "'\"`":
+                q = c
+            elif c == "(":
+                depth += 1
+            elif c == ")":
+                depth -= 1
+            i += 1
+        call = js[m.start():i]
+        if _re.search(r"fail|error|could not|denied|refus|unreachable|incomplete",
+                      call, _re.I):
+            bad.append(" ".join(call.split())[:90])
+
+    assert not bad, (
+        "failure text passed to the auto-fading toast() — use toastErr() or "
+        f"toastRes(ok, okMsg, errMsg) so it persists until dismissed: {bad}")
+
+
 def test_nowrap_cells_cap_their_width():
     """`td.stats{white-space:nowrap}` was written for the watch icon strip —
     "so the base pair never wraps to two rows". But the SAME cell carries the
@@ -2482,7 +2599,8 @@ def test_nowrap_cells_cap_their_width():
 
     # Bounded-content selectors: what they hold cannot grow past a few glyphs,
     # so there is nothing for a cap to protect against.
-    bounded = {".pcell", ".lastseen", ".menu-item", ".fillpill .plbl"}
+    bounded = {".pcell", ".lastseen", ".menu-item", ".fillpill .plbl",
+               ".msg-when"}   # a toLocaleTimeString stamp, always ~8 glyphs
     offenders = [s for s in offenders if s not in bounded]
 
     assert not offenders, (
