@@ -2454,11 +2454,15 @@ def test_the_live_view_caption_always_resolves(tmp_path):
     """"capturing…" is a promise the code has to keep on every path.
 
     shotRefresh sets the caption to "capturing…" and then fetches. loadShot
-    returned early when there was no #shotimg to paint into — and on a HANDS
-    watch there deliberately isn't one: the composite removes the
-    screenshot-through-hole layers to draw the physical dial instead. So on
-    narwhal the fetch succeeded, nothing was painted, and the caption sat on
-    "capturing…" for ever (moWerk, live view on narwhal).
+    returned early whenever there was no #shotimg to paint into, skipping the
+    only line that resolves the caption — so a successful fetch could leave it
+    reading "capturing…" for ever. That is how it hung on narwhal, whose hands
+    path used to delete the screenshot layers.
+
+    Those layers are back (the screen belongs under the hands), so this case
+    should no longer arise in the composite — which is exactly why it is
+    pinned: the invariant is that "capturing…" is a promise every path keeps,
+    not that one particular layout happens to have an image.
 
     Also pinned: a caption that went stale must drop its warn styling when a
     live frame arrives, or one stale read leaves it amber for the rest of the
@@ -2505,7 +2509,7 @@ def test_the_live_view_caption_always_resolves(tmp_path):
 
     assert "capturing" not in o["handsText"], (
         "a hands watch left the caption stuck on 'capturing…' — the narwhal bug")
-    assert "hands" in o["handsText"]
+    assert "captured" in o["handsText"]
     assert o["liveText"].startswith("live screen")
     assert "warn" not in o["liveClass"], (
         "a live frame kept the amber styling of an earlier stale read")

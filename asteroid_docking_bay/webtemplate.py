@@ -2675,10 +2675,16 @@ function loadHands(serial,codename){
     const cn=_handsCodename, frame=document.getElementById('devframe');
     const prod=document.getElementById('prodimg'), el=document.getElementById('devhands');
     if(frame&&prod&&el&&cn){
-      // A hands watch: opaque hands-removed base, the real hour/minute art ON TOP,
-      // centred and rotated about centre. Drop the screenshot-through-hole layers.
-      const shot=document.getElementById('shotimg'); if(shot)shot.remove();
-      const fill=frame.querySelector('.dev-fill'); if(fill)fill.remove();
+      // A hands watch: hands-removed base product art, the real hour/minute
+      // art ON TOP, centred and rotated about centre.
+      //
+      // The screenshot layers STAY. The live view is a visual representation
+      // of the watch, and on a hands watch the screen is simply the bottom of
+      // the stack with the hands above it (moWerk) — black fill, then the
+      // screenshot through the base's screen hole, then the physical hands.
+      // Removing them showed a dial floating on nothing, and left loadShot
+      // with no image to paint, which is what hung the caption on
+      // "capturing…" for narwhal alone.
       prod.onload=null;   // swapping src must not re-run the hole composite
       prod.src='/api/watch-hand/'+encodeURIComponent(cn)+'/base';
       frame.appendChild(el);   // lift the hands layer above the product image
@@ -2867,7 +2873,7 @@ function loadShot(serial,res){
       if(!cap&&!img)return;
       if(!img){
         cap.className='wimg-cap';
-        cap.textContent='hands view — the dial is drawn, not photographed';
+        cap.textContent='captured — this view has no screen layer to paint it into';
         return;
       }
       img.onload=wimgPlace; img.src=URL.createObjectURL(b);
