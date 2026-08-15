@@ -2522,8 +2522,20 @@ def test_each_hand_is_grabbable_and_the_drag_is_streamed(tmp_path):
     assert r.returncode == 0, r.stderr[:500]
     o = json.loads(r.stdout.strip().splitlines()[-1])
 
+    import re as _re
+    m = _re.search(r"\.hgrab\{([^}]*)\}", _WEB_TEMPLATE)
+    CSS_OF_HGRAB = m.group(1) if m else ""
+
     # 1. a dot per hand, and the hand art is inert
     assert "hgrab-hr" in o["ringHtml"] and "hgrab-min" in o["ringHtml"], o["ringHtml"]
+    assert "horbit" in o["ringHtml"], "no orbit drawn for the dots to ride"
+    # The ring is pointer-events:none so it cannot eat clicks meant for the
+    # watch; a child of that is inert unless it opts back IN. Without this the
+    # dots rendered correctly and did nothing at all — the press fell through
+    # to the product image and started a native image drag (moWerk).
+    assert "pointer-events:auto" in CSS_OF_HGRAB, (
+        "the grab dots do not re-enable pointer events inside the "
+        "pointer-events:none ring — they will look right and be dead")
     assert "handsDown(event,'hr')" in o["ringHtml"], "the hour hand has no grab dot"
     assert "pointer-events:none" in o["handHtml"], (
         "the hand art still takes pointer events — the minute hand will keep "

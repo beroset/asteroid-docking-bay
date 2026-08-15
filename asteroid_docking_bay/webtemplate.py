@@ -277,11 +277,17 @@ _WEB_TEMPLATE = """\
        watch so neither hand can occlude the other's hit area, and they are
        told apart by size and colour the way the hands themselves are: the hour
        marker is the shorter, heavier one. */
+    /* pointer-events:auto is load-bearing: the ring is pointer-events:none so
+       it cannot eat clicks meant for the watch, and a child of that stays
+       inert unless it opts back IN. Without it the dots looked right and did
+       nothing — the press fell through to the product image underneath and
+       started a native image drag instead. */
     .hgrab{position:absolute;transform:translate(-50%,-50%);border-radius:50%;
-      border:1px solid;background:#0d1117;color:inherit;cursor:grab;
+      border:1px solid;background:#0d1117;color:inherit;cursor:grab;pointer-events:auto;
       font:600 10px/1 inherit;display:flex;align-items:center;justify-content:center;
       padding:0;touch-action:none;user-select:none;box-shadow:0 2px 8px rgba(0,0,0,.6)}
     .hgrab:active{cursor:grabbing}
+    .horbit{position:absolute;border:1px solid #30363d;border-radius:50%;pointer-events:none}
     .hgrab-hr{width:22px;height:22px;border-color:#d6c7ff;color:#d6c7ff}
     .hgrab-min{width:17px;height:17px;border-color:#8b949e;color:#c9d1d9}
     .hgrab:hover{background:#161b22}
@@ -2591,7 +2597,7 @@ function openWatchImg(codename,serial,ev,isRound,res){
     `<div class="wimg-hd" onmousedown="wimgDragStart(event)"><span>${esc(codename)}</span><span class="wimg-x" onclick="closeWatchImg()">&times;</span></div>`+
     `<div class="wimg-body" id="wimg-body">`+
       `<div class="device" id="device"><div class="dev-frame" id="devframe">`+
-        `<img class="dev-prod" id="prodimg" alt="" onerror="closeWatchImg()" `+
+        `<img class="dev-prod" id="prodimg" alt="" draggable="false" onerror="closeWatchImg()" `+
           `onload="onProdLoad('${esc(codename)}','${esc(serial||'')}',${isRound?1:0},'${res?esc(res):''}')" `+
           `src="/api/watch-image/${encodeURIComponent(codename)}"></div></div>`+
     `</div>`+
@@ -2761,7 +2767,11 @@ function _renderHandsRing(drag){
       `onpointerdown="handsDown(event,'${which}')" `+
       `style="left:${x.toFixed(2)}%;top:${y.toFixed(2)}%">${label[0].toUpperCase()}</button>`;
   };
-  ring.innerHTML=dot('hr','hour','hgrab-hr')+dot('min','minute','hgrab-min');
+  // The orbit the dots ride. Same percentage geometry as the dots themselves,
+  // so the ring and the dots cannot disagree on a non-square frame.
+  const orbit=`<div class="horbit" style="left:${50-HANDS_RING}%;top:${50-HANDS_RING}%;`+
+    `width:${2*HANDS_RING}%;height:${2*HANDS_RING}%"></div>`;
+  ring.innerHTML=orbit+dot('hr','hour','hgrab-hr')+dot('min','minute','hgrab-min');
 }
 function handsDown(ev,which){
   if(handsMode!=='free'&&handsMode!=='calibrate')return;
