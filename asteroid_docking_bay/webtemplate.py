@@ -401,7 +401,17 @@ _WEB_TEMPLATE = """\
     .reg-hd{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid #21262d}
     .reg-hd b{color:#58a6ff}
     .reg-x{margin-left:auto;color:#8b949e;text-decoration:none;font-size:20px;line-height:1}
-    .reg-body{overflow:auto}
+    /* min-height:0 is load-bearing, not tidying. This is a flex child in a
+       column panel; a flex item's default min-height:auto refuses to shrink
+       below its content, so with 30+ watches the body pushed the panel past
+       its own max-height instead of scrolling inside it — the window "broke"
+       rather than overflowing. */
+    .reg-body{overflow:auto;min-height:0}
+    /* The Fleet Registry grows with every watch the rig has ever seen. Show
+       about ten and scroll the rest; the sticky header keeps the columns
+       readable while scrolling. Scoped to #reg so the shorter panels that
+       share .reg-body (bt scan, messages, guided setup) are not capped. */
+    #reg .reg-body{max-height:min(60vh,26em)}
     .reg-t{width:100%;border-collapse:collapse;font-size:12px}
     .reg-t th{text-align:left;color:#6e7681;font-weight:400;padding:6px 12px;position:sticky;top:0;background:rgba(13,20,32,.99);border-bottom:1px solid #21262d}
     .reg-t td{padding:6px 12px;border-bottom:1px solid #161b22;vertical-align:top}
