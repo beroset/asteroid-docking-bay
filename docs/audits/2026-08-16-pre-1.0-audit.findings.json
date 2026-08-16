@@ -168,6 +168,41 @@
    ],
    "caveat": "The boot flashed in that session was a MODIFIED stock boot (ro.debuggable / adb_keys baked) for the Bluetooth investigation. A pure restore should flash the stock boot from the watch's own dump. The method is proven; that one substitution was not part of the goal.",
    "so_there_are_three": "beluga (5 partitions + factory EMPTY userdata), nemo (system+boot+userdata+metadata+keystore+cache, all from its own dump), mooneye (boot + erase userdata + erase cache). Three genuinely different procedures across three vendors \u2014 which is exactly why the whitelist has to be per watch, not derived."
+  },
+  {
+   "id": "F12",
+   "severity": "info",
+   "area": "restore whitelist / evidence",
+   "status": "DATA GATHERED",
+   "summary": "mo's 'old layout + no keystore -> simple method' hypothesis is machine-checkable, and both tested watches fall on the predicted side",
+   "method": "Streamed the first 32 KB out of every archived dump (7z/tar.gz/tar.zst) and parsed the GPT with stockrom.parse_gpt. Read-only, no rig, no full extraction \u2014 a 7.65 GB archive costs a few seconds this way.",
+   "validation": "mooneye: 18 partitions, NO keystore \u2014 and the simple method (boot + erase userdata + erase cache) is PROVEN on it. beluga: 40 partitions, HAS keystore \u2014 and it is the one that needed the intrusive factory-empty-userdata recipe. Two tested cases, both on the predicted side.",
+   "no_keystore_simple_candidates": [
+    "mooneye (18) TESTED",
+    "pike (13)",
+    "sparrow (29)",
+    "wren (29)",
+    "smelt (29, has metadata)",
+    "anthias (33)",
+    "tetra (35)"
+   ],
+   "has_keystore_not_simple": [
+    "catfish (35)",
+    "firefish (36)",
+    "ray (36)",
+    "skipjack (37, +metadata)",
+    "tunny (37, +metadata)",
+    "triggerfish (38)",
+    "beluga (40) TESTED-intrusive",
+    "belugaxl (40)",
+    "swift (43)",
+    "hoki (50)",
+    "rubyfish (52)",
+    "sol (81, +A/B +super +metadata)"
+   ],
+   "caution_family_lines_do_not_hold": "The split does NOT follow vendor families cleanly: wren and sparrow are 29 partitions with no keystore, while swift is 43 WITH one. So 'all the ASUS behave the same' is not supported by the layouts \u2014 the whitelist should key on the watch (and ideally on a layout check of its own dump), not on an assumed family.",
+   "limits": "n=2 on the tested side, so this is support, not proof. 'No keystore' is a proxy for mo's 'old layout'. nemo's archive yielded no GPT in the first 32 KB (its tar member is probably not the raw image), so nemo is absent from the table.",
+   "suggested": "a-d-b can gate on this automatically: parse the dump's GPT and refuse the simple procedure on any layout carrying keystore / A-B slots / super. That is a read-only check on a file the user already has."
   }
  ]
 }
