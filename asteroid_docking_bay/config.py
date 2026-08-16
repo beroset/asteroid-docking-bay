@@ -22,7 +22,7 @@ import threading
 from dataclasses import dataclass, fields
 from pathlib import Path
 
-from .adb import adb_devices
+from .adb import adb_devices, is_a_serial
 
 
 CONFIG_DIR = Path.home() / ".config" / "asteroid-docking-bay"
@@ -338,6 +338,16 @@ def seed_hub_names(cfg: dict, vendor_hubs: "list[dict]") -> bool:
 # address where a shared machine name cannot.
 
 def exact_codename_for_serial(cfg: dict, serial: "str | None") -> "str | None":
+    # A key that cannot be a serial is not an identity, wherever it came from.
+    # The config can hold one from before this was checked -- the rig carries
+    # `systempart=/dev/mapper/system` in serials, port_serials AND
+    # exact_codenames, learned from a watch mid-port that leaked a kernel
+    # cmdline fragment into its USB serial descriptor. A port configured as one
+    # watch then RENDERED as another, because the poisoned lookup outranked the
+    # port map. Refusing it here covers every consumer at once, instead of the
+    # one call site that noticed.
+    if not is_a_serial(serial):
+        return None
     return cfg.get("exact_codenames", {}).get(serial) if serial else None
 
 
@@ -535,6 +545,16 @@ def find_serial_for_codename(cfg: dict, codename: str) -> str | None:
 
 
 def find_codename_for_serial(cfg: dict, serial: str) -> str | None:
+    # A key that cannot be a serial is not an identity, wherever it came from.
+    # The config can hold one from before this was checked -- the rig carries
+    # `systempart=/dev/mapper/system` in serials, port_serials AND
+    # exact_codenames, learned from a watch mid-port that leaked a kernel
+    # cmdline fragment into its USB serial descriptor. A port configured as one
+    # watch then RENDERED as another, because the poisoned lookup outranked the
+    # port map. Refusing it here covers every consumer at once, instead of the
+    # one call site that noticed.
+    if not is_a_serial(serial):
+        return None
     return cfg.get("serials", {}).get(serial)
 
 

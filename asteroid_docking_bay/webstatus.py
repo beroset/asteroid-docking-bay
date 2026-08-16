@@ -722,6 +722,23 @@ def _web_status_data(cfg: dict) -> list[dict]:
     # serial -> exact codename learned this pass (flushed to config at the end).
     _detected_exact: dict[str, str] = {}
     devices = _timed("adb", adb_devices)
+    # An identity that cannot be a serial is not an identity. A watch mid-port
+    # can enumerate with gibberish where its serial belongs -- measured twice
+    # now, both times the literal string `systempart=/dev/mapper/system`, a
+    # kernel cmdline fragment leaking into the USB serial descriptor.
+    #
+    # Filtered HERE, at the one place adb enters the status path, because
+    # filtering it in _soft_remap alone (2026-08-15) left every other consumer
+    # trusting it: config has that string keyed to a codename and pinned to a
+    # port, so a live device carrying it lit up a row on the WRONG port,
+    # wearing another watch's name, while the watch's real socket showed empty.
+    #
+    # Dropping it does not hide the device: sysfs still reports something on
+    # the port, and the row says so. Unidentifiable is a state a-d-b can show
+    # honestly; misidentified is not.
+    for _bad in [s for s in devices if not is_a_serial(s)]:
+        log.warning("ignoring adb device %r: not a usable serial", _bad)
+        devices.pop(_bad)
     fb_devices = _timed("fastboot", _fastboot_list)   # {serial: sysfs_path | None}
     # Reverse maps for empty-port detection: sysfs_path → serial
     fb_by_path: dict[str, str] = {
@@ -795,6 +812,19 @@ def _web_status_data(cfg: dict) -> list[dict]:
             # currently-connected serial over the first config match so two
             # same-codename watches each see their own ADB state.
             serial = cfg_hub.get("port_serials", {}).get(port_str)
+            # A stored serial that cannot BE a serial identifies nothing, and
+            # everything below keys off this one value -- battery, geometry,
+            # oplock, wanze, drain. The rig has such a key pinned to a port
+            # (`systempart=/dev/mapper/system`, a kernel cmdline fragment a
+            # watch mid-port leaked into its USB serial descriptor), and the
+            # GEOMETRY cached under it carried a different watch's machine
+            # name. That name then beat the port map, so a port configured as
+            # sol rendered as aurora -- on a socket aurora was not plugged into.
+            # Dropping it here, once, is what stops the next lookup inheriting
+            # the mistake; guarding the lookups one at a time is how this
+            # survived being fixed twice already.
+            if not is_a_serial(serial):
+                serial = None
             if not serial:
                 serials_for_codename = [serial for serial, cname in cfg.get("serials", {}).items()
                                         if cname.lower() == codename.lower()]
