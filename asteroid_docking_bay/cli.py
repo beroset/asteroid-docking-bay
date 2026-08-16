@@ -612,6 +612,7 @@ def cmd_flash_all(args, cfg: dict):
             codename, cfg, flash_cfg,
             dry_run=dry_run,
             local_dir=local_dir,
+            channel=getattr(args, "channel", None),
             force_dl=args.force_download,
         )
 
@@ -900,6 +901,12 @@ def main():
     p_fa.add_argument(
         "--local", metavar="DIR",
         help="use image files from DIR instead of downloading nightlies",
+    )
+    p_fa.add_argument(
+        "--channel", metavar="RELEASE",
+        help="flash a released channel (e.g. 1.0, 2.0, 2.1) instead of the "
+             "nightlies. The web UI could already do this and the CLI could "
+             "not, so a release flash was only reachable from a browser.",
     )
     p_fa.add_argument(
         "--dry-run", action="store_true",
