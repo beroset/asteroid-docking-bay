@@ -284,3 +284,80 @@ def test_no_root_is_told_apart_from_no_answer():
                 return 1, "", "device not found"
 
     assert sr.disk_bytes(_Silent)[1] == sr.UNREACHABLE_BLOCKER
+
+
+# --- verifying a dump against a second one ---------------------------------
+
+def _img(tmp_path, name, head, payload):
+    """A whole-disk image: GPT head, then partition payloads at their offsets."""
+    p = tmp_path / name
+    size = max(off + len(b) for off, b in payload) if payload else len(head)
+    buf = bytearray(max(size, len(head)))
+    buf[0:len(head)] = head
+    for off, b in payload:
+        buf[off:off + len(b)] = b
+    p.write_bytes(bytes(buf))
+    return p
+
+
+def test_comparing_two_runtime_dumps_separates_expected_drift_from_a_bad_copy(tmp_path):
+    """The verification method the manifest prescribes, as tooling.
+
+    It was already written down — "take a SECOND dump and compare per
+    partition" — and it was carried out once by hand for sol (81 partitions,
+    all matching). But the script that did it was never kept, so the instrument
+    existed only as a report. There is no hashing anywhere else in the package.
+
+    The distinction that makes it useful: two dumps taken while the watch is
+    RUNNING cannot have a matching userdata, because the filesystem is live
+    underneath the copy. So userdata differing is expected and firmware
+    differing is not — one means "normal runtime pair", the other means "this
+    copy cannot be trusted", and a bare "N partitions differ" cannot tell them
+    apart."""
+    # Partitions must start AFTER the 64-sector GPT head, or the payload
+    # overwrites the very table being parsed.
+    parts = [("boot", 64, 65), ("system", 66, 67), ("persist", 68, 69),
+             ("userdata", 70, 71)]
+    head = _gpt(parts, disk_sectors=128)
+    def payload(boot, system, persist, userdata):
+        return [(64 * sr.SECTOR, boot * 1024), (66 * sr.SECTOR, system * 1024),
+                (68 * sr.SECTOR, persist * 1024), (70 * sr.SECTOR, userdata * 1024)]
+
+    a = _img(tmp_path, "a.img", head, payload(b"B", b"S", b"P", b"U"))
+    # a healthy runtime pair: userdata and per-device state moved, firmware did not
+    b = _img(tmp_path, "b.img", head, payload(b"B", b"S", b"Q", b"V"))
+    r = sr.compare_dumps(a, b)
+    assert r["ok"]
+    assert r["differ"] == [], f"firmware reported as drifted: {r['differ']}"
+    assert sorted(r["expected_differ"]) == ["persist", "userdata"]
+    assert r["same_count"] == 2
+
+    # a BAD copy: a quiescent partition differs — that is not drift
+    c = _img(tmp_path, "c.img", head, payload(b"B", b"X", b"P", b"U"))
+    r2 = sr.compare_dumps(a, c)
+    assert r2["differ"] == ["system"], (
+        "a firmware partition differing between two dumps was not flagged — "
+        "this is the case that means the copy is unreliable")
+
+    # identical images: everything matches, nothing is 'expected to differ'
+    r3 = sr.compare_dumps(a, a)
+    assert r3["differ"] == [] and r3["expected_differ"] == []
+    assert r3["same_count"] == len(parts)
+
+
+def test_comparing_reports_a_truncated_dump_rather_than_calling_it_different(tmp_path):
+    """A short second dump must read as TRUNCATED, not as a watch whose
+    partitions changed. The truncated dump is this project's most-warned-about
+    failure — it looks like a file — so the comparison must not describe one as
+    ordinary drift."""
+    parts = [("boot", 64, 65), ("userdata", 66, 67)]
+    head = _gpt(parts, disk_sectors=128)
+    full = _img(tmp_path, "full.img", head,
+                [(64 * sr.SECTOR, b"B" * 1024), (66 * sr.SECTOR, b"U" * 1024)])
+    short = tmp_path / "short.img"
+    short.write_bytes(full.read_bytes()[:65 * sr.SECTOR])   # cut mid-boot
+
+    r = sr.compare_dumps(full, short)
+    assert r["ok"]
+    assert "boot" in r["truncated"], "a short dump was not reported as truncated"
+    assert r["same_count"] == 0

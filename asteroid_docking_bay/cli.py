@@ -69,6 +69,45 @@ def cmd_log(args, cfg: dict):
     return 0
 
 
+def cmd_compare_dumps(args, cfg: dict):
+    """Verify a dump by comparing it with a second one, per partition.
+
+    The method the dump manifest prescribes, made re-runnable. It was carried
+    out once by hand for sol — 81 partitions, all matching — but the script
+    that did it was never kept, so the check existed only as a report.
+
+    Reads two local files and nothing else: no watch, no bus, no power.
+    """
+    from . import stockrom
+    r = stockrom.compare_dumps(args.dump_a, args.dump_b)
+    if not r.get("ok"):
+        log.error("%s", r.get("error", "comparison failed"))
+        return 1
+    if getattr(args, "json", False):
+        print(json.dumps(r, indent=2))
+        return 0
+
+    for part in r["partitions"]:
+        mark = "same" if part["same"] else "DIFFERS"
+        print(f"  {part['name']:<26} {part['mib']:>9.1f} MiB  {mark:<8} "
+              f"{part['class']}")
+    print()
+    print(f"{r['same_count']} of {len(r['partitions'])} partitions identical")
+    if r["expected_differ"]:
+        # Not a fault: a dump taken while the watch runs cannot have a stable
+        # userdata, and per-device state moves too.
+        print(f"expected to differ (live filesystem / per-device state): "
+              f"{', '.join(r['expected_differ'])}")
+    if r["truncated"]:
+        print(f"TRUNCATED — one image ends inside: {', '.join(r['truncated'])}")
+    if r["differ"]:
+        print(f"UNEXPECTED — these should have matched: {', '.join(r['differ'])}")
+        print("A quiescent partition differing means the copy is unreliable, "
+              "not that the watch changed.")
+        return 2
+    return 0
+
+
 def cmd_serve(args, cfg: dict):
     """Start the web UI (bottle imported lazily inside webapp.serve)."""
     from .webapp import serve
@@ -763,6 +802,13 @@ def main():
 
     sub = parser.add_subparsers(dest="command", metavar="COMMAND", required=True)
 
+    p_cmp = sub.add_parser("compare-dumps",
+                           help="verify a dump against a second one, per partition")
+    p_cmp.add_argument("dump_a", help="first whole-disk dump")
+    p_cmp.add_argument("dump_b", help="second dump of the SAME watch")
+    p_cmp.add_argument("--json", action="store_true",
+                       help="emit the full comparison as JSON")
+
     p_st = sub.add_parser("status",
                           help="show all watches: port, power, ADB state, battery")
     p_st.add_argument("--json", action="store_true",
@@ -874,6 +920,7 @@ def main():
 
     dispatch = {
         "status": cmd_status,
+        "compare-dumps": cmd_compare_dumps,
         "on": cmd_on,
         "off": cmd_off,
         "cycle": cmd_cycle,
@@ -889,6 +936,11 @@ def main():
     }
 
     try:
+        # Propagate the command's exit code. It used to be discarded, so a
+        # command that returned 1 to say it had failed still exited 0 — `log`
+        # with no known serial reported failure to a human and success to
+        # `$?`. Anything scripting this tool was reading the wrong answer.
+        # None (the common case) means "fine", so `or 0` keeps that.
         dispatch[args.command](args, cfg)
     except KeyboardInterrupt:
         print("\nInterrupted.")

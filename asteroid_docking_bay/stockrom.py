@@ -318,6 +318,84 @@ def disk_bytes(watch) -> "tuple[int | None, str | None]":
         return None, UNREACHABLE_BLOCKER
 
 
+# How a dump is VERIFIED, as tooling rather than as prose.
+#
+# The method was already written down — the manifest tells you to take a second
+# dump and compare per partition — and it was carried out once, by hand, for
+# sol: 81 partitions, all matching. But the script that did it was never kept,
+# so the instrument existed only as a report. This makes it re-runnable.
+#
+# What the comparison MEANS depends on how the dump was taken, and the
+# difference is the whole point:
+#
+#   * A dump taken while the watch is RUNNING cannot have a matching userdata —
+#     the filesystem is live and writes underneath the copy. Quiescent
+#     partitions (firmware, boot, system) must still match exactly. So a
+#     runtime pair that differs ONLY in userdata is a good pair; one whose
+#     firmware differs means the copy is unreliable, not that the watch changed.
+#   * A dump taken from an initramfs with userdata never mounted should match
+#     everywhere, which is what makes that method the trustworthy one.
+#
+# Hashing is per partition and streamed, so comparing two 31 GB images costs
+# one pass over each and never holds an image in memory.
+_COMPARE_CHUNK = 8 * 1024 * 1024
+
+
+def _hash_range(fh, start: int, length: int) -> str:
+    """Streamed hash of one byte range, or "" past the end of the file."""
+    import hashlib
+    fh.seek(start)
+    h = hashlib.sha256()
+    left = length
+    while left > 0:
+        chunk = fh.read(min(_COMPARE_CHUNK, left))
+        if not chunk:
+            return ""            # truncated: the caller reports it as such
+        h.update(chunk)
+        left -= len(chunk)
+    return h.hexdigest()[:16]
+
+
+def compare_dumps(path_a, path_b) -> dict:
+    """Per-partition comparison of two whole-disk dumps of the same watch.
+
+    The partition table comes from dump A, deliberately: it describes the
+    layout both images were taken with, and reading it from the live watch
+    would let a later re-partition rewrite history.
+
+    Returns {ok, sectors, partitions: [{name, class, mib, same, a, b}],
+    same_count, differ, expected_differ, truncated} — where `expected_differ`
+    is the set of partitions a RUNTIME dump is allowed to differ in (userdata
+    and anything classified per-device), so a caller can tell an ordinary
+    runtime pair from a bad copy.
+    """
+    a, b = Path(path_a), Path(path_b)
+    head = a.open("rb").read(64 * 512)
+    parts = parse_gpt(head)
+    if not parts:
+        return {"ok": False, "error": f"no readable GPT in {a.name}"}
+    out, differ, expected, truncated = [], [], [], []
+    with a.open("rb") as fa, b.open("rb") as fb:
+        for part in parts:
+            start, length = part.first_lba * SECTOR, part.bytes
+            ha = _hash_range(fa, start, length)
+            hb = _hash_range(fb, start, length)
+            if not ha or not hb:
+                truncated.append(part.name)
+            same = bool(ha) and ha == hb
+            cls = classify(part.name)
+            if not same:
+                # userdata and per-device state are EXPECTED to differ between
+                # two runtime dumps; firmware differing means the copy is bad.
+                (expected if cls in ("userdata", "per_device") else differ
+                 ).append(part.name)
+            out.append({"name": part.name, "class": cls,
+                        "mib": round(length / (1024 * 1024), 1),
+                        "same": same, "a": ha, "b": hb})
+    return {"ok": True, "partitions": out, "same_count": sum(1 for p in out if p["same"]),
+            "differ": differ, "expected_differ": expected, "truncated": truncated}
+
+
 def write_manifest(path: Path, **fields) -> None:
     """Record what this dump IS, beside it.
 
