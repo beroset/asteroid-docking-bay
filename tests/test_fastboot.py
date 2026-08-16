@@ -194,3 +194,56 @@ def test_the_usb_monitor_actually_invalidates_the_fastboot_list():
         "the bootloader goes unrecognised until the 60s ceiling lapses"
     assert "UsbEventMonitor(_on_usb_change)" in src, \
         "the monitor is not wired to the combined callback"
+
+
+def test_release_image_names_come_from_the_release_not_from_an_assumption(tmp_path):
+    """Image filenames differ per channel, and hardcoding one pair broke the
+    others silently — as a 404 at flash time, on a watch already in fastboot.
+
+    Observed on release.asteroidos.org:
+
+        1.0        zImage-dtb-<cn>.fastboot   asteroid-image-<cn>.ext4
+        2.0        zImage-dtb-<cn>.fastboot   asteroid-image-<cn>.rootfs.ext4
+        2.1        BOTH boot names            asteroid-image-<cn>.rootfs.ext4
+        nightlies  asteroid-<cn>-boot.img     asteroid-image-<cn>.rootfs.ext4
+
+    a-d-b asked for the nightly pair everywhere, so the channel selector
+    offered 1.0 and 2.0 while being unable to fetch either.
+
+    The boot preference is zImage FIRST on purpose: the new name applies from
+    2.2 on, and 2.1 only published it early beside the old one. zImage is what
+    every released channel carries, so preferring it picks the intended image
+    on 1.0/2.0/2.1 and falls through on the nightlies, where it is absent."""
+    from asteroid_docking_bay import fastboot as fb
+
+    def sums(*names):
+        f = tmp_path / f"SHA512SUMS-{'-'.join(names)[:40]}"
+        f.write_text("".join(f"{'0'*128}  {n}\n" for n in names))
+        return f
+
+    # 1.0
+    assert fb._release_filenames("sparrow", sums(
+        "zImage-dtb-sparrow.fastboot", "asteroid-image-sparrow.ext4")) == (
+        "zImage-dtb-sparrow.fastboot", "asteroid-image-sparrow.ext4")
+    # 2.0
+    assert fb._release_filenames("sparrow", sums(
+        "zImage-dtb-sparrow.fastboot", "asteroid-image-sparrow.rootfs.ext4")) == (
+        "zImage-dtb-sparrow.fastboot", "asteroid-image-sparrow.rootfs.ext4")
+    # 2.1 ships both boot names — the released one must win
+    assert fb._release_filenames("sparrow", sums(
+        "asteroid-sparrow-boot.img", "zImage-dtb-sparrow.fastboot",
+        "asteroid-image-sparrow.rootfs.ext4"))[0] == "zImage-dtb-sparrow.fastboot"
+    # nightlies carry only the new name
+    assert fb._release_filenames("sparrow", sums(
+        "asteroid-sparrow-boot.img", "asteroid-image-sparrow.rootfs.ext4")) == (
+        "asteroid-sparrow-boot.img", "asteroid-image-sparrow.rootfs.ext4")
+
+    # A release listing no usable boot image must SAY so, not fetch a 404 and
+    # discover it while the watch sits in fastboot.
+    import pytest as _pytest
+    with _pytest.raises(RuntimeError, match="no boot image"):
+        fb._release_filenames("sparrow", sums("README"))
+
+    # No manifest at all (offline / empty file) keeps the previous behaviour.
+    empty = tmp_path / "none"
+    assert fb._release_filenames("sparrow", empty)[0] == "zImage-dtb-sparrow.fastboot"

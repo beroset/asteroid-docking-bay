@@ -322,6 +322,57 @@ def _usb_moded_switch_failed(out: str, err: str) -> bool:
         or "an error occurred" in blob
 
 
+# Which files a release actually ships, read from its own SHA512SUMS.
+#
+# The names are not stable across channels, and hardcoding the newest pair
+# silently broke the older ones:
+#
+#   1.0        zImage-dtb-<cn>.fastboot   asteroid-image-<cn>.ext4
+#   2.0        zImage-dtb-<cn>.fastboot   asteroid-image-<cn>.rootfs.ext4
+#   2.1        BOTH boot names            asteroid-image-<cn>.rootfs.ext4
+#   nightlies  asteroid-<cn>-boot.img     asteroid-image-<cn>.rootfs.ext4
+#              (the nightlies folder IS 2.2 in development)
+#
+# a-d-b asked for the nightly pair everywhere, so flashing 2.0 404'd on the
+# boot image and 1.0 404'd on both — the channel selector offered releases it
+# could not actually fetch. SHA512SUMS is downloaded first anyway and lists
+# precisely what a release ships, so it is the authority.
+#
+# The boot preference is zImage FIRST, which looks backwards and is not. The
+# new name applies from 2.2 onward, and the nightlies folder IS 2.2 (moWerk);
+# 2.1 merely published the new name early, beside the old one. So zImage is the
+# artefact every RELEASED channel carries: preferring it picks the intended
+# image on 1.0/2.0/2.1, and falls through to the new name on the nightlies,
+# the one place zImage is absent.
+_BOOT_NAMES = ("zImage-dtb-{cn}.fastboot", "asteroid-{cn}-boot.img")
+_IMG_NAMES = ("asteroid-image-{cn}.rootfs.ext4", "asteroid-image-{cn}.ext4")
+
+
+def _release_filenames(codename: str, sha_file: Path) -> tuple[str, str]:
+    """(boot_name, img_name) for this release, from its SHA512SUMS."""
+    try:
+        listed = {ln.split()[1].lstrip("*./")
+                  for ln in sha_file.read_text().splitlines()
+                  if len(ln.split()) >= 2}
+    except OSError:
+        listed = set()
+
+    def pick(cands, what):
+        for c in cands:
+            name = c.format(cn=codename)
+            if name in listed:
+                return name
+        # No manifest (offline, or a 404 left an empty file): fall back to the
+        # newest name so behaviour is unchanged from before this existed.
+        if listed:
+            raise RuntimeError(
+                f"{codename}: this release lists no {what} image "
+                f"(looked for {', '.join(c.format(cn=codename) for c in cands)})")
+        return cands[0].format(cn=codename)
+
+    return pick(_BOOT_NAMES, "boot"), pick(_IMG_NAMES, "rootfs")
+
+
 def _download_nightly(codename: str, download_dir: Path, nightly_url: str, force: bool = False) -> tuple[Path, Path]:
     """
     Download nightly images for codename into download_dir, verify SHA512.
@@ -329,21 +380,18 @@ def _download_nightly(codename: str, download_dir: Path, nightly_url: str, force
     Returns (boot_file, img_file).
     """
     download_dir.mkdir(parents=True, exist_ok=True)
-    # AsteroidOS renamed the fastboot boot image from zImage-dtb-<codename>.fastboot
-    # to asteroid-<codename>-boot.img (2026-07; both names still ship during the
-    # transition, verified against release.asteroidos.org). The rootfs name is
-    # unchanged. Flashed to the `boot` partition below.
-    boot_name = f"asteroid-{codename}-boot.img"
-    img_name  = f"asteroid-image-{codename}.rootfs.ext4"
     sha_name  = "SHA512SUMS"
-    boot_file = download_dir / boot_name
-    img_file  = download_dir / img_name
     sha_file  = download_dir / sha_name
     base_url  = f"{nightly_url}/{codename}"
 
-    # Always fetch SHA512SUMS so we detect when a new nightly has landed.
+    # Always fetch SHA512SUMS so we detect when a new nightly has landed — and,
+    # since it lists exactly what this release ships, so the file NAMES can be
+    # read from it instead of assumed.
     log.info("%s: fetching SHA512SUMS…", codename)
     _run(f"wget -q '{base_url}/{sha_name}' -O '{sha_file}'")
+    boot_name, img_name = _release_filenames(codename, sha_file)
+    boot_file = download_dir / boot_name
+    img_file  = download_dir / img_name
 
     for url, local_file in [(f"{base_url}/{boot_name}", boot_file),
                             (f"{base_url}/{img_name}",  img_file)]:
