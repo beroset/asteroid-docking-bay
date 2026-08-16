@@ -806,12 +806,22 @@ def test_onboard_guide_reads_hardware_not_assumptions(monkeypatch):
     assert len(boxes["1-3"]["chips"]) == 4 and boxes["1-3"]["ports"] == 14
     assert len(boxes["1-9"]["chips"]) == 1
 
-    # 2. the bus read-back is whatever sysfs says, untouched by config
-    monkeypatch.setattr(ro, "watch_devices_on_bus",
-                        lambda: [{"path": "1-3.2", "serial": "S1",
-                                  "product": "hoki", "pid": "d001"}])
+    # 2. the bus read-back is whatever sysfs says, untouched by config — and it
+    #    is handed the paths fastboot already knows, because a watch in its
+    #    BOOTLOADER can enumerate under the vendor's own ID rather than
+    #    Google's (sparrow sits in fastboot as 0b05, ASUSTek). Filtering on the
+    #    vendor ID alone reported an empty bus with a watch plugged in.
+    seen = {}
+    monkeypatch.setattr(ro, "_fastboot_list", lambda: {"H1NZ": "1-1"})
+    def _bus(known=None):
+        seen["known"] = known
+        return [{"path": "1-3.2", "serial": "S1", "product": "hoki", "pid": "d001"}]
+    monkeypatch.setattr(ro, "watch_devices_on_bus", _bus)
     b = ro.DISPATCH._data["onboard.guide"]({"action": "bus"})
     assert b["ok"] and len(b["watches"]) == 1 and b["watches"][0]["serial"] == "S1"
+    assert seen["known"] == {"1-1"}, (
+        "the bus scan was not told which paths fastboot can already name — a "
+        "watch whose bootloader uses a non-Google vendor ID stays invisible")
 
     # 3. preflight uses the process's own groups
     import os

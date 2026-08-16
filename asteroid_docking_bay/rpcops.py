@@ -867,7 +867,13 @@ def _onboard_guide(args):
     action = args.get("action") or "preflight"
 
     if action == "bus":
-        return {"ok": True, "watches": watch_devices_on_bus()}
+        # Hand the scan the paths fastboot already knows about. A watch in its
+        # BOOTLOADER can enumerate under the vendor's own ID rather than
+        # Google's — sparrow sits in fastboot as 0b05 (ASUSTek) — so a
+        # vendor-ID filter alone reported an empty bus with a watch plugged in
+        # and waiting. Anything fastboot can name is a watch by definition.
+        fb_paths = {p for p in _fastboot_list().values() if p}
+        return {"ok": True, "watches": watch_devices_on_bus(fb_paths)}
 
     if action == "hubs":
         boxes: dict = {}

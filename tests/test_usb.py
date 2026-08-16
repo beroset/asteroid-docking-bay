@@ -163,3 +163,49 @@ def test_topology_fingerprint_tracks_devices_ignores_interfaces(monkeypatch):
     assert usb.usb_topology_fingerprint() == fp0      # interfaces don't count
     monkeypatch.setattr(usb.os, "listdir", lambda p: base + ["1-3.3"])
     assert usb.usb_topology_fingerprint() != fp0      # a device does
+
+
+def test_the_bus_scan_finds_a_watch_whose_bootloader_is_not_google(tmp_path, monkeypatch):
+    """A vendor-ID filter cannot be complete, so it must not be the only way in.
+
+    The AsteroidOS gadget and Wear OS adb both enumerate as Google's 18d1, so
+    for a RUNNING watch one ID covers the fleet. Bootloaders do not follow that
+    rule — they are the vendor's own code with the vendor's own ID. sparrow
+    runs as 18d1:0a02 and sits in fastboot as 0b05:7771 (ASUSTek), so a scan
+    filtered on Google alone reported "no watches on the bus" while sparrow was
+    plugged in and waiting to be flashed.
+
+    Two ways in now: a known vendor ID, or a path the caller already knows
+    holds a watch (what fastboot or adb reported). The second is what keeps an
+    unlisted bootloader — Mobvoi and Fossil have not been observed here — from
+    being invisible."""
+    from asteroid_docking_bay import usb as u
+
+    root = tmp_path / "devices"
+    root.mkdir()
+    def dev(name, vid, pid, product, serial, cls="00"):
+        d = root / name
+        d.mkdir()
+        (d / "idVendor").write_text(vid + "\n")
+        (d / "idProduct").write_text(pid + "\n")
+        (d / "product").write_text(product + "\n")
+        (d / "serial").write_text(serial + "\n")
+        (d / "bDeviceClass").write_text(cls + "\n")
+    dev("1-1", "0b05", "7771", "Android", "H1NZCJ010087020")       # ASUS bootloader
+    dev("1-2", "18d1", "d001", "beluga", "100c0a32")               # running watch
+    dev("1-3", "1234", "5678", "Mystery Watch", "MYSTERY1")        # unlisted vendor
+    dev("1-4", "0bda", "5411", "USB2.1 Hub", "", cls="09")         # a hub
+    monkeypatch.setattr(u, "_SYSFS_USB", root)
+
+    by_vendor = {d["path"] for d in u.watch_devices_on_bus()}
+    assert by_vendor == {"1-1", "1-2"}, (
+        f"the ASUS bootloader or the running watch was missed: {by_vendor}")
+    assert "1-4" not in by_vendor, "a hub was reported as a watch"
+
+    # fastboot named the unlisted one -> it must be included whatever its ID is
+    with_known = {d["path"] for d in u.watch_devices_on_bus({"1-3"})}
+    assert with_known == {"1-1", "1-2", "1-3"}, (
+        "a watch fastboot can name was still filtered out by its vendor ID")
+
+    asus = next(d for d in u.watch_devices_on_bus() if d["path"] == "1-1")
+    assert asus["vendor"] == "0b05", "the vendor id is not reported for triage"

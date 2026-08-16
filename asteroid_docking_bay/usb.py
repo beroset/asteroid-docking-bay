@@ -515,12 +515,28 @@ def _port_device_present(location: str, port: int) -> bool:
     return Path(f"/sys/bus/usb/devices/{child}").exists()
 
 
-# Watches enumerate with Google's vendor ID in every mode we drive them in:
-# the AsteroidOS gadget (adb/ssh), Wear OS adb, and fastboot.
-_WATCH_VENDOR = "18d1"
+# Vendor IDs a watch can enumerate under.
+#
+# The AsteroidOS gadget and Wear OS adb both use Google's 18d1, so for a
+# RUNNING watch one ID covers the fleet. Bootloaders do not follow that rule:
+# they are the vendor's own code and carry the vendor's own ID. sparrow runs as
+# 18d1:0a02 and sits in fastboot as 0b05:7771 (ASUSTek) — so a scan filtered on
+# Google alone reported "no watches" with sparrow plugged in and waiting.
+#
+# This table is therefore a list of BOOTLOADER SIGNATURES, and it is expected to
+# be incomplete: Mobvoi and Fossil bootloaders have not been observed here yet.
+# Add an entry when one turns up — and note that the entry is not what makes the
+# scan correct, it only makes it faster. Anything fastboot or adb can name is a
+# watch by definition, whatever ID it enumerates under, which is why callers can
+# pass those paths in (see watch_devices_on_bus).
+_WATCH_VENDORS = {
+    "18d1": "Google — AsteroidOS gadget, Wear OS adb, and Google-made bootloaders",
+    "0b05": "ASUSTek — ASUS watch bootloaders (observed: sparrow 0b05:7771)",
+}
+_WATCH_VENDOR = "18d1"   # the running-watch ID; kept for callers that mean only that
 
 
-def watch_devices_on_bus() -> "list[dict]":
+def watch_devices_on_bus(known_paths: "set[str] | None" = None) -> "list[dict]":
     """Every watch currently enumerated anywhere on the bus, from sysfs alone.
 
     The guided onboarding's read-backs need "what is plugged in RIGHT NOW",
@@ -528,21 +544,34 @@ def watch_devices_on_bus() -> "list[dict]":
     watch that is present but wedged, in the bootloader, or entirely unknown
     still counts as something the user must unplug before the bus is empty.
 
-    Returns [{path, serial, product, pid}], sorted by path so a diff between
-    two calls is stable.
+    Two ways in, because a vendor ID list can never be complete. A device
+    matches if its ID is in _WATCH_VENDORS, OR if the caller already knows the
+    path holds a watch — pass the sysfs paths fastboot or adb reported, and
+    anything they can name is included whatever it enumerates under. That is
+    what stops an unlisted bootloader from being invisible: sparrow sat in
+    fastboot as 0b05 and this returned nothing at all.
+
+    Returns [{path, serial, product, pid, vendor}], sorted by path so a diff
+    between two calls is stable.
     """
+    known = known_paths or set()
     out = []
     for dev in sorted(_SYSFS_USB.glob("*")):
         try:
-            if (dev / "idVendor").read_text().strip().lower() != _WATCH_VENDOR:
-                continue
+            vid = (dev / "idVendor").read_text().strip().lower()
         except OSError:
             continue          # disappeared mid-scan, or not a device dir
+        if vid not in _WATCH_VENDORS and dev.name not in known:
+            continue
+        # A hub is never a watch, however it identifies itself.
+        if _read_attr(dev / "bDeviceClass") == "09":
+            continue
         out.append({
             "path": dev.name,
             "serial": _read_attr(dev / "serial"),
             "product": _read_attr(dev / "product"),
             "pid": _read_attr(dev / "idProduct").lower(),
+            "vendor": vid,
         })
     return out
 
