@@ -802,3 +802,40 @@ def test_a_watch_already_in_fastboot_is_not_waited_for(monkeypatch):
     assert waited == [], "waited for a 'new' fastboot device that was already present"
     assert not any("reboot bootloader" in c for c in rebooted), \
         "rebooted a watch that was already in the bootloader"
+
+
+def test_the_warmer_leaves_a_watch_alone_during_onboarding(monkeypatch):
+    """The background warmer peels a stray SSH watch back to ADB to free the
+    shared address. During onboarding that is wrong, and it is not a
+    hypothetical: on 2026-08-16 a watch deliberately put into SSH mode to test
+    the guided setup was switched back mid-experiment, and the log said so --
+    "stray SSH watch ... switching it to adb".
+
+    The status path had already been gated. THIS path, its sibling, had not.
+    That is the same shape as the pre-1.0 audit's F1/F8 pair: a guard added at
+    one call site and assumed at the others. So the gate is asserted here
+    specifically, not only where it was first written.
+    """
+    import asteroid_docking_bay.ops as ops
+    from asteroid_docking_bay import util
+
+    switched = []
+    monkeypatch.setattr(ops, "rndis_links", lambda: [{"iface": "usb0"}])
+    monkeypatch.setattr(ops, "_stray_ssh_to_realign",
+                        lambda links, ips, iface, det: "S9")
+    monkeypatch.setattr(ops, "_switch_ssh_to_adb",
+                        lambda *a, **k: switched.append(a) or {"ok": True})
+    monkeypatch.setattr(ops, "_detect_rndis", lambda: True)
+    monkeypatch.setattr(ops, "_route_winner_iface", lambda: "usb0")
+    monkeypatch.setattr(ops, "_last_ssh_realign", 0.0, raising=False)
+
+    util.note_onboarding_activity()
+    ops._maybe_realign_stray_ssh({"ssh_ips": {}, "usb_mode_preference": "adb"})
+    assert switched == [], (
+        "the warmer switched a watch out of SSH while onboarding was on "
+        "screen -- the user's deliberate choice undone with no explanation")
+
+    util.release_onboarding()
+    monkeypatch.setattr(ops, "_last_ssh_realign", 0.0, raising=False)
+    ops._maybe_realign_stray_ssh({"ssh_ips": {}, "usb_mode_preference": "adb"})
+    assert switched, "the warmer never resumed after onboarding closed"

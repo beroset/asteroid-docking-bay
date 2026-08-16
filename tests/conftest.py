@@ -45,5 +45,5 @@ def _clear_onboarding_quiet_window(monkeypatch):
     suite time — which is how the aligner's own tests started failing while the
     aligner was perfectly fine. Reset it so each test states its own conditions.
     """
-    import asteroid_docking_bay.webstatus as ws
-    monkeypatch.setattr(ws, "_onboarding_until", 0.0)
+    import asteroid_docking_bay.util as util
+    monkeypatch.setattr(util, "_onboarding_until", 0.0)

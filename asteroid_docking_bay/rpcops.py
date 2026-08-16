@@ -61,8 +61,8 @@ from . import orbit
 from . import bt
 from .registry import registry
 from .events import _DRAIN_FLOOR_PCT, _DRAIN_RESULTS_DIR, event_log
-from .webstatus import (note_onboarding_activity, release_onboarding,
-                        _web_status_data)
+from .webstatus import _web_status_data
+from .util import note_onboarding_activity, release_onboarding
 from .lastseen import last_seen
 from .tasks import (_adb_lock, _charge_tasks, _flash_tasks, _onboard_lock,
                     _remap_tasks, active_op_on_slot, task_active)

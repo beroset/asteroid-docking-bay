@@ -1004,6 +1004,7 @@ def test_the_aligner_is_silent_while_onboarding_is_on_screen(monkeypatch):
     leaving a stray uncorrected for the rest of the window.
     """
     from asteroid_docking_bay import webstatus as ws
+    from asteroid_docking_bay import util
     spawned = []
 
     class _T:
@@ -1017,13 +1018,13 @@ def test_the_aligner_is_silent_while_onboarding_is_on_screen(monkeypatch):
     ws._ssh_align_fail.clear()
     cfg = {"usb_mode_preference": "adb"}      # S9 is a stray: SSH, no allocation
 
-    ws.note_onboarding_activity()
+    util.note_onboarding_activity()
     ws._maybe_align_usb_mode("S9", "ssh", cfg)
     assert spawned == [], (
         "the aligner switched a watch's USB mode while the guided setup was "
         "open -- the user would watch their watch change under them")
 
-    ws.release_onboarding()
+    util.release_onboarding()
     ws._maybe_align_usb_mode("S9", "ssh", cfg)
     assert spawned == [("_align_usb_mode_worker", ("S9", "adb"))], (
         "closing the guide did not resume fleet management")

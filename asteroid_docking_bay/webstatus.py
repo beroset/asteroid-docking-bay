@@ -8,6 +8,7 @@ from __future__ import annotations
 import threading
 import time
 
+from .util import onboarding_active
 from .util import log
 from .flap import flaps
 from . import oplock
@@ -230,42 +231,6 @@ _SSH_ALIGN_BACKOFF_SEC = 90
 _ssh_align_fail: dict[str, int] = {}
 _ssh_align_cycled: set[str] = set()
 _SSH_ALIGN_FAILS_BEFORE_CYCLE = 2
-
-
-# ── Onboarding quiet window ──────────────────────────────────────────────────
-# While the guided setup is ON SCREEN, a-d-b must not reshape watches
-# underneath the user. The USB-mode aligner exists to keep a settled fleet
-# consistent; during onboarding it would switch the mode of the very watch
-# somebody is plugging in, with no explanation anywhere -- and a user who
-# deliberately connected in SSH mode would watch it flip back.
-#
-# The gate is the PANEL BEING OPEN, not the last op: a user reading a screen
-# that polls nothing would otherwise drop out of the window mid-guide. The
-# panel heartbeats while it is shown and releases the window when it closes.
-#
-# Still time-bounded, because a browser tab killed mid-guide must not leave the
-# fleet unmanaged forever: the window outlives roughly three missed beats and
-# then expires on its own.
-ONBOARD_QUIET_SECS = 60.0
-_onboarding_until = 0.0
-
-
-def note_onboarding_activity() -> None:
-    """The guided setup is open. Hold off fleet-wide corrections."""
-    global _onboarding_until
-    _onboarding_until = time.time() + ONBOARD_QUIET_SECS
-
-
-def release_onboarding() -> None:
-    """The guided setup closed. Resume fleet management immediately rather than
-    waiting out the window -- a user who finished setting up should not watch a
-    stray sit uncorrected for another minute."""
-    global _onboarding_until
-    _onboarding_until = 0.0
-
-
-def onboarding_active() -> bool:
-    return time.time() < _onboarding_until
 
 
 def _maybe_align_usb_mode(serial: "str | None", adb_state: "str | None",

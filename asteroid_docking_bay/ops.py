@@ -9,7 +9,7 @@ import threading
 import time
 from pathlib import Path
 
-from .util import _run, log
+from .util import _run, log, onboarding_active
 from .adb import (adb_devices_checked, battery_and_screen, get_battery_level,
                   maybe_heal_wedged_adb, wait_serial_online)
 from .config import (ChargeConfig, FlashConfig, charge_config, find_codename_for_loc_port,
@@ -240,6 +240,14 @@ def _maybe_realign_stray_ssh(cfg: dict) -> None:
     serial = _stray_ssh_to_realign(links, cfg.get("ssh_ips", {}),
                                    _route_winner_iface(), _detect_rndis)
     if not serial:
+        return
+    if onboarding_active():
+        # Somebody is being walked through setting this rig up. This peeler is
+        # the path that undid a watch deliberately put into SSH mode during
+        # onboarding on 2026-08-16 -- the status path was gated and this one,
+        # its sibling, was not.
+        log.info("%s: stray SSH watch left alone — onboarding is on screen",
+                 serial)
         return
     if oplock.held(cfg, serial):
         # THE 2026-08-03 REGRESSION: this peeler switched a watch to adb 45s
