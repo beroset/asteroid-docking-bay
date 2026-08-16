@@ -248,6 +248,18 @@
     "Do temp-install-sdcard and beluga-temp-install differ ONLY by the manual recovery-sideload step, or in the flashed artefact too?",
     "Which boot image is 'the bootimage' in each method \u2014 AsteroidOS's own, or a device-specific one?"
    ]
+  },
+  {
+   "id": "F15",
+   "severity": "info",
+   "area": "dump UX / capability model",
+   "status": "DESIGN FROM mo",
+   "summary": "dump method is chosen per watch by capability, and the multi-step path needs a stepped guide",
+   "rule": "Where `fastboot boot` of a debug ramdisk is PROVEN to work, always offer that clean method. Otherwise fall back to the runtime dump, which works on any watch that allows a temp install (what users call dual boot). Initramfs is preferred whenever available.",
+   "capability_model": "Two per-watch booleans decide the offer, and both are things a watch either does or does not do: ramdisk_boot_works -> clean initramfs dump; temp_install_works -> runtime dump. Neither is derivable from the codename, so both belong in the same whitelist as the restore procedure.",
+   "stepped_guide": "The runtime dump needs several manual steps with the device changing state between them (unlock, let Wear OS boot, re-enable adb, push the ext4, return to the bootloader, fastboot boot). So it needs a guide that leads step to step with WAITING BREAKS until the device appears in the required state.",
+   "the_mechanism_already_exists": "That is precisely the guided-setup step machine built 2026-08-15 for onboarding: instruction -> user acts -> 'Check now' -> a hardware read-back gates the advance, never a ticked box. Its read-backs are already the ones this needs \u2014 a watch in fastboot, a watch on adb, a watch answering as root. The step machine generalises from 'onboard watches' to 'any procedure with stop points and hardware read-backs', which is a reuse rather than a second implementation.",
+   "needed_from_mo": "Which watches have PROVEN fastboot-boot-ramdisk support. That is the whitelist input; sol is the one this record can confirm."
   }
  ]
 }
