@@ -790,8 +790,16 @@ def test_onboard_guide_reads_hardware_not_assumptions(monkeypatch):
     """
     import asteroid_docking_bay.rpcops as ro
 
-    # 1. a five-chip box must read as ONE box
+    # 1. a five-chip box must read as ONE box -- and the hubs come from
+    #    discover_hubs, not uhubctl_list. uhubctl only reports hubs it can
+    #    SWITCH, so a dumb hub is invisible to it; measured on the rig,
+    #    uhubctl saw 6 hubs and discover_hubs 12. The "1-9" box below is the
+    #    non-PPPS one: it is absent from the uhubctl stub on purpose, so this
+    #    test fails if the guide ever reads the switchable list again.
     monkeypatch.setattr(ro, "uhubctl_list", lambda: [
+        {"location": "1-3", "ports": [1, 2], "description": "A16"},
+    ], raising=False)  # not imported today; re-importing it must not pass
+    monkeypatch.setattr(ro, "discover_hubs", lambda: [
         {"location": "1-3", "ports": [1, 2], "description": "A16"},
         {"location": "1-3.3", "ports": [1, 2, 3, 4], "description": "A16"},
         {"location": "1-3.3.3", "ports": [1, 2, 3, 4], "description": "A16"},
@@ -804,7 +812,10 @@ def test_onboard_guide_reads_hardware_not_assumptions(monkeypatch):
     assert set(boxes) == {"1-3", "1-9"}, (
         f"cascaded chips were not grouped into boxes: {sorted(boxes)}")
     assert len(boxes["1-3"]["chips"]) == 4 and boxes["1-3"]["ports"] == 14
-    assert len(boxes["1-9"]["chips"]) == 1
+    assert len(boxes["1-9"]["chips"]) == 1, (
+        "the non-PPPS box vanished -- the guide is reading uhubctl_list, which "
+        "cannot see a hub it cannot switch, and a user with a dumb hub would "
+        "be told their hardware does not exist")
 
     # 2. the bus read-back is whatever sysfs says, untouched by config — and it
     #    is handed the paths fastboot already knows, because a watch in its

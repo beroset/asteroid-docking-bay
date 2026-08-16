@@ -43,7 +43,7 @@ from .config import (_config_lock, _store_smart_verdict, allocate_ssh_ip,
 from .usb import (_sysfs_hub_scan, _sysfs_path_to_serial_map, adb_usb_paths,
                   _sysfs_serial_at, xhci_slots,
                   test_port_power_switching, uhubctl_cycle, uhubctl_set_power, watch_devices_on_bus,
-                  uhubctl_list, uhubctl_get_power, port_device_info)
+                  uhubctl_get_power, port_device_info, discover_hubs)
 from . import drainlog, wifi
 from .watchctl import BACKUP_ROOT, DIAG_ROOT, Watch, _watch_os
 from .ops import ChargeOp, DrainOp, WorkbenchOp, _flash_one_watch
@@ -876,8 +876,15 @@ def _onboard_guide(args):
         return {"ok": True, "watches": watch_devices_on_bus(fb_paths)}
 
     if action == "hubs":
+        # discover_hubs, NOT uhubctl_list: uhubctl only reports hubs it can
+        # SWITCH, so a non-PPPS hub is invisible to it. Measured on this rig —
+        # uhubctl_list found 6 hubs and discover_hubs 12, the difference being
+        # the Sabrent box and the Lenovo dock. Telling a new user their hub
+        # does not exist is the worst possible first step, and a user with a
+        # dumb hub is exactly who this guide is for. `map` already discovers
+        # this way, so the guide and map now agree about what is plugged in.
         boxes: dict = {}
-        for hub in uhubctl_list():
+        for hub in discover_hubs():
             loc = hub.get("location") or ""
             root = loc.split(".")[0]
             box = boxes.setdefault(root, {"root": root, "chips": [], "ports": 0,
