@@ -139,6 +139,18 @@
    "census": "51 interpolations of device-supplied fields: 47 already escaped, 2 URL-encoded, 2 raw \u2014 both fixed.",
    "test": "test_device_supplied_strings_reach_the_dom_escaped and test_a_serial_with_a_quote_cannot_escape_the_click_handler.",
    "testing_note": "The first version of the serial assertion was VACUOUS \u2014 it ran in a harness where the handler was never rendered, so both assertions passed on absent text. Splitting it into a minimal harness exposed that. A second plant then also passed because it patched one of four openBI sites rather than the one under test."
+  },
+  {
+   "id": "F10",
+   "severity": "high",
+   "area": "stockrom / restore",
+   "status": "REPORTED \u2014 design decision for mo",
+   "summary": "restore_plan encodes the beluga procedure as if it were universal, and cannot express nemo's proven one",
+   "detail": "Two restores are proven and they are structurally different. beluga (2026-08-03): flash system, vendor, cache, recovery, boot from the dump plus the FACTORY EMPTY userdata.img. nemo: moWerk's canon FAILED, and what worked was system + boot + userdata + metadata + keystore + cache, ALL from that same watch's own dump, then fastboot continue (misc is untouchable there \u2014 its bootloader refuses both erase and flash).",
+   "the_problem": "restore_plan(parts, names) raises on anything that is not classified 'firmware'. It therefore refuses userdata, metadata (unknown) and keystore (safe_erase) \u2014 so nemo's PROVEN procedure cannot be built by the code at all.",
+   "the_insight": "The safety rule is not 'never restore userdata or per-device state'. It is 'never restore state from a DIFFERENT unit'. nemo's working restore used its own coherent dump, which is safe; the same partitions from another watch would not be. Provenance is the gate, not partition class \u2014 and fingerprint_gate already exists to establish provenance.",
+   "why_not_fixed": "Relaxing a hard safety stop is not a night edit. It also needs mo's whitelist: procedures assigned per watch/family, only TESTED ones enabled, sibling inference (all LGs, all ASUS) marked as inference rather than evidence. beluga is an outlier; the newer layouts (sol/aurora, GKI A/B with a dynamic super partition) are untested for restore entirely.",
+   "suggested": "A PROCEDURES table keyed by codename: partition list, userdata source (factory-empty | own-dump), evidence (tested date+serial | inferred from sibling), default REFUSE. restore_plan takes the procedure rather than assuming one."
   }
  ]
 }
