@@ -3037,12 +3037,30 @@ let _gPort=null;      // capability of the port the found watch sits on
 function openGuide(){
   if(!panelShow('guide'))return;
   _gState='scan'; _gNote=null; _gAdopted=[]; _gBoxes=[]; _gNoHub=false;
+  gBeatStart();
   renderGuide(); gScan();
 }
 function closeGuide(){
-  gStopPoll();
+  gStopPoll(); gBeatStop();
   _gDismissed=true;      // do not spring back open on the next refresh
   panelHide('guide');
+}
+// While this panel is on screen a-d-b holds off fleet-wide corrections -- above
+// all the USB-mode aligner, which would otherwise switch the mode of the very
+// watch the user is plugging in, and silently undo a watch they connected in
+// SSH mode on purpose. The gate is the panel being OPEN rather than the last
+// request, because a user reading a screen that polls nothing would drop out
+// of the window mid-guide. Closing releases it at once instead of leaving the
+// fleet unmanaged for another minute.
+let _gBeat=null;
+function gBeatStart(){
+  gBeatStop();
+  fetch('/api/onboard/guide/ping').catch(()=>{});
+  _gBeat=setInterval(()=>fetch('/api/onboard/guide/ping').catch(()=>{}),20000);
+}
+function gBeatStop(){
+  if(_gBeat){clearInterval(_gBeat);_gBeat=null;}
+  fetch('/api/onboard/guide/release').catch(()=>{});
 }
 function gStopPoll(){ if(_gPoll){clearInterval(_gPoll);_gPoll=null;} }
 function gNote(cls,text){ _gNote={cls:cls,text:text}; renderGuide(); }

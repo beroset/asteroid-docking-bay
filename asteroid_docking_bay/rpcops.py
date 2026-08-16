@@ -61,7 +61,8 @@ from . import orbit
 from . import bt
 from .registry import registry
 from .events import _DRAIN_FLOOR_PCT, _DRAIN_RESULTS_DIR, event_log
-from .webstatus import _web_status_data
+from .webstatus import (note_onboarding_activity, release_onboarding,
+                        _web_status_data)
 from .lastseen import last_seen
 from .tasks import (_adb_lock, _charge_tasks, _flash_tasks, _onboard_lock,
                     _remap_tasks, active_op_on_slot, task_active)
@@ -871,6 +872,15 @@ def _onboard_guide(args):
     import os
     import shutil
     action = args.get("action") or "preflight"
+    # The panel is open -> hold fleet-wide corrections off every watch, not
+    # just the one being onboarded. `release` is the panel closing, so it must
+    # not re-arm the window it is there to drop.
+    if action == "release":
+        release_onboarding()
+        return {"ok": True, "quiet": False}
+    note_onboarding_activity()
+    if action == "ping":
+        return {"ok": True, "quiet": True}
 
     if action == "bus":
         # Hand the scan the paths fastboot already knows about. A watch in its
@@ -2406,6 +2416,7 @@ def _onboard_identify(args):
     handed in from somewhere else, which is exactly how a caller's stale copy
     once overwrote a full config.
     """
+    note_onboarding_activity()
     serial = (args.get("serial") or "").strip()
     if not is_a_serial(serial):
         return {"ok": False, "error": "not a usable serial"}

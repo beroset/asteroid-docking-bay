@@ -984,3 +984,46 @@ def test_a_cache_from_before_build_tracking_re_probes_once(monkeypatch, tmp_path
     ws._watch_build["S1"] = "20260808164137"
     got = ws._geometry_view("device", "S1")
     assert got["resolution"] == "456x456" and got["build_id"] == "20260808164137"
+
+
+def test_the_aligner_is_silent_while_onboarding_is_on_screen(monkeypatch):
+    """A user being walked through setup must not have watches reshaped under
+    them.
+
+    The USB-mode aligner keeps a SETTLED fleet consistent. During onboarding it
+    would switch the mode of the very watch somebody just plugged in, with no
+    explanation on screen -- and it would silently undo a watch the user
+    connected in SSH mode on purpose, which the guide explicitly tells them is
+    supported. It was found the honest way: setting up a live SSH test needed
+    the preference flipped first, or the rig kept switching the watch back.
+
+    The gate is the PANEL being open, not the last request: a screen that polls
+    nothing would otherwise drop out of the window while the user reads it. So
+    a bare quiet window must suppress the aligner with no other activity at
+    all, and releasing it must restore management immediately rather than
+    leaving a stray uncorrected for the rest of the window.
+    """
+    from asteroid_docking_bay import webstatus as ws
+    spawned = []
+
+    class _T:
+        def __init__(self, target=None, args=(), daemon=None):
+            spawned.append((getattr(target, "__name__", target), args))
+        def start(self):
+            pass
+
+    monkeypatch.setattr(ws.threading, "Thread", _T)
+    ws._ssh_align_attempt.clear()
+    ws._ssh_align_fail.clear()
+    cfg = {"usb_mode_preference": "adb"}      # S9 is a stray: SSH, no allocation
+
+    ws.note_onboarding_activity()
+    ws._maybe_align_usb_mode("S9", "ssh", cfg)
+    assert spawned == [], (
+        "the aligner switched a watch's USB mode while the guided setup was "
+        "open -- the user would watch their watch change under them")
+
+    ws.release_onboarding()
+    ws._maybe_align_usb_mode("S9", "ssh", cfg)
+    assert spawned == [("_align_usb_mode_worker", ("S9", "adb"))], (
+        "closing the guide did not resume fleet management")

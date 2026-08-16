@@ -32,3 +32,18 @@ def _isolate_task_store(tmp_path_factory, monkeypatch):
     from asteroid_docking_bay.tasks import task_store
     monkeypatch.setattr(task_store, "dir",
                         tmp_path_factory.mktemp("tasks"))
+
+
+@pytest.fixture(autouse=True)
+def _clear_onboarding_quiet_window(monkeypatch):
+    """Reset the onboarding quiet window before every test.
+
+    While the guided setup is in use, a-d-b holds off fleet-wide corrections
+    (the USB-mode aligner) so it does not reshape the watch the user is
+    plugging in. That window is a module-level deadline, so ANY test that
+    exercises an onboarding op silences the aligner for the next two minutes of
+    suite time — which is how the aligner's own tests started failing while the
+    aligner was perfectly fine. Reset it so each test states its own conditions.
+    """
+    import asteroid_docking_bay.webstatus as ws
+    monkeypatch.setattr(ws, "_onboarding_until", 0.0)
