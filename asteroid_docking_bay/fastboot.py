@@ -241,6 +241,21 @@ def rndis_links(base: str = "/sys/bus/usb/devices") -> "list[dict]":
     return links
 
 
+def usb_net_link_for(serial: "str | None") -> "dict | None":
+    """This watch's host-side USB network link, or None.
+
+    rndis_links() is named for the only gadget this fleet used to offer, but it
+    globs any USB interface that exposes a net device -- so it already finds a
+    CDC-NCM link too. Newer kernels drop RNDIS, and the NCM gadget can run
+    ALONGSIDE adb rather than replacing it, which breaks the assumption baked
+    into every USB-mode path here: that a watch is in adb mode OR ssh mode,
+    never both.
+    """
+    if not serial:
+        return None
+    return next((l for l in rndis_links() if l.get("serial") == serial), None)
+
+
 def _route_winner_iface(ip: str = USB_SSH_IP) -> "str | None":
     """Which host interface the kernel would route `ip` over right now. With
     several RNDIS links whose watches all sit on the shared default address,

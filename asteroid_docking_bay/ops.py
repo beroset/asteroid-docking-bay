@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 
 from .util import _run, log, onboarding_active
-from .adb import (adb_devices_checked, battery_and_screen, get_battery_level,
+from .adb import (adb_devices, adb_devices_checked, battery_and_screen, get_battery_level,
                   maybe_heal_wedged_adb, wait_serial_online)
 from .config import (ChargeConfig, FlashConfig, charge_config, find_codename_for_loc_port,
                      find_port_for_codename, find_serial_for_loc_port,
@@ -235,6 +235,17 @@ def _maybe_realign_stray_ssh(cfg: dict) -> None:
     if time.time() - _last_ssh_realign < _SSH_REALIGN_COOLDOWN:
         return
     links = rndis_links()
+    if not links:
+        return
+    # A watch that ANSWERS ADB is not a stray, whatever links it also offers.
+    # Peeling exists because watches sharing the default SSH address shadow each
+    # other and become unreachable; a watch on adb is reachable, so there is
+    # nothing stuck to fix. On a CDC-NCM gadget both run at once by design, and
+    # "correcting" one re-runs an RNDIS mode change its kernel does not support
+    # -- which is how a working NCM setup was destroyed on 2026-08-16.
+    on_adb = {s for s, st in adb_devices().items()
+              if isinstance(st, dict) and st.get("status") == "device"}
+    links = [l for l in links if l.get("serial") not in on_adb]
     if not links:
         return
     serial = _stray_ssh_to_realign(links, cfg.get("ssh_ips", {}),

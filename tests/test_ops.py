@@ -863,3 +863,44 @@ def test_no_fleet_corrections_in_the_first_seconds_after_a_restart(monkeypatch):
             "immediately -- a restart mid-onboarding undoes the user's watch")
     finally:
         importlib.reload(util)
+
+
+def test_a_watch_on_adb_is_never_treated_as_an_ssh_stray(monkeypatch):
+    """Newer watches run CDC-NCM, where ADB and the network link are live at
+    the SAME time. Every USB-mode path here was written for RNDIS, where a
+    watch is in one mode or the other.
+
+    The peeler exists because watches sharing the default SSH address shadow
+    each other and become unreachable; a watch answering ADB is reachable, so
+    there is nothing stuck to fix. "Correcting" one re-runs an RNDIS mode
+    change its kernel does not support and leaves it in neither state -- which
+    is how a working NCM setup on aurora was destroyed on 2026-08-16.
+    """
+    import asteroid_docking_bay.ops as ops
+    from asteroid_docking_bay import util
+
+    switched = []
+    monkeypatch.setattr(ops, "rndis_links", lambda: [
+        {"iface": "usb0", "usb_path": "1-3.4.2", "serial": "NCM"},   # also on adb
+        {"iface": "usb1", "usb_path": "1-3.4.3", "serial": "STRAY"}, # genuinely stuck
+    ])
+    monkeypatch.setattr(ops, "adb_devices",
+                        lambda: {"NCM": {"status": "device", "usb": "1-3.4.2"}})
+    seen = {}
+    def picker(links, ips, iface, probe):
+        seen["serials"] = [l["serial"] for l in links]
+        return links[0]["serial"] if links else None
+    monkeypatch.setattr(ops, "_stray_ssh_to_realign", picker)
+    monkeypatch.setattr(ops, "_switch_ssh_to_adb",
+                        lambda *a, **k: switched.append(a) or {"ok": True})
+    monkeypatch.setattr(ops, "_detect_rndis", lambda: True)
+    monkeypatch.setattr(ops, "_route_winner_iface", lambda: "usb1")
+    monkeypatch.setattr(ops, "_last_ssh_realign", 0.0, raising=False)
+    util.release_onboarding()
+
+    ops._maybe_realign_stray_ssh({"ssh_ips": {}, "usb_mode_preference": "adb"})
+
+    assert seen["serials"] == ["STRAY"], (
+        "the watch answering ADB was offered to the peeler -- on an NCM gadget "
+        "that is a working setup, not a stray")
+    assert switched, "the genuinely stuck watch was not peeled"

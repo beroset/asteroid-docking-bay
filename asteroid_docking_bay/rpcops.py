@@ -52,6 +52,7 @@ from .watchctl import BACKUP_ROOT, DIAG_ROOT, Watch, _watch_os
 from .ops import ChargeOp, DrainOp, WorkbenchOp, _flash_one_watch
 from .fastboot import (_switch_ssh_to_adb, _usb_moded_switch_failed,
                        _detect_rndis, _fastboot_list, _fastboot_getvar_product,
+                       usb_net_link_for,
                        bootloader_unlocked,
                        fastboot_getvar_all, parse_getvar,
                        ssh_reach_ip)
@@ -763,6 +764,12 @@ def _ssh_switch_adb(args):
     the default 192.168.2.15 for a watch that predates IP assignment. ok=False
     means nothing was reachable there, or a broken usb-moded refused it."""
     serial = args.get("serial")
+    if _offers_both_links(serial):
+        link = usb_net_link_for(serial)
+        return {"ok": True, "noop": True,
+                "message": f"{serial} already answers ADB alongside its network "
+                           f"link ({link['iface']}) — it is not in an either/or "
+                           f"mode, so there is nothing to switch back."}
     cfg = load_config()
     # Switching USB mode under a running transfer IS the 2026-08-03 regression
     # that produced a 0-byte dump, and the oplock docstring names a shell script
@@ -782,6 +789,22 @@ def _ssh_switch_adb(args):
     return _switch_ssh_to_adb(ip)
 
 
+def _offers_both_links(serial: "str | None") -> bool:
+    """True when a watch answers ADB *and* offers a USB network link at once.
+
+    On a CDC-NCM gadget both are live together, so there is nothing to switch
+    -- and switching anyway is destructive: it re-runs the RNDIS-era mode
+    change, which fails on a kernel that has no RNDIS and leaves the watch in
+    neither state. That is exactly how a working NCM setup was destroyed on
+    2026-08-16.
+    """
+    if not serial:
+        return False
+    if _adb_state(adb_devices(), serial) != "device":
+        return False
+    return usb_net_link_for(serial) is not None
+
+
 @DISPATCH.op("watch.switch_ssh")
 def _watch_switch_ssh(args):
     """The reverse of ssh.switch_adb: put an adb watch into SSH/developer USB
@@ -793,6 +816,13 @@ def _watch_switch_ssh(args):
     serial = args.get("serial")
     if not serial:
         return {"ok": False, "error": "no serial for this port"}
+    if _offers_both_links(serial):
+        link = usb_net_link_for(serial)
+        return {"ok": True, "noop": True,
+                "message": f"{serial} already answers ADB and offers a network "
+                           f"link ({link['iface']}) at the same time — nothing "
+                           f"to switch. Switching would re-run the RNDIS mode "
+                           f"change, which this watch does not support."}
     # Same hazard as ssh.switch_adb, from the other direction. This also closes
     # the aligner's own gap: finish_ssh_relocation calls this op up to a minute
     # after the pass that checked the lock, so a hold taken in between was

@@ -1858,3 +1858,34 @@ def test_parking_the_rig_never_cuts_power_under_a_watch(monkeypatch):
         "know it wants shelving, not a power cut")
     assert d["already_off"] == ["1-3:3"]
     assert all(on is False for _, _, on in switched), "powered a port ON"
+
+
+def test_switching_usb_mode_is_a_noop_when_a_watch_offers_both(monkeypatch):
+    """Both switch ops must refuse when there is nothing to switch.
+
+    On a CDC-NCM gadget ADB and the network link run together, so the watch is
+    not in an either/or mode at all. Running the switch anyway re-runs the
+    RNDIS-era mode change, which a kernel without RNDIS cannot honour, and
+    leaves the watch in neither state. That is not theoretical: it destroyed a
+    working NCM setup on aurora on 2026-08-16, from the manual op.
+    """
+    import asteroid_docking_bay.rpcops as ro
+    monkeypatch.setattr(ro, "adb_devices",
+                        lambda: {"S1": {"status": "device", "usb": "1-3.4.2"}})
+    monkeypatch.setattr(ro, "_adb_state", lambda devices, serial: "device")
+    monkeypatch.setattr(ro, "usb_net_link_for",
+                        lambda serial: {"iface": "usb0", "serial": serial})
+    def boom(*a, **k):
+        raise AssertionError("performed a USB-mode switch on a watch offering both")
+    monkeypatch.setattr(ro, "_switch_ssh_to_adb", boom)
+    monkeypatch.setattr(ro, "allocate_ssh_ip", boom)
+
+    for op in ("watch.switch_ssh", "ssh.switch_adb"):
+        d = ro.DISPATCH._data[op]({"serial": "S1"})
+        assert d["ok"] and d.get("noop"), f"{op} did not refuse: {d}"
+        assert "usb0" in d["message"]
+
+    # a watch that is NOT on adb still switches normally
+    monkeypatch.setattr(ro, "_adb_state", lambda devices, serial: None)
+    monkeypatch.setattr(ro, "usb_net_link_for", lambda serial: None)
+    assert ro._offers_both_links("S1") is False
