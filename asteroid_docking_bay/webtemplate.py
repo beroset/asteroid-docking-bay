@@ -2961,7 +2961,7 @@ function loadShot(serial,res){
     });
 }
 function closeWatchImg(){document.getElementById('wimg').style.display='none';_compo=null;_handsDrag=null;_drag=null;_handsDevEl=null;handsMode='time';}
-document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeWatchImg();closeControl();closeMenu();closeRegistry();closeBt();}});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeWatchImg();closeControl();closeMenu();panelHideAll();}});
 // ── Fleet Registry: every watch ever seen, with a Log of what changed ────────
 // ── Guided setup ────────────────────────────────────────────────────────────
 // The rig's own discipline, encoded: empty the bus, replug the hub, map it
@@ -2983,13 +2983,11 @@ const G_STEPS=[
   {t:'Done', i:''}
 ];
 function openGuide(){
-  const p=document.getElementById('guide'),m=document.getElementById('guidemask');
-  if(!p)return; p.style.display='block'; m.style.display='block';
+  if(!panelShow('guide'))return;
   renderGuide();
 }
 function closeGuide(){
-  const p=document.getElementById('guide'),m=document.getElementById('guidemask');
-  if(p)p.style.display='none'; if(m)m.style.display='none';
+  panelHide('guide');
 }
 function gRead(k,cls,text){ _gRead[k]={cls:cls,text:text}; renderGuide(); }
 function renderGuide(){
@@ -3101,17 +3099,35 @@ function gFinish(){
   gRead(5,'pass',_gSeated.length+' watch(es) set up'+(_gNoHub?' (no smart hub: power features unavailable)':'')+'.');
   renderGuide();
 }
+// Every floating panel is a <div id="X"> with a <div id="Xmask"> behind it, so
+// showing and hiding one is the same three lines each time. It was written out
+// eight times — four panels x open/close — which is how `msgs` and `guide`
+// ended up missing from the Escape handler: each new panel had to remember to
+// join every list by hand.
+function panelShow(id){
+  const p=document.getElementById(id), m=document.getElementById(id+'mask');
+  if(!p)return null;
+  p.style.display='block'; if(m)m.style.display='block';
+  return p;
+}
+function panelHide(id){
+  const p=document.getElementById(id), m=document.getElementById(id+'mask');
+  if(p)p.style.display='none'; if(m)m.style.display='none';
+}
+// Close every panel, found by class rather than by a list a new panel has to be
+// added to. Escape closed only the two that existed when it was written.
+function panelHideAll(){
+  const all=document.querySelectorAll?document.querySelectorAll('.regpanel'):[];
+  (all.forEach?all:[]).forEach(p=>{if(p&&p.id)panelHide(p.id);});
+}
 function openRegistry(){
-  const p=document.getElementById('reg'),m=document.getElementById('regmask');
-  if(!p)return;
-  p.style.display='block';m.style.display='block';
+  const p=panelShow('reg'); if(!p)return;
   p.innerHTML='<div class="reg-hd"><b>Fleet Registry</b><span class="dim">loading&hellip;</span><a href="#" class="reg-x" onclick="closeRegistry();return false">&times;</a></div>';
   fetch('/api/registry').then(r=>r.json()).then(renderRegistry).catch(()=>{
     p.querySelector('.dim').textContent='could not load';});
 }
 function closeRegistry(){
-  const p=document.getElementById('reg'),m=document.getElementById('regmask');
-  if(p)p.style.display='none';if(m)m.style.display='none';
+  panelHide('reg');
 }
 let _regData=null,_regOpen={};   // cached payload; serial -> expanded?
 function renderRegistry(d){
@@ -3214,11 +3230,10 @@ function toggleRegLog(serial){_regOpen[serial]=!_regOpen[serial];renderRegistry(
 // ── Bluetooth scan + pair (Orbit port, rung 1-2) ─────────────────────────────
 let _btData=null;
 function openBtScan(){
-  const p=document.getElementById('bt'),m=document.getElementById('btmask');
-  if(!p)return; p.style.display='block'; m.style.display='block';
+  if(!panelShow('bt'))return;
   if(_btData)renderBt(); else btScan();
 }
-function closeBt(){const p=document.getElementById('bt'),m=document.getElementById('btmask');if(p)p.style.display='none';if(m)m.style.display='none';}
+function closeBt(){panelHide('bt');}
 function btScan(){
   const p=document.getElementById('bt'); if(!p)return;
   p.innerHTML='<div class="reg-hd"><b>&#x1F50D; Bluetooth scan</b><span class="dim">scanning 8s&hellip;</span><a href="#" class="reg-x" onclick="closeBt();return false">&times;</a></div>';
@@ -3486,14 +3501,12 @@ function _msgAllBtn(){
 let _msgOpen=false;
 function openMsgs(){
   _msgOpen=true;
-  const p=document.getElementById('msgs'),m=document.getElementById('msgsmask');
-  if(p)p.style.display='block'; if(m)m.style.display='block';
+  panelShow('msgs');
   renderMsgs();
 }
 function closeMsgs(){
   _msgOpen=false;
-  const p=document.getElementById('msgs'),m=document.getElementById('msgsmask');
-  if(p)p.style.display='none'; if(m)m.style.display='none';
+  panelHide('msgs');
 }
 function renderMsgs(){
   const p=document.getElementById('msgs'); if(!p)return;

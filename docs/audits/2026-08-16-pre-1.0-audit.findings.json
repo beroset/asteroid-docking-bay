@@ -22,6 +22,17 @@
    "status": "MEASURED \u2014 NOT WORTH IT",
    "summary": "JS fetch call sites are too varied to collapse behind a helper",
    "detail": "78 fetch statements; only 13 are near-uniform, and those split into two sub-shapes of 6-7 one-liners each (POST->refresh, POST->toastRes). A generic jfetch() would save a handful of characters per site and obscure the ones that differ. Recorded so the next audit does not re-measure it."
+  },
+  {
+   "id": "F2",
+   "severity": "medium",
+   "area": "webtemplate / panels",
+   "status": "FIXED",
+   "summary": "Escape did not close the msgs or guide panels; the show/hide convention was written out eight times",
+   "detail": "Every floating panel is <div id=X> plus <div id=Xmask>, and showing/hiding one is the same three lines. That was repeated across four open and four close functions. The cost was not the repetition itself but that each new panel had to remember to join every list by hand \u2014 which is how the Escape handler ended up closing only `reg` and `bt`, the two panels that existed when it was written.",
+   "fix": "panelShow/panelHide own the mask convention; panelHideAll finds panels by CLASS rather than by a list, so a panel added tomorrow is covered without touching the handler.",
+   "line_delta": "+6 code lines (+13 with comments) \u2014 this consolidation does NOT save lines. It replaces eight copies of a convention with one definition and removes a class of bug.",
+   "test": "test_escape_closes_every_panel_not_just_the_first_two; plants both the hardcoded-list regression and a panelHide that forgets the mask."
   }
  ]
 }

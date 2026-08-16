@@ -3274,3 +3274,47 @@ def test_every_codename_the_rig_runs_has_a_product_name():
     for codename in ("lenok", "sturgeon", "catfish", "skipjack", "narwhal",
                      "sawfish", "beluga", "nemo", "dory", "bass", "sol"):
         assert f"{codename}:" in table, f"{codename} has no product name"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_escape_closes_every_panel_not_just_the_first_two(tmp_path):
+    """Escape closed `reg` and `bt` — the two panels that existed when it was
+    written. `msgs` and `guide` were added later and nobody remembered the
+    list, so Escape silently did not close them.
+
+    The handler now finds panels by class instead of naming them, so a panel
+    added tomorrow is covered without touching this code. A list, however
+    carefully maintained today, is the thing that rotted."""
+    import json
+    h = tmp_path / "esc.js"
+    h.write_text(_DOM_STUBS + JS + r"""
+      const ids=['reg','bt','msgs','guide'];
+      const els={};
+      ids.forEach(id=>{
+        els[id]={id:id,style:{display:'block'},innerHTML:'',
+                 querySelector:()=>null,
+                 classList:{add(){},remove(){},toggle(){},contains:()=>false}};
+        els[id+'mask']={id:id+'mask',style:{display:'block'}};
+      });
+      global.document.getElementById=id=>els[id]||el();
+      global.document.querySelectorAll=sel=>sel==='.regpanel'?ids.map(i=>els[i]):[];
+      panelHideAll();
+      const out={};
+      ids.forEach(id=>{out[id]=els[id].style.display; out[id+'mask']=els[id+'mask'].style.display;});
+      console.log(JSON.stringify(out));
+      process.exit(0);
+    """)
+    r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
+    assert r.returncode == 0, r.stderr[:400]
+    o = json.loads(r.stdout.strip().splitlines()[-1])
+    for pid in ("reg", "bt", "msgs", "guide"):
+        assert o[pid] == "none", f"Escape left the {pid} panel open"
+        assert o[pid + "mask"] == "none", f"Escape left the {pid} mask up"
+
+    # ...and the handler must delegate rather than name panels itself, or the
+    # next panel is missed exactly the way msgs and guide were.
+    import re as _re
+    esc = _re.search(r"key==='Escape'\)\{([^}]*)\}", JS)
+    assert esc, "no Escape handler found"
+    assert "panelHideAll()" in esc.group(1), (
+        f"Escape names panels individually again: {esc.group(1)}")
