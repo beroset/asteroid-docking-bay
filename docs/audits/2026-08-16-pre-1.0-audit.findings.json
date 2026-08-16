@@ -260,6 +260,44 @@
    "stepped_guide": "The runtime dump needs several manual steps with the device changing state between them (unlock, let Wear OS boot, re-enable adb, push the ext4, return to the bootloader, fastboot boot). So it needs a guide that leads step to step with WAITING BREAKS until the device appears in the required state.",
    "the_mechanism_already_exists": "That is precisely the guided-setup step machine built 2026-08-15 for onboarding: instruction -> user acts -> 'Check now' -> a hardware read-back gates the advance, never a ticked box. Its read-backs are already the ones this needs \u2014 a watch in fastboot, a watch on adb, a watch answering as root. The step machine generalises from 'onboard watches' to 'any procedure with stop points and hardware read-backs', which is a reuse rather than a second implementation.",
    "needed_from_mo": "Which watches have PROVEN fastboot-boot-ramdisk support. That is the whitelist input; sol is the one this record can confirm."
+  },
+  {
+   "id": "F16",
+   "severity": "high",
+   "area": "fastboot / releases",
+   "status": "FIXED",
+   "summary": "the flash asked for filenames only the nightlies ship, so 1.0 and 2.0 could not be flashed at all",
+   "detail": "Image names were hardcoded to the nightly pair. Actual layout: 1.0 = zImage-dtb-<cn>.fastboot + asteroid-image-<cn>.ext4; 2.0 = zImage-dtb + .rootfs.ext4; 2.1 = BOTH boot names + .rootfs.ext4; nightlies (which IS 2.2) = asteroid-<cn>-boot.img + .rootfs.ext4. So 1.0 404'd on both files and 2.0 on the boot image \u2014 and the failure landed at flash time with the watch already sitting in fastboot.",
+   "fix": "Names are read from the release's own SHA512SUMS, which is downloaded first anyway. Boot preference is zImage FIRST \u2014 the new name applies from 2.2 on and 2.1 merely published it early, so zImage is what every released channel carries. A release listing no usable boot image now says so instead of fetching a 404.",
+   "proven": "Flashed sparrow to 1.0 on 2026-08-16: images fetched and SHA512-verified through a-d-b's downloader, 254s to write, watch booted and reports VERSION=1.0."
+  },
+  {
+   "id": "F17",
+   "severity": "high",
+   "area": "ops / flash",
+   "status": "REPORTED \u2014 blocks no-hub users",
+   "summary": "the automated flash requires a mapped, power-switchable port, so a watch on a direct port cannot be flashed",
+   "detail": "_flash_one_watch returns 'not mapped' when the codename has no hub seat, and 'non-smart port' when the port cannot switch power. sparrow was on a w541 chassis port \u2014 the only place it enumerates in fastboot \u2014 so the automated feature refused it and the flash had to go through _flash_watch directly.",
+   "why_it_matters": "This is exactly the NO-HUB user's situation, which is a named 1.0 goal. A user with no smart hub plugs a watch into a laptop port; a-d-b currently cannot flash it. It also blocks any watch that only enumerates on a direct port, which the ASUS units on this rig do.",
+   "suggested": "Allow a flash target that is a bare fastboot serial with no seat: skip the power-on and the port checks, and require the watch to be in fastboot already. The rest of the sequence is unchanged."
+  },
+  {
+   "id": "F18",
+   "severity": "medium",
+   "area": "usb / detection",
+   "status": "FIXED",
+   "summary": "a watch whose BOOTLOADER uses a non-Google vendor ID was invisible to the bus scan",
+   "detail": "watch_devices_on_bus filtered on 18d1 and reported an empty bus while sparrow sat in fastboot as 0b05:7771 (ASUSTek). The AsteroidOS gadget and Wear OS adb both use Google's ID, so one vendor covers every RUNNING watch and hides every non-Google bootloader. The guided setup's read-backs would have missed it too.",
+   "fix": "Two routes in: a known vendor ID, or a path the caller already knows holds a watch \u2014 the guide now passes what fastboot reported. Anything fastboot or adb can name is a watch by definition, whatever it enumerates under.",
+   "mo_note": "mo: filtering for Google and ASUS may still miss others \u2014 Mobvoi and Fossil bootloaders are unobserved here. The table is documented as bootloader SIGNATURES, expected to grow, and it makes the scan faster rather than correct; the fastboot/adb route is what keeps an unlisted vendor from hiding."
+  },
+  {
+   "id": "F19",
+   "severity": "low",
+   "area": "cli",
+   "status": "FIXED",
+   "summary": "the CLI could not select a release channel",
+   "detail": "The web UI passed `channel` to _flash_one_watch; the CLI had no such option, so flashing 1.0 or 2.0 was reachable only from a browser. `flash --channel 1.0` now matches the selector."
   }
  ]
 }
