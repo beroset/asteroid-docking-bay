@@ -180,6 +180,23 @@ def bootloader_unlocked(text: str) -> "bool | None":
     return None
 
 
+def fastboot_serial_for_codename(codename: str,
+                                 want_serial: "str | None" = None) -> "str | None":
+    """A fastboot device already present that IS this watch, or None.
+
+    Identity in the bootloader is `getvar product`, not the adb serial and not
+    a hub seat — which is what lets an unseated watch be recognised at all. If
+    the caller knows the fastboot serial it wants, that wins outright.
+    """
+    present = _fastboot_devices()
+    if want_serial and want_serial in present:
+        return want_serial
+    for serial in present:
+        if (_fastboot_getvar_product(serial) or "").strip().lower() == codename.strip().lower():
+            return serial
+    return None
+
+
 def _wait_for_fastboot(known_serials: set[str], timeout: int = 30) -> str | None:
     """Wait for a fastboot serial not present in known_serials."""
     deadline = time.monotonic() + timeout

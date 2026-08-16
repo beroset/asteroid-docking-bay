@@ -275,11 +275,13 @@
    "id": "F17",
    "severity": "high",
    "area": "ops / flash",
-   "status": "REPORTED \u2014 blocks no-hub users",
+   "status": "FIXED",
    "summary": "the automated flash requires a mapped, power-switchable port, so a watch on a direct port cannot be flashed",
    "detail": "_flash_one_watch returns 'not mapped' when the codename has no hub seat, and 'non-smart port' when the port cannot switch power. sparrow was on a w541 chassis port \u2014 the only place it enumerates in fastboot \u2014 so the automated feature refused it and the flash had to go through _flash_watch directly.",
    "why_it_matters": "This is exactly the NO-HUB user's situation, which is a named 1.0 goal. A user with no smart hub plugs a watch into a laptop port; a-d-b currently cannot flash it. It also blocks any watch that only enumerates on a direct port, which the ASUS units on this rig do.",
-   "suggested": "Allow a flash target that is a bare fastboot serial with no seat: skip the power-on and the port checks, and require the watch to be in fastboot already. The rest of the sequence is unchanged."
+   "suggested": "Allow a flash target that is a bare fastboot serial with no seat: skip the power-on and the port checks, and require the watch to be in fastboot already. The rest of the sequence is unchanged.",
+   "fix": "A hub seat is no longer required. Without one there is no VBUS to switch, so the power steps are skipped and the watch must already be present. A mapped-but-dumb port takes the same path. Also: a watch ALREADY in fastboot is now recognised before the reboot step \u2014 _wait_for_fastboot waits for a serial that is NEW since its snapshot, so a watch sitting in the bootloader could never satisfy it and the flash timed out with the device right there. That is the no-hub user's normal state.",
+   "test": "test_a_watch_with_no_hub_seat_can_still_be_flashed and test_a_watch_already_in_fastboot_is_not_waited_for, both planted-bug validated."
   },
   {
    "id": "F18",

@@ -24,7 +24,8 @@ from .transport import SshTransport
 from .fastboot import (_clear_ssh_known_hosts, _detect_rndis, _download_nightly,
                        _fastboot_devices, _flash_watch, _route_winner_iface,
                        _stray_ssh_to_realign, _switch_ssh_to_adb,
-                       _wait_for_fastboot, rndis_links)
+                       _wait_for_fastboot, rndis_links,
+                       fastboot_serial_for_codename)
 from .lastseen import last_seen
 from .events import (_DRAIN_FLOOR_PCT, _DRAIN_MAX_BLIND_POLLS,
                      _DRAIN_POLL_SEC, event_log,
@@ -973,12 +974,19 @@ def _flash_one_watch(
     else:
         loc, port = find_port_for_codename(cfg, codename)
         want_serial = None
+    # A watch does not need a hub seat to be flashed. Without one there is no
+    # VBUS to switch, so the power steps are skipped and the watch simply has
+    # to be present already — which is precisely the NO-HUB user's situation,
+    # and a named 1.0 goal: someone with no smart hub plugs a watch into a
+    # laptop port. It is also the only way to flash a watch that enumerates
+    # solely on a direct port, as the ASUS units on this rig do.
+    can_power = loc is not None and is_port_smart(cfg, codename) is not False
     if loc is None:
-        log.error("%s: not mapped to any hub port", codename)
-        return "not mapped"
-    if is_port_smart(cfg, codename) is False:
-        log.error("%s: port not power-switchable — skipping", codename)
-        return "non-smart port"
+        log.info("%s: no hub seat — flashing it where it is (no power control)",
+                 codename)
+    elif not can_power:
+        log.info("%s: port cannot switch power — flashing it where it is",
+                 codename)
 
     dl_dir = Path(flash_cfg.download_dir)
     nightly_url = flash_cfg.nightly_url
@@ -1004,36 +1012,48 @@ def _flash_one_watch(
             log.error("%s: download failed: %s", codename, e)
             return "download failed"
 
-    log.info("%s: powering on port %s:%d", codename, loc, port)
-    if not dry_run:
-        uhubctl_set_power(loc, port, True)
+    if can_power:
+        log.info("%s: powering on port %s:%d", codename, loc, port)
+        if not dry_run:
+            uhubctl_set_power(loc, port, True)
 
-    serial = None
-    if not dry_run:
-        serial = wait_for_adb(codename, cfg, charge_config(cfg), serial=want_serial)
-        if serial is None:
-            if _detect_rndis():
-                log.info("%s: came up in SSH/developer mode — switching to ADB",
-                         codename)
-                _switch_ssh_to_adb()
-                serial = wait_for_adb(codename, cfg, charge_config(cfg), serial=want_serial)
-            if serial is None:
-                log.error("%s: ADB not available — skipping", codename)
-                uhubctl_set_power(loc, port, False)
-                return "ADB unavailable"
-
-    log.info("%s: rebooting to bootloader…", codename)
-    before_fb = set(_fastboot_devices().keys())
-    if not dry_run:
-        _run(f"adb -s {serial} reboot bootloader", check=False)
-
+    # Already in the bootloader? Then there is nothing to boot and nothing to
+    # reboot. Checking first also fixes a real trap: _wait_for_fastboot waits
+    # for a serial that is NEW since the snapshot, so a watch that was already
+    # sitting in fastboot could never satisfy it and the flash timed out with
+    # the device right there.
     fb_serial = None
     if not dry_run:
-        fb_serial = _wait_for_fastboot(before_fb, timeout=30)
-        if fb_serial is None:
-            log.error("%s: no fastboot device appeared — skipping", codename)
-            return "fastboot timeout"
-        log.info("%s: fastboot device ready (%s)", codename, fb_serial)
+        fb_serial = fastboot_serial_for_codename(codename, want_serial)
+        if fb_serial:
+            log.info("%s: already in fastboot (%s) — no reboot needed",
+                     codename, fb_serial)
+
+    if fb_serial is None:
+        serial = None
+        if not dry_run:
+            serial = wait_for_adb(codename, cfg, charge_config(cfg), serial=want_serial)
+            if serial is None:
+                if _detect_rndis():
+                    log.info("%s: came up in SSH/developer mode — switching to ADB",
+                             codename)
+                    _switch_ssh_to_adb()
+                    serial = wait_for_adb(codename, cfg, charge_config(cfg), serial=want_serial)
+                if serial is None:
+                    log.error("%s: ADB not available — skipping", codename)
+                    if can_power:
+                        uhubctl_set_power(loc, port, False)
+                    return "ADB unavailable"
+
+        log.info("%s: rebooting to bootloader…", codename)
+        before_fb = set(_fastboot_devices().keys())
+        if not dry_run:
+            _run(f"adb -s {serial} reboot bootloader", check=False)
+            fb_serial = _wait_for_fastboot(before_fb, timeout=30)
+            if fb_serial is None:
+                log.error("%s: no fastboot device appeared — skipping", codename)
+                return "fastboot timeout"
+            log.info("%s: fastboot device ready (%s)", codename, fb_serial)
 
     try:
         _flash_watch(boot_file, img_file, fb_serial, dry_run=dry_run)

@@ -736,3 +736,69 @@ def test_peeler_does_not_relocate_a_watch_it_never_switched(monkeypatch):
     ops, spawned = _peel_env(monkeypatch, "ssh", switch_ok=False)
     ops._maybe_realign_stray_ssh({})
     assert spawned == [], "chased a relocation after the switch had failed"
+
+
+def test_a_watch_with_no_hub_seat_can_still_be_flashed(monkeypatch):
+    """Flashing must not require a hub seat, because the no-hub user has none.
+
+    _flash_one_watch refused outright with "not mapped" when a codename had no
+    port, and "non-smart port" when the port could not switch power. That is
+    exactly the situation a-d-b's own 1.0 goals describe: someone with no smart
+    hub plugs a watch into a laptop port. It also blocked sparrow, which only
+    enumerates in fastboot on a direct chassis port.
+
+    Without a seat there is no VBUS to switch, so the power steps are skipped
+    and the watch simply has to be present already. Nothing else about the
+    sequence changes."""
+    import asteroid_docking_bay.ops as o
+    from pathlib import Path
+    switched, flashed = [], []
+
+    monkeypatch.setattr(o, "find_port_for_codename", lambda c, cn: (None, None))
+    monkeypatch.setattr(o, "is_port_smart", lambda c, cn: None)
+    monkeypatch.setattr(o, "uhubctl_set_power",
+                        lambda l, p, on: switched.append((l, p, on)))
+    monkeypatch.setattr(o, "_download_nightly",
+                        lambda cn, d, u, force=False: (Path("/tmp/b.img"), Path("/tmp/i.ext4")))
+    # already sitting in the bootloader — the no-hub user's normal state
+    monkeypatch.setattr(o, "fastboot_serial_for_codename", lambda cn, want=None: "FB1")
+    monkeypatch.setattr(o, "_flash_watch",
+                        lambda b, i, fb, dry_run=False: flashed.append(fb))
+    monkeypatch.setattr(o, "_clear_ssh_known_hosts", lambda: None)
+
+    from asteroid_docking_bay.config import FlashConfig
+    res = o._flash_one_watch("sparrow", {}, FlashConfig())
+
+    assert res == "ok", f"an unseated watch was refused: {res}"
+    assert flashed == ["FB1"], "the flash never reached the device"
+    assert switched == [], "tried to switch VBUS on a watch with no hub port"
+
+
+def test_a_watch_already_in_fastboot_is_not_waited_for(monkeypatch):
+    """_wait_for_fastboot waits for a serial that is NEW since its snapshot, so
+    a watch ALREADY in the bootloader could never satisfy it — the flash timed
+    out with the device sitting right there. Recognise it first instead.
+
+    This is the common case for a no-hub user, who puts the watch into fastboot
+    by hand before asking for a flash."""
+    import asteroid_docking_bay.ops as o
+    from pathlib import Path
+    from asteroid_docking_bay.config import FlashConfig
+    waited, rebooted = [], []
+
+    monkeypatch.setattr(o, "find_port_for_codename", lambda c, cn: ("1-2", 1))
+    monkeypatch.setattr(o, "is_port_smart", lambda c, cn: True)
+    monkeypatch.setattr(o, "uhubctl_set_power", lambda l, p, on: None)
+    monkeypatch.setattr(o, "_download_nightly",
+                        lambda cn, d, u, force=False: (Path("/tmp/b.img"), Path("/tmp/i.ext4")))
+    monkeypatch.setattr(o, "fastboot_serial_for_codename", lambda cn, want=None: "FB1")
+    monkeypatch.setattr(o, "_wait_for_fastboot",
+                        lambda before, timeout=30: waited.append(1))
+    monkeypatch.setattr(o, "_run", lambda cmd, check=True: rebooted.append(cmd) or (0, "", ""))
+    monkeypatch.setattr(o, "_flash_watch", lambda b, i, fb, dry_run=False: None)
+    monkeypatch.setattr(o, "_clear_ssh_known_hosts", lambda: None)
+
+    assert o._flash_one_watch("sparrow", {}, FlashConfig()) == "ok"
+    assert waited == [], "waited for a 'new' fastboot device that was already present"
+    assert not any("reboot bootloader" in c for c in rebooted), \
+        "rebooted a watch that was already in the bootloader"
