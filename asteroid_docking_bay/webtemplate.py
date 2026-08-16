@@ -211,6 +211,7 @@ _WEB_TEMPLATE = """\
     .gwrap{padding:18px 22px 22px;text-align:center}
     .gtitle{font-weight:700;font-size:19px;margin-bottom:9px}
     .gacts{margin-top:16px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:center}
+    .ncmtag{color:#fff;font-weight:600;margin-left:4px;letter-spacing:.2px}
     .gskip{color:#6e7681;font-size:12px;margin-left:6px;text-decoration:underline dotted}
     .gskip:hover{color:#8b949e}
     .ginput{background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#c9d1d9;
@@ -1040,12 +1041,21 @@ const WEAR_LONG={'WearOS':'Wear OS','AndroidWear':'Android Wear'};
 // it is the one state where "switch to ssh" is not merely unnecessary but
 // destructive, and where ssh needs no address at all.
 function ncmBadge(p){
-  if(p.gadget_dead)
-    return ` <span class="cbadge err" title="${ux('mass-storage-only gadget: no adb, no network. A port CYCLE cannot fix this - the composition is wrong, not the enumeration. Only a reboot recovers it.','this watch is offering nothing usable - it needs a reboot, not a power cycle')}">${ux('DEAD GADGET','needs reboot')}</span>`;
-  if(!p.ncm)return '';
-  return ` <span class="cbadge ok" title="${ux('CDC-NCM: adb and ssh are live on one gadget. ssh reaches it at its IPv6 link-local with no address assigned at either end. Do NOT switch its USB mode - these kernels have no rndis and the switch lands in a charging-only fallback.','this watch offers both a data and a network connection at once')}">${ux('NCM','adb+ssh')}</span>`;
+  // ONLY the dead gadget earns a pill of its own: it is an error state, it is
+  // rare, and it carries advice the connection badge cannot. NCM is a normal,
+  // healthy state on newer watches, so it rides INSIDE the connection badge
+  // (see mkadb) rather than adding a second pill and a taller row to every
+  // modern watch on the rig.
+  if(!p.gadget_dead)return '';
+  return ` <span class="cbadge err" title="${ux('mass-storage-only gadget: no adb, no network. A port CYCLE cannot fix this - the composition is wrong, not the enumeration. Only a reboot recovers it.','this watch is offering nothing usable - it needs a reboot, not a power cycle')}">${ux('DEAD GADGET','needs reboot')}</span>`;
 }
-function mkadb(adb,fbprod,os,serial,sshIp,name){
+// The mark itself: white against the badge's own colour, so it reads as an
+// addition to the connection rather than a separate status.
+function ncmTag(ncm){
+  if(!ncm)return '';
+  return `<span class="ncmtag" title="${ux('CDC-NCM: adb and ssh are live on ONE gadget. ssh reaches this watch at its IPv6 link-local, with no address assigned at either end. Do NOT switch its USB mode - these kernels have no rndis and the switch lands in a charging-only fallback.','this watch also offers a network connection, not just data')}">+NCM</span>`;
+}
+function mkadb(adb,fbprod,os,serial,sshIp,name,ncm){
   const nm=esc(name||serial||'');
   if(adb==='device'){
     // Clicking the badge opens the Network Center (addresses, links, the USB
@@ -1064,8 +1074,8 @@ function mkadb(adb,fbprod,os,serial,sshIp,name){
     const brand=WEAR_SHORT[os]||'';
     const ttl=`ADB mode${os==='asteroidos'?' — AsteroidOS':(known?' — '+esc(WEAR_LONG[os]||os):'')}`;
     if(!known&&serial)
-      return `<button class="cbadge adb" onclick="openNC('${jsq(serial)}','${nm}',event,'${jsq(sshIp||'')}','device')" title="${ttl} — click for network details">${logo}${ux('ADB','connected')}${ser}</button>`;
-    return `<span class="cbadge adb" title="${ttl}">${logo}${brand?brand+' ':''}${ux('ADB','connected')}${ser}</span>`;
+      return `<button class="cbadge adb" onclick="openNC('${jsq(serial)}','${nm}',event,'${jsq(sshIp||'')}','device')" title="${ttl} — click for network details">${logo}${ux('ADB','connected')}${ncmTag(ncm)}${ser}</button>`;
+    return `<span class="cbadge adb" title="${ttl}">${logo}${brand?brand+' ':''}${ux('ADB','connected')}${ncmTag(ncm)}${ser}</span>`;
   }
   if(adb==='ssh'){
     // An allocated address is one a-d-b handed out and can reach. WITHOUT one
@@ -1131,7 +1141,7 @@ function mkadbrow(p){
   if(p.can_shelve&&p.adb===null)
     return shelveWrap(p,'<span class="dim">&mdash;</span>',
       'port is off and nothing is reachable, so a-d-b makes no claim about this watch — it cannot tell a safely halted watch from one running flat on battery. Click to record what you know.');
-  return mkadb(p.adb,null,p.os,p.serial,p.ssh_ip,p.codename)+ncmBadge(p);
+  return mkadb(p.adb,null,p.os,p.serial,p.ssh_ip,p.codename,p.ncm)+ncmBadge(p);
 }
 // The manual state correction. a-d-b can only vouch for an off-state it
 // delivered itself; however else a watch ended up powered down — the fastboot
@@ -1327,7 +1337,7 @@ function renderDirect(hub,rows,lo,hi){
       `<td class="smtc">${p.unpowered
         ? `<span class="cbadge err" title="${ux('the watch reports no external power (power_supply online=0) while still enumerated — its port delivers data but no VBUS, which is what a hub&#39;s physical per-port button does: no register can see it','this watch is getting NO power - it is running down its own battery, even though it is still connected')}">${ux('NO VBUS','no power')}</span>`
         : `<span class="cbadge no" title="${ux('bare port: no per-port power switching','this socket is always powered - it cannot be switched off')}">${ux('NO!','always on')}</span>`}</td>`+
-      `<td class="connc">${mkadb(p.adb,null,p.os,p.serial,p.ssh_ip,nm)}</td>`+
+      `<td class="connc">${mkadb(p.adb,null,p.os,p.serial,p.ssh_ip,nm,p.ncm)}</td>`+
       `<td class="thumb">${mkthumb(p)}</td>`+
       `<td><b class="cn" onclick="openCC('${jsq(p.serial)}','${jsq(p.machine||p.serial)}',event)" title="${ux('open Control Center','click for details')}">${esc(nm)}</b></td>`+
       `<td class="stats"></td>`+

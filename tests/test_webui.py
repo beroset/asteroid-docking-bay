@@ -3420,10 +3420,13 @@ def test_the_gadget_badge_separates_both_from_dead(tmp_path):
     h = tmp_path / "badge.js"
     h.write_text(_DOM_STUBS + JS + r"""
       const out = {
-        both: ncmBadge({ncm:true, gadget_dead:false}),
+        // NCM rides inside the connection badge; only the dead gadget gets a pill
+        both: mkadb('device',null,'asteroidos','S1',null,'aurora',true)
+              + ncmBadge({ncm:true, gadget_dead:false}),
         dead: ncmBadge({ncm:false, gadget_dead:true}),
         deadWins: ncmBadge({ncm:true, gadget_dead:true}),
-        plain: ncmBadge({ncm:false, gadget_dead:false}),
+        plain: mkadb('device',null,'asteroidos','S1',null,'catfish',false)
+               + ncmBadge({ncm:false, gadget_dead:false}),
       };
       console.log(JSON.stringify(out));
       process.exit(0);
@@ -3432,12 +3435,16 @@ def test_the_gadget_badge_separates_both_from_dead(tmp_path):
     assert r.returncode == 0, r.stderr[:400]
     out = json.loads(r.stdout.strip().splitlines()[-1])
 
-    assert "NCM" in out["both"], "a watch offering adb+ssh was not marked"
+    assert "+NCM" in out["both"], "a watch offering adb+ssh was not marked"
+    assert out["both"].count("cbadge") == 1, (
+        "NCM grew a pill of its own -- it is a healthy state on every modern "
+        "watch, and a second pill makes every one of those rows taller")
     assert "rndis" in out["both"], (
-        "the badge does not warn against switching the USB mode -- that is the "
+        "the mark does not warn against switching the USB mode -- that is the "
         "action this state exists to prevent")
     assert "reboot" in out["dead"].lower() and "cycle" in out["dead"].lower(), (
         "the dead gadget must say reboot AND say a cycle will not do it")
     assert out["deadWins"] == out["dead"], (
         "a dead gadget rendered as a healthy NCM watch")
-    assert out["plain"] == "", "an ordinary adb watch grew a badge"
+    assert "+NCM" not in out["plain"], "an ordinary adb watch was marked NCM"
+    assert out["plain"].count("cbadge") == 1, "an ordinary adb watch grew a pill"
