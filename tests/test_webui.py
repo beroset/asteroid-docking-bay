@@ -2761,7 +2761,7 @@ def test_guided_setup_gates_on_hardware_not_on_the_user(tmp_path):
       const calls=[];
       global.fetch=(u)=>{calls.push(u);
         let body={ok:true,codename:'hoki'};
-        if(u.endsWith('/bus'))body={ok:true,watches:global.__BUS};
+        if(u.endsWith('/bus')||u.endsWith('/bus_power'))body={ok:true,watches:global.__BUS};
         return Promise.resolve({json:()=>Promise.resolve(body)});};
       const out={};
       // the bus still has watches on it -> must NOT proceed to registering

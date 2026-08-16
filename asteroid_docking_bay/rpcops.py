@@ -33,7 +33,8 @@ from . import bench
 from . import icecc, oplock, wanze
 from . import aodcheck
 from .util import _run, log
-from .adb import _adb_state, adb_devices, get_watch_codename, is_a_serial
+from .adb import (_adb_state, adb_devices, adb_external_power,
+                  get_watch_codename, is_a_serial)
 from .config import (_config_lock, _store_smart_verdict, allocate_ssh_ip,
                      charge_config, ssh_ip_for_serial, usb_mode_preference,
                      find_codename_for_loc_port, find_serial_for_loc_port,
@@ -846,6 +847,22 @@ def _safe_name(part: str) -> str:
     return cleaned[:64] or "unknown"
 
 
+def _guide_bus_watches() -> list:
+    """Every watch on the bus, however it presents itself.
+
+    Hands the scan the paths fastboot already knows about: a watch in its
+    BOOTLOADER can enumerate under the vendor's own ID rather than Google's --
+    sparrow sits in fastboot as 0b05 (ASUSTek) -- so a vendor-ID filter alone
+    reported an empty bus with a watch plugged in and waiting. Anything
+    fastboot can name is a watch by definition.
+
+    One scan behind both `bus` and `bus_power`, so the two can differ in how
+    much they ask the watches and never in what they find.
+    """
+    fb_paths = {p for p in _fastboot_list().values() if p}
+    return watch_devices_on_bus(fb_paths)
+
+
 @DISPATCH.op("onboard.guide")
 def _onboard_guide(args):
     """Read-backs for the guided onboarding: what the HARDWARE says right now.
@@ -883,14 +900,27 @@ def _onboard_guide(args):
     if action == "ping":
         return {"ok": True, "quiet": True}
 
+    if action == "bus_power":
+        # Same read as `bus`, plus the one thing that explains a watch the user
+        # swears is switched off: whether it still has EXTERNAL power. A watch
+        # whose VBUS is cut keeps its data link up on its own battery -- the
+        # hub's data lines do not go through the port switch -- so it stays on
+        # ADB, stays on this list, and looks like a stale node to anyone
+        # reading the LED. Measured on sol 2026-08-16: online=0 across every
+        # supply while adb talked to it happily.
+        #
+        # A separate action because it costs an ADB round-trip per watch, and
+        # `bus` is polled every two seconds while waiting for one to appear.
+        watches = _guide_bus_watches()
+        devices = adb_devices()
+        for w in watches:
+            serial = w.get("serial")
+            if serial and _adb_state(devices, serial) == "device":
+                w["powered"] = adb_external_power(serial)
+        return {"ok": True, "watches": watches}
+
     if action == "bus":
-        # Hand the scan the paths fastboot already knows about. A watch in its
-        # BOOTLOADER can enumerate under the vendor's own ID rather than
-        # Google's — sparrow sits in fastboot as 0b05 (ASUSTek) — so a
-        # vendor-ID filter alone reported an empty bus with a watch plugged in
-        # and waiting. Anything fastboot can name is a watch by definition.
-        fb_paths = {p for p in _fastboot_list().values() if p}
-        return {"ok": True, "watches": watch_devices_on_bus(fb_paths)}
+        return {"ok": True, "watches": _guide_bus_watches()}
 
     if action == "hubs":
         # discover_hubs, NOT uhubctl_list: uhubctl only reports hubs it can

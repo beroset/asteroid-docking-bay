@@ -3183,8 +3183,14 @@ function gView(){
 
   if(_gState==='hubclear') return {
     t:'Plug the hub in, with no watches on it',
-    i:'Unplug every watch first, then connect the hub. '+
-      'Mapping an empty hub is what keeps a-d-b from powering a port with a watch already on it.',
+    i:'If your hub has physical per-port buttons, switch them ALL off first. '+
+      'Then unplug any watch that is still attached, and connect the hub.\\n\\n'+
+      'Mapping an empty hub is what keeps a-d-b from powering a port that already '+
+      'has a watch on it. It also avoids an enumeration storm: a hub full of '+
+      'watches coming up at once floods the USB bus, and watches drop out or '+
+      'appear half-detected.\\n\\n'+
+      'A watch whose port power is off can still be attached: the data lines do '+
+      'not run through the port switch, so it stays connected on its own battery.',
     a:`<button class="btn" onclick="gCheckEmpty()">The bus is clear</button>`};
 
   if(_gState==='hubmap') return {
@@ -3196,9 +3202,10 @@ function gView(){
 
   if(_gState==='hubwatch') return {
     t:'Add watches, one at a time',
-    i:'Dock ONE watch and switch its port on. It is named automatically. '+
-      'Repeat for each watch — one at a time, so every watch can be told apart '+
-      'by the port it appeared on.',
+    i:'Now dock only ONE watch and switch its port power button on.\\n\\n'+
+      'Repeat for each watch, one at a time — that is how each one can be told '+
+      'apart by the port it appeared on. It is named automatically; you never '+
+      'need to know its codename.',
     a:`<button class="btn" onclick="gCheckWatch()">I docked one</button>`+
       ` <button class="btn" onclick="gDone()">Finished</button>`};
 
@@ -3212,15 +3219,28 @@ function gView(){
       ` <button class="btn" onclick="gDoOrbit()">Add</button>`};
 
   const ok=_gAdopted.filter(x=>x.ok);
+  // No "add another" button. Restarting the scan would re-find the watch just
+  // onboarded -- it is still docked and still powered -- and greet the user
+  // with "found 2 watches already connected". Adding watches is a physical
+  // sequence, not a wizard loop: dock the next one, and it appears by itself.
   return {
     t:ok.length?'Set up':'Nothing was added',
     i:(ok.length?ok.map(x=>'  ✓  '+x.label).join('\\n')+
         '\\n\\n'+(ok.length>1?'They are':'It is')+' on the main screen now.'
       :'No watch was added.')+
+      (ok.length?'\\n\\nTo add more, close this window and dock them one at a time. '+
+                 'Each new watch appears on its own row as it comes up — there is '+
+                 'nothing further to click here.':'')+
+      (ok.length&&!_gNoHub
+        ?'\\n\\nWhen you are finished with a watch, SHELVE it from its row. '+
+         'Shelved is the word here for properly put away: the watch is shut '+
+         'down first and only then does its port power go off. That order is the '+
+         'whole point — a watch that merely loses power without being shut down '+
+         'keeps running on its own battery, draining, while looking switched off '+
+         'from the outside.':'')+
       (_gNoHub?'\\n\\nWithout a hub that can switch its ports, charging, drain tests '+
                'and shelving stay unavailable. Everything else works.':''),
-    a:`<button class="btn" onclick="closeGuide()">Close</button>`+
-      ` <button class="btn" onclick="gScan()">Add another watch</button>`};
+    a:`<button class="btn" onclick="closeGuide()">Close</button>`};
 }
 function renderGuide(){
   const p=document.getElementById('guide'); if(!p)return;
@@ -3292,26 +3312,49 @@ function gPollDirect(){
   }).catch(()=>{});
 }
 function gCheckEmpty(){
-  fetch('/api/onboard/guide/bus').then(r=>r.json()).then(d=>{
+  // bus_power, not bus: a watch whose port power is off stays on the bus,
+  // running on its own battery, and looks to the user like a stale entry --
+  // they can see the port LED is dark. Saying so turns "why is this thing
+  // still listed" into "that one is on battery, unplug it".
+  gNote('hold','checking the bus…');
+  fetch('/api/onboard/guide/bus_power').then(r=>r.json()).then(d=>{
     const w=d.watches||[];
     if(!w.length){ _gState='hubmap'; _gNote=null; renderGuide(); return; }
     gNote('hold',w.length+' still connected — unplug '+(w.length>1?'these':'this')+' first:\\n'+
-      w.map(x=>'    '+x.path+'  '+(x.product||'?')).join('\\n'));
+      w.map(x=>'    '+x.path+'  '+(x.product||'?')+
+        (x.powered===false?'   (port power is OFF — still attached, running on its own battery)':'')
+      ).join('\\n'));
   }).catch(()=>gNote('stop','could not read the USB bus'));
 }
 function gDoMap(){
   gNote('hold','registering the hub…');
   fetch('/api/onboard/map_hubs',{method:'POST'}).then(r=>r.json()).then(d=>{
     if(!d||!d.ok){ gNote('stop',(d&&d.error)||'no hub found — is it plugged in?'); return; }
+    // Group the chips into BOXES. One physical hub reports as several hubs --
+    // a 16-port box is typically five chips -- so listing them raw tells a new
+    // user they own ten hubs, which is the wrong model at the exact moment
+    // they are forming one.
     _gBoxes=d.hubs||[];
-    const smart=_gBoxes.filter(h=>h.ppps).length;
+    const boxes={};
+    _gBoxes.forEach(h=>{
+      const key=h.name||String(h.location).split('.')[0];
+      const b=boxes[key]||(boxes[key]={key:key,chips:0,ports:0,ppps:0});
+      b.chips++; b.ports+=(h.ports||0); if(h.ppps)b.ppps++;
+    });
+    const list=Object.keys(boxes).map(k=>boxes[k]);
+    const smart=list.filter(b=>b.ppps>0).length;
     _gNoHub=(smart===0);
     _gState='hubwatch';
     gNote(smart?'pass':'hold',
-      _gBoxes.map(h=>(h.ppps?'✓ ':'✗ ')+(h.name||h.location)+'  '+h.location+
-        (h.ppps?'':' — cannot switch its own power')).join('\\n')+
-      (smart?'':'\\n\\nThis hub cannot switch port power. Watches on it still work; '+
-               'charging, drain tests and shelving do not.'));
+      list.map(b=>(b.ppps?'✓ ':'✗ ')+b.key+' — '+b.ports+' ports'+
+        (b.chips>1?' across '+b.chips+' internal chips (normal: one box reports as several)':'')+
+        (b.ppps?' — announces per-port power switching'
+               :' — does not announce per-port power switching')).join('\\n')+
+      (smart?'\\n\\nAnnouncing it is not proof of it: a hub can acknowledge a power '+
+             'command with the power still on. Each port is confirmed the first '+
+             'time it is used with a watch on it.'
+            :'\\n\\nNo hub here announces per-port power switching. Watches on them '+
+             'still work; charging, drain tests and shelving do not.'));
     refresh();
   }).catch(()=>gNote('stop','could not register the hub'));
 }
