@@ -216,6 +216,38 @@
    "what_is_NOT_proven": "a-d-b's own watch.dump op \u2014 the UI button \u2014 which takes a RUNTIME dump of a booted, rooted AsteroidOS watch. Its only attempt was hoki on 2026-08-15, which died at 85 MB when the hub reset the whole 1-3 cascade.",
    "correction_of_my_own_correction": "Earlier in this session I said 'the dump is unproven', mo corrected me with the sol result, and I accepted it too broadly. The method is proven; a-d-b's FEATURE is not. Both statements needed narrowing, and this is the accurate one.",
    "for_1_0": "This is exactly the gap mo wants closed: dump a watch through a-d-b's own op, on a quiet cascade, and verify it with the new compare-dumps command."
+  },
+  {
+   "id": "F14",
+   "severity": "info",
+   "area": "dump procedures",
+   "status": "SPEC FROM mo \u2014 proven/recalled marked",
+   "summary": "the runtime dump needs a per-watch procedure table too, with at least three methods",
+   "methods": [
+    {
+     "id": "initramfs-debug-ramdisk",
+     "preferred": true,
+     "status": "PROVEN (sol, porting session 2026-08-08)",
+     "steps": "unlock the bootloader; on the FIRST boot after unlocking, boot the debug ramdisk using the boot image's kernel; dump immediately from the rooted adb environment of that ramdisk.",
+     "why_preferred": "Fewest steps, and userdata is never mounted \u2014 which is what makes the resulting image trustworthy per partition rather than only for the quiescent ones."
+    },
+    {
+     "id": "temp-install-sdcard",
+     "status": "mo's description \u2014 NOT verified by this session",
+     "applies_to": "watches WITHOUT userdata encryption",
+     "steps": "unlock the bootloader; let Wear OS restore itself and boot again; re-enable adb; push the ext4 to /sdcard/ on the watch; return to the bootloader and `fastboot boot` the boot image."
+    },
+    {
+     "id": "beluga-temp-install",
+     "status": "mo's recollection, hedged by him ('afair') \u2014 NOT verified",
+     "steps": "as the temp install, but needs MANUAL intervention to put the device into the boot image's recovery sideloading mode."
+    }
+   ],
+   "consequence": "Dump procedure and restore procedure are both per-watch properties, so the whitelist should carry BOTH. Unlocking the bootloader is a precondition for every one of them \u2014 which also means a locked watch cannot be dumped at all, matching what watch.fbreport already records per serial (bootloader_unlocked).",
+   "open_questions": [
+    "Do temp-install-sdcard and beluga-temp-install differ ONLY by the manual recovery-sideload step, or in the flashed artefact too?",
+    "Which boot image is 'the bootimage' in each method \u2014 AsteroidOS's own, or a device-specific one?"
+   ]
   }
  ]
 }
