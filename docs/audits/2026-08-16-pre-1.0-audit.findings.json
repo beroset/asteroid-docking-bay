@@ -203,6 +203,19 @@
    "caution_family_lines_do_not_hold": "The split does NOT follow vendor families cleanly: wren and sparrow are 29 partitions with no keystore, while swift is 43 WITH one. So 'all the ASUS behave the same' is not supported by the layouts \u2014 the whitelist should key on the watch (and ideally on a layout check of its own dump), not on an assumed family.",
    "limits": "n=2 on the tested side, so this is support, not proof. 'No keystore' is a proxy for mo's 'old layout'. nemo's archive yielded no GPT in the first 32 KB (its tar member is probably not the raw image), so nemo is absent from the table.",
    "suggested": "a-d-b can gate on this automatically: parse the dump's GPT and refuse the simple procedure on any layout carrying keystore / A-B slots / super. That is a read-only check on a file the user already has."
+  },
+  {
+   "id": "F13",
+   "severity": "high",
+   "area": "dump / test coverage",
+   "status": "CORRECTION \u2014 a-d-b's own dump path is UNTESTED",
+   "summary": "the sol dump was the PORTING session via an initramfs, not a-d-b's runtime dump op",
+   "evidence": "Every dump command lives in -home-mo-Git-meta-smartwatch session 82e99b58 on 2026-08-08: `adb -s 0123456789ABCDEF exec-out \"dd if=/dev/mmcblk0\" > mmcblk0-dump1.img`, the sha256 pair, and a mkmanifest.py that imported a-d-b's stockrom for parse_gpt/classify. The only asteroid-docking-bay hit is this audit's own search command two minutes earlier \u2014 self-noise, the exact trap the attribution work documented.",
+   "method": "The manifest says it plainly: method 'initramfs-clean' \u2014 dumped from AsteroidOS's own initramfs booted off a FLASHED init_boot on slot B, with userdata never mounted. So it is not the runtime path at all.",
+   "what_is_actually_proven": "dd over adb exec-out as a TECHNIQUE, from an initramfs, by the porting session, verified by two full 31.4 GB dumps with matching sha256 and 81/81 partitions identical.",
+   "what_is_NOT_proven": "a-d-b's own watch.dump op \u2014 the UI button \u2014 which takes a RUNTIME dump of a booted, rooted AsteroidOS watch. Its only attempt was hoki on 2026-08-15, which died at 85 MB when the hub reset the whole 1-3 cascade.",
+   "correction_of_my_own_correction": "Earlier in this session I said 'the dump is unproven', mo corrected me with the sol result, and I accepted it too broadly. The method is proven; a-d-b's FEATURE is not. Both statements needed narrowing, and this is the accurate one.",
+   "for_1_0": "This is exactly the gap mo wants closed: dump a watch through a-d-b's own op, on a quiet cascade, and verify it with the new compare-dumps command."
   }
  ]
 }
