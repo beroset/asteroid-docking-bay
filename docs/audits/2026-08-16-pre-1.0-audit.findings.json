@@ -1,0 +1,7 @@
+{
+ "audit": "pre-1.0 deep audit",
+ "date": "2026-08-16",
+ "baseline": "onboard-discovery-rework 1.0dev",
+ "method": "code-only; no rig actuation; consolidations must keep existing tests passing unchanged",
+ "findings": []
+}
