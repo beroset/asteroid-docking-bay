@@ -1028,3 +1028,62 @@ def test_the_aligner_is_silent_while_onboarding_is_on_screen(monkeypatch):
     ws._maybe_align_usb_mode("S9", "ssh", cfg)
     assert spawned == [("_align_usb_mode_worker", ("S9", "adb"))], (
         "closing the guide did not resume fleet management")
+
+
+def test_a_codename_on_two_ports_does_not_light_up_both(monkeypatch, tmp_path):
+    """A watch must never be drawn on a port it is not plugged into.
+
+    Two ways that happened on the rig on 2026-08-16, from one root: a watch
+    mid-port leaked a kernel cmdline fragment into its USB serial descriptor,
+    and the config learned it as an identity.
+
+    1. The GEOMETRY cached under that bogus key carried another watch's machine
+       name, which beat the port map - so a port configured as sol rendered as
+       aurora, on a socket aurora was not in.
+    2. Once the bogus binding was correctly refused, the row fell back to
+       "any live device with this codename" and claimed the real sol, which was
+       on a different socket. One stale duplicate mapping lit up BOTH rows.
+
+    So: a serial matched by codename rather than bound to the port only counts
+    if adb says it is enumerated at THIS port's path. A port-bound serial is
+    left alone - that binding is the stronger statement, and a watch that moved
+    is the soft-remap's business.
+    """
+    from asteroid_docking_bay import webstatus as ws
+
+    cfg = {"hubs": [{"location": "1-3", "ppps": True,
+                     "ports": {"2": "sol"},                 # stale duplicate
+                     "port_serials": {"2": "systempart=/dev/mapper/system"}},
+                    {"location": "1-3.4", "ppps": True,
+                     "ports": {"3": "sol"},                 # where sol really is
+                     "port_serials": {"3": "REALSOL"}}],
+           "serials": {"REALSOL": "sol"}}
+
+    monkeypatch.setattr(ws, "adb_devices",
+                        lambda: {"REALSOL": {"status": "device", "usb": "1-3.4.3"}})
+    monkeypatch.setattr(ws, "adb_usb_paths", lambda d: {"REALSOL": "1-3.4.3"})
+    monkeypatch.setattr(ws, "_fastboot_list", lambda: {})
+    monkeypatch.setattr(ws, "_sysfs_hub_scan", lambda c: [
+        {"location": "1-3", "ports": [1, 2, 3, 4], "power": {}, "connect": {}},
+        {"location": "1-3.4", "ports": [1, 2, 3, 4], "power": {}, "connect": {}}])
+    monkeypatch.setattr(ws, "_soft_remap", lambda cfg, online: None)
+    monkeypatch.setattr(ws, "port_device_info", lambda loc, port: None)
+    monkeypatch.setattr(ws, "_geometry_view", lambda state, serial: None)
+    monkeypatch.setattr(ws, "_battery_view",
+                        lambda state, serial, bat, forced, os_: (None, None))
+    monkeypatch.setattr(ws, "battery_and_screen", lambda serial, shell=None: (None, False, None))
+    monkeypatch.setattr(ws, "_orbit_hub_view",
+                        lambda cfg, seen: {"location": "orbit", "ports": []})
+    monkeypatch.setattr(ws, "_direct_hub_view", lambda *a, **k: None)
+
+    rows = {}
+    for hub in ws._web_status_data(cfg):
+        for port in hub.get("ports", []):
+            rows[f"{hub['location']}:{port['port']}"] = port
+
+    assert rows["1-3.4:3"]["adb"] == "device", "the real port lost its watch"
+    assert rows["1-3:2"]["adb"] is None, (
+        "a stale duplicate mapping claimed a watch that is enumerated on "
+        "another port - the watch appears in two places at once")
+    assert rows["1-3:2"]["codename"] == "sol", (
+        "the poisoned serial's cached identity overrode the port map")

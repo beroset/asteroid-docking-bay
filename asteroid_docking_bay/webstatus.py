@@ -825,12 +825,29 @@ def _web_status_data(cfg: dict) -> list[dict]:
             # survived being fixed twice already.
             if not is_a_serial(serial):
                 serial = None
+            bound_serial = serial          # survived validation, so it BINDS
             if not serial:
                 serials_for_codename = [serial for serial, cname in cfg.get("serials", {}).items()
                                         if cname.lower() == codename.lower()]
                 serial = (next((x for x in serials_for_codename if x in devices), None)
                           or next((x for x in serials_for_codename if x in fb_devices), None)
                           or (serials_for_codename[0] if serials_for_codename else None))
+            # A fallback serial (matched by CODENAME, not bound to this port)
+            # must not be claimed by a port the watch is not on. adb knows
+            # where it actually is, so if it is enumerated at a different path
+            # this port does not get to report it as connected -- otherwise one
+            # codename mapped to two ports lights up BOTH, and the duplicate
+            # row claims a watch that is physically elsewhere. Measured
+            # 2026-08-16: sol mirrored onto socket 2 while sitting on socket 5,
+            # from a stale second mapping left by a corrupt-serial era.
+            #
+            # A port-BOUND serial is left alone: that binding is the stronger
+            # statement, and a watch that moved is the soft-remap's business.
+            if serial and not bound_serial:
+                live_path = _adb_paths.get(serial)
+                if live_path and live_path != f"{loc}.{port_num}":
+                    serial = None
+
             # Fastboot detection must survive a bootloader serial that differs
             # from the adb serial (many watches report a different, or no, serial
             # in fastboot -- beluga: adb 22979c8c vs fastboot 100c0a32). The port
