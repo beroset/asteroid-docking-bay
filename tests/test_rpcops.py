@@ -1889,3 +1889,59 @@ def test_switching_usb_mode_is_a_noop_when_a_watch_offers_both(monkeypatch):
     monkeypatch.setattr(ro, "_adb_state", lambda devices, serial: None)
     monkeypatch.setattr(ro, "usb_net_link_for", lambda serial: None)
     assert ro._offers_both_links("S1") is False
+
+
+def test_an_ncm_watch_is_reached_over_its_own_link_local(monkeypatch):
+    """How a-d-b reaches a watch that is not on adb.
+
+    NCM watches are reachable at an IPv6 link-local WITH A SCOPE, which is the
+    only address a-d-b can be certain belongs to this watch: the scope names
+    the interface the watch is physically on. The RNDIS-era lookup cannot say
+    that -- watches share one default address, and whoever won the kernel route
+    answers.
+
+    Three properties, all of which have bitten somewhere already:
+      - the login is `ceres`, not root (screenshots need the wayland socket,
+        which is ceres:ceres at mode 0700)
+      - the peer address is DISCOVERED, never cached: it is EUI-64 from a MAC
+        the kernel regenerates every time the ncm function is created
+      - if the HOST interface has no link-local there is no source address, so
+        this must decline rather than hand back a transport that cannot connect
+    """
+    import asteroid_docking_bay.rpcops as ro
+
+    monkeypatch.setattr(ro, "_adb_state", lambda devices, serial: None)
+    monkeypatch.setattr(ro, "adb_devices", lambda: {})
+    monkeypatch.setattr(ro, "usb_net_link_for",
+                        lambda s: {"iface": "enp0s20u3u4u2i1",
+                                   "usb_path": "1-3.4.2", "serial": s})
+    monkeypatch.setattr(ro, "gadget_composition",
+                        lambda p: {"adb": True, "ncm": True,
+                                   "mass_storage_only": False, "interfaces": []})
+    monkeypatch.setattr(ro, "host_has_link_local", lambda i: True)
+    monkeypatch.setattr(ro, "ncm_peer_link_local", lambda i: "fe80::f5:d7ff:fe04:51d1")
+    monkeypatch.setattr(ro, "ssh_reach_ip",
+                        lambda cfg, s: (_ for _ in ()).throw(
+                            AssertionError("fell through to the shared-address lookup")))
+    monkeypatch.setattr(ro, "load_config", lambda: {})
+
+    t = ro._reachable_transport("S1")
+    assert t is not None
+    assert t.user == "ceres", "connected as root; screenshots would misbehave"
+    assert t.ip == "fe80::f5:d7ff:fe04:51d1%enp0s20u3u4u2i1", (
+        "the address lost its scope -- without it the host cannot tell which "
+        "interface, and therefore which watch, is meant")
+    assert " -6" in t.shell.__self__._family
+
+    # host end has no address on the link -> decline, do not pretend
+    monkeypatch.setattr(ro, "host_has_link_local", lambda i: False)
+    monkeypatch.setattr(ro, "ssh_reach_ip", lambda cfg, s: None)
+    monkeypatch.setattr(ro, "orbit_members", lambda cfg: {})
+    assert ro._reachable_transport("S1") is None
+
+    # a watch whose gadget carries no NCM must not be routed this way
+    monkeypatch.setattr(ro, "host_has_link_local", lambda i: True)
+    monkeypatch.setattr(ro, "gadget_composition",
+                        lambda p: {"adb": True, "ncm": False,
+                                   "mass_storage_only": False, "interfaces": []})
+    assert ro._reachable_transport("S1") is None

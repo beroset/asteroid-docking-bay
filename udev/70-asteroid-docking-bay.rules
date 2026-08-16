@@ -86,3 +86,28 @@ ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="17ef", RUN+="/bin/sh -c 'for f
 #
 # Generic fallback (covers most watches; prefer the android-udev package):
 # SUBSYSTEM=="usb", ATTR{idVendor}=="18d1", MODE="0664", GROUP="users", TAG+="uaccess"
+
+# ── USB-NCM watches: give the host end a link-local ───────────────────────────
+# Newer watches (configfs kernels: aurora, sol) offer adb and a CDC-NCM network
+# function on ONE gadget, so ssh and adb are available at the same time. ssh
+# over that link needs no addressing at all: sshd listens on [::]:22, and an
+# IPv6 link-local with a scope (fe80::…%iface) reaches it with nothing assigned
+# on either side and no collisions, because the scope names the interface.
+#
+# The one thing in the way is the HOST end. NetworkManager claims these
+# interfaces as ordinary ethernet, parks them in "disconnected", assigns
+# nothing, and sets addr_gen_mode=1 ("none") so the kernel does not generate a
+# link-local either — leaving the interface with no IPv6 address, and therefore
+# no source address to reach the watch from.
+#
+# So: put the interface back under kernel defaults and bring it up. Pair this
+# with 90-asteroid-docking-bay-ncm.conf, which tells NetworkManager to leave
+# cdc_ncm devices alone; without that, NM reverts addr_gen_mode within seconds.
+#
+# Verified on the rig 2026-08-16: with a link-local present,
+#   ping -6 ff02::1%<iface>   →  fe80::ba:45ff:fe0b:aeb8
+#   ssh -6 ceres@fe80::ba:45ff:fe0b:aeb8%<iface>   →  sol, AsteroidOS 2.2-nightly
+# both entirely unprivileged. Note ssh takes NO brackets around the address;
+# brackets are URL syntax and ssh rejects them.
+ACTION=="add", SUBSYSTEM=="net", ENV{ID_NET_DRIVER}=="cdc_ncm", \
+    RUN+="/bin/sh -c 'sysctl -qw net.ipv6.conf.$name.addr_gen_mode=0; ip link set dev $name up'"

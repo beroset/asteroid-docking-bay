@@ -61,20 +61,56 @@ class AdbTransport(Transport):
 
 
 class SshTransport(Transport):
-    def __init__(self, ip: str = USB_SSH_IP, over: str = "usb"):
+    """SSH to a watch, over USB-RNDIS, WiFi, or a USB-NCM link.
+
+    `user` and IPv6 exist for the NCM watches. Their login is `ceres`, not
+    root: it is sufficient for every read a-d-b makes and REQUIRED for
+    screenshots, because the wayland socket is ceres:ceres inside
+    /run/user/1000 at mode 0700 -- root can traverse that but must set
+    XDG_RUNTIME_DIR and WAYLAND_DISPLAY by hand and may still hit
+    session-scoped auth.
+
+    An NCM watch is addressed by its IPv6 LINK-LOCAL with a scope, e.g.
+    fe80::ba:45ff:fe0b:aeb8%enp0s20u3u4u3i1. That needs no addressing on either
+    side and cannot collide, because the scope names the interface. Note the
+    address takes NO brackets here: brackets are URL syntax (scp, curl), and
+    ssh rejects them -- verified on the rig, where the bracketed form failed
+    with "Could not resolve hostname".
+    """
+
+    def __init__(self, ip: str = USB_SSH_IP, over: str = "usb",
+                 user: str = "root"):
         self.ip = ip
         self.over = over
+        self.user = user
         self.kind = f"ssh ({over})"
 
+    @property
+    def _target(self) -> str:
+        return f"{self.user}@{self.ip}"
+
+    @property
+    def _family(self) -> str:
+        # Force v6 for a link-local: with a scope there is nothing to guess,
+        # and it keeps a v4 fallback from silently changing which watch answers.
+        return " -6" if ":" in self.ip else ""
+
     def shell(self, cmd, timeout=8, check=False):
-        return _run(f"ssh {_SSH_OPTS} root@{self.ip} {cmd}",
+        return _run(f"ssh{self._family} {_SSH_OPTS} {self._target} {cmd}",
                     check=check, timeout=timeout)
 
     def pull(self, remote, local, timeout=15):
         # -r so a directory (backup: .config, connman) copies like `adb pull`.
+        # scp DOES want brackets around a v6 address, unlike ssh.
+        if ":" in self.ip:
+            return _run(f"scp -6 {_SSH_OPTS} -r {self.user}@[{self.ip}]:{remote} {local}",
+                        check=False, timeout=timeout)
         return _run(f"scp {_SSH_OPTS} -r root@{self.ip}:{remote} {local}",
                     check=False, timeout=timeout)
 
     def push(self, local, remote, timeout=15):
+        if ":" in self.ip:
+            return _run(f"scp -6 {_SSH_OPTS} -r {local} {self.user}@[{self.ip}]:{remote}",
+                        check=False, timeout=timeout)
         return _run(f"scp {_SSH_OPTS} -r {local} root@{self.ip}:{remote}",
                     check=False, timeout=timeout)

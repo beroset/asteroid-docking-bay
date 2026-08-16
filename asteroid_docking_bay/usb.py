@@ -700,6 +700,42 @@ def usb_netdev_for(path: str) -> "str | None":
     return None
 
 
+def ncm_peer_link_local(iface: str, timeout: float = 3.0) -> "str | None":
+    """The watch's IPv6 link-local on this interface, or None.
+
+    Discovered, never cached: the address is EUI-64 from the watch's usb0 MAC,
+    and the kernel generates that MAC randomly EVERY time the ncm function is
+    created -- i.e. every boot. Caching it would address a watch that has since
+    moved. What is stable, and worth caching, is hub:port -> iface.
+
+    One all-nodes multicast ping populates the neighbour table, then the table
+    answers. Both are local to this link; nothing is routed and no address is
+    assigned at either end.
+
+    Returns None when the HOST interface has no link-local of its own -- with
+    no source address on the link there is nothing to ping from. That happens
+    when NetworkManager sets addr_gen_mode=none and has not assigned one, and
+    the remedy is host configuration, not a watch problem.
+    """
+    _run(f"ping -6 -c 2 -W 1 ff02::1%{iface}", check=False, timeout=timeout)
+    rc, out, _ = _run(f"ip -6 neigh show dev {iface}", check=False, timeout=timeout)
+    if rc != 0:
+        return None
+    for line in out.splitlines():
+        parts = line.split()
+        # "fe80::ba:45ff:fe0b:aeb8 lladdr 02:ba:45:0b:ae:b8 REACHABLE"
+        if len(parts) >= 3 and parts[0].lower().startswith("fe80:") \
+                and "lladdr" in parts and "FAILED" not in line:
+            return parts[0]
+    return None
+
+
+def host_has_link_local(iface: str) -> bool:
+    """Whether the HOST end of this link has an address to speak from."""
+    rc, out, _ = _run(f"ip -6 addr show dev {iface} scope link", check=False, timeout=3)
+    return rc == 0 and "inet6 fe80:" in out
+
+
 def test_port_power_switching(location: str, port: int,
                               serial: str | None = None) -> tuple[bool | None, str]:
     """

@@ -46,7 +46,8 @@ from .usb import (_sysfs_hub_scan, _sysfs_path_to_serial_map, adb_usb_paths,
                   _sysfs_serial_at, xhci_slots,
                   test_port_power_switching, uhubctl_cycle, uhubctl_set_power, watch_devices_on_bus,
                   uhubctl_get_power, port_device_info, discover_hubs,
-                  hub_vendors)
+                  hub_vendors, gadget_composition, host_has_link_local,
+                  ncm_peer_link_local)
 from . import drainlog, wifi
 from .watchctl import BACKUP_ROOT, DIAG_ROOT, Watch, _watch_os
 from .ops import ChargeOp, DrainOp, WorkbenchOp, _flash_one_watch
@@ -75,6 +76,48 @@ from . import __version__
 DISPATCH = Dispatcher()
 
 
+def _ncm_transport(serial: "str | None"):
+    """SSH over the watch's own USB-NCM link, or None.
+
+    Newer watches carry adb and a CDC-NCM network function on one gadget, and
+    sshd listens on [::]:22, so the watch is reachable at its IPv6 LINK-LOCAL
+    with a scope -- no address assigned at either end, and no collisions
+    possible, because the scope names the interface.
+
+    The peer address is discovered every time, never cached: it is EUI-64 from
+    the watch's usb0 MAC, and the kernel regenerates that MAC each time the ncm
+    function is created, i.e. every boot. Caching would address a watch that no
+    longer exists.
+
+    The login is `ceres`, not root: sufficient for every read a-d-b makes and
+    required for screenshots, since the wayland socket is ceres:ceres inside
+    /run/user/1000 at mode 0700.
+
+    Costs a multicast ping, so this belongs on an op, never on the status
+    refresh.
+    """
+    link = usb_net_link_for(serial)
+    if not link:
+        return None
+    path, iface = link.get("usb_path"), link.get("iface")
+    if not path or not iface:
+        return None
+    if not gadget_composition(path).get("ncm"):
+        return None
+    if not host_has_link_local(iface):
+        # The watch is fine; this host has no address on the link. Say which,
+        # because the remedy is the shipped NetworkManager/udev config rather
+        # than anything on the watch.
+        log.info("%s: NCM link on %s but the host interface has no IPv6 "
+                 "link-local — see udev/90-asteroid-docking-bay-ncm.conf",
+                 serial, iface)
+        return None
+    peer = ncm_peer_link_local(iface)
+    if not peer:
+        return None
+    return SshTransport(f"{peer}%{iface}", over="ncm", user="ceres")
+
+
 def _reachable_transport(serial: str):
     """How to reach a watch right now: adb when it is on adb, else SSH at its
     assigned address when it is in SSH/developer mode there. Returns None to
@@ -86,6 +129,13 @@ def _reachable_transport(serial: str):
     with no change at the call site beyond going through _watch()."""
     if _adb_state(adb_devices(), serial) == "device":
         return None
+    # An NCM watch first: it is reachable with no addressing at all, and its
+    # link is the one a-d-b can be sure belongs to THIS watch (the scope names
+    # the interface). The RNDIS-era address lookup below cannot say that -- a
+    # watch on the shared default is whichever one won the route.
+    ncm = _ncm_transport(serial)
+    if ncm:
+        return ncm
     cfg = load_config()
     ip = ssh_reach_ip(cfg, serial)
     if ip:
