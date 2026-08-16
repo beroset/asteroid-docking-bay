@@ -265,6 +265,14 @@ def get_watch_codename(serial: str, shell=None) -> str | None:
 # showed catfish frozen at 50% for weeks because of it.
 BATTERY_DIRS = (
     "/sys/class/power_supply/nanohub_fuelgauge-*",
+    # The Snapdragon W5100 platform's named gauge (aurora, sol). Ahead of the
+    # generic `battery`, which on sol exists but fails every read with EAGAIN
+    # -- an attribute that is present and unreadable, which is worse than an
+    # absent one because every reader sees a candidate. Measured 2026-08-16:
+    # sw5100_bms answers `status` and `voltage_now` while its own `capacity`
+    # returns ENODATA, so this wins nothing today and is right the moment the
+    # gauge reports.
+    "/sys/class/power_supply/sw5100_bms",
     "/sys/class/power_supply/battery",
     "/sys/class/power_supply/Battery",
     "/sys/class/power_supply/max170xx_battery",
