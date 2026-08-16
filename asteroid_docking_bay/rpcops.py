@@ -39,11 +39,13 @@ from .config import (_config_lock, _store_smart_verdict, allocate_ssh_ip,
                      find_codename_for_loc_port, find_serial_for_loc_port,
                      flash_config, load_config, save_config,
                      orbit_add, orbit_forget, orbit_members,
-                     hands_cal_for, set_hands_cal, set_hub_name)
+                     hands_cal_for, set_hands_cal, set_hub_name,
+                     register_hubs, seed_hub_names, hub_name_for)
 from .usb import (_sysfs_hub_scan, _sysfs_path_to_serial_map, adb_usb_paths,
                   _sysfs_serial_at, xhci_slots,
                   test_port_power_switching, uhubctl_cycle, uhubctl_set_power, watch_devices_on_bus,
-                  uhubctl_get_power, port_device_info, discover_hubs)
+                  uhubctl_get_power, port_device_info, discover_hubs,
+                  hub_vendors)
 from . import drainlog, wifi
 from .watchctl import BACKUP_ROOT, DIAG_ROOT, Watch, _watch_os
 from .ops import ChargeOp, DrainOp, WorkbenchOp, _flash_one_watch
@@ -110,6 +112,10 @@ def _status_get(args):
         "drain_floor": _DRAIN_FLOOR_PCT,
         "wearable_min_hours": cfg.get("wearable_min_hours", 24),
         "usb_mode_preference": usb_mode_preference(cfg),
+        # Nothing onboarded yet -> the welcome screen opens by itself. A user
+        # who has just installed a-d-b has no reason to know a setup guide
+        # exists, and it used to live behind a small text link.
+        "fresh": not (cfg.get("hubs") or cfg.get("serials") or orbit_members(cfg)),
         # The resource that actually limits this rig — see the xHCI audit. Sent
         # every refresh so the header can show it filling up BEFORE devices
         # start failing to configure.
@@ -884,7 +890,10 @@ def _onboard_guide(args):
         # dumb hub is exactly who this guide is for. `map` already discovers
         # this way, so the guide and map now agree about what is plugged in.
         boxes: dict = {}
-        for hub in discover_hubs():
+        # Chipset-internal hubs carry no physical sockets, so a user shown
+        # one would be hunting for a socket that does not exist. `map` skips
+        # them for the same reason.
+        for hub in [h for h in discover_hubs() if not h.get("internal")]:
             loc = hub.get("location") or ""
             root = loc.split(".")[0]
             box = boxes.setdefault(root, {"root": root, "chips": [], "ports": 0,
@@ -2301,6 +2310,31 @@ def _onboard_stream(loc: str, port: int):
         if msg is None:
             return
         yield msg
+
+
+@DISPATCH.op("onboard.map_hubs")
+def _onboard_map_hubs(args):
+    """Register the hub topology -- the guided setup's mapping step, and the
+    same write `map` performs, through the same helper so the two cannot
+    drift.
+
+    Switches no power and probes no watch: a hub is registered so that it and
+    its ports exist to put things on, and a port's real switchability is
+    verified at runtime the first time it is toggled with a watch present.
+    That is what makes this safe to run with the rig populated.
+    """
+    hubs = [h for h in discover_hubs() if not h.get("internal")]
+    if not hubs:
+        return {"ok": False, "error": "no USB hubs found"}
+    with _config_lock:
+        cfg = load_config()
+        registered = register_hubs(cfg, hubs)
+        seed_hub_names(cfg, hub_vendors())
+        save_config(cfg)
+    return {"ok": True, "hubs": [
+        {"location": h["location"], "ppps": h.get("ppps", False),
+         "ports": len(h.get("ports", {}) or {}),
+         "name": hub_name_for(cfg, h["location"])} for h in registered]}
 
 
 @DISPATCH.op("onboard.identify")

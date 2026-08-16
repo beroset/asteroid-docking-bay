@@ -21,7 +21,7 @@ from .config import (CONFIG_FILE, ChargeConfig, charge_config, flash_config,
                      find_serial_for_codename, resolve_single_port,
                      find_serial_for_loc_port, is_port_smart, is_slot_smart,
                      exact_codename_for_serial, hub_name_for, load_config,
-                     save_config, seed_hub_names)
+                     register_hubs, save_config, seed_hub_names)
 from .usb import (hub_vendors, test_port_power_switching,
                   discover_hubs, uhubctl_get_power, uhubctl_set_power)
 from .events import event_log
@@ -670,19 +670,7 @@ def cmd_map(args, cfg: dict):
     # mappings, per-port smart verdicts, socket labels, excludes — and refreshing
     # only the advertised ppps flag. Config entries for hubs not in this scan
     # (temporarily unplugged) are kept untouched.
-    existing = {hub["location"]: hub for hub in cfg.get("hubs", [])}
-    scanned = {hub["location"] for hub in hubs}
-    registered: list[dict] = []
-    for hub in hubs:
-        loc = hub["location"]
-        entry = {**existing.get(loc, {}), "location": loc,
-                 "ppps": hub.get("ppps", False),
-                 "description": hub.get("description", "")}
-        entry.setdefault("ports", {})
-        entry.setdefault("port_smart", {})
-        registered.append(entry)
-    cfg["hubs"] = registered + [hub for hub in cfg.get("hubs", [])
-                                if hub["location"] not in scanned]
+    register_hubs(cfg, hubs)
 
     # Auto-name the physical boxes (idempotent — only fills an unset map).
     if seed_hub_names(cfg, hub_vendors()):

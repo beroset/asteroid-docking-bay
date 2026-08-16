@@ -2747,69 +2747,74 @@ def test_guided_setup_gates_on_hardware_not_on_the_user(tmp_path):
     Two gates carry the whole value of the flow and both are easy to write
     permissively by accident:
 
-    1. **The bus must be EMPTY before it proceeds.** Every later read-back is a
-       diff against that empty snapshot, so a guide that advances with watches
-       still attached silently mis-attributes them later.
-    2. **Exactly one new watch at step 4.** Two appearing at once is the flood
-       that crashes adb and half-enumerates cascades — the failure this entire
-       sequence exists to prevent — so it must HARD STOP rather than seat the
-       first one it happens to see.
+    1. **The bus must be EMPTY before the hub is registered.** Every later
+       read-back is a diff against that empty snapshot, so a guide that
+       advances with watches still attached silently mis-attributes them.
+    2. **Exactly one new watch when adding to a hub.** Two appearing at once is
+       the flood that crashes adb and half-enumerates cascades -- the failure
+       this sequence exists to prevent -- so it must HARD STOP rather than
+       adopt the first one it happens to see.
     """
     import json
     h = tmp_path / "guide.js"
     h.write_text(_DOM_STUBS + JS + r"""
       const calls=[];
       global.fetch=(u)=>{calls.push(u);
-        let body={ok:true};
+        let body={ok:true,codename:'hoki'};
         if(u.endsWith('/bus'))body={ok:true,watches:global.__BUS};
         return Promise.resolve({json:()=>Promise.resolve(body)});};
       const out={};
-      // step 1 with watches still on the bus -> must NOT advance
+      // the bus still has watches on it -> must NOT proceed to registering
       global.__BUS=[{path:'1-3.2',serial:'S1',product:'hoki'}];
-      _gStep=1; _gRead={};
+      _gState='hubclear'; _gNote=null;
       gCheckEmpty();
       setTimeout(()=>{
-        out.stepAfterBusy=_gStep;
-        out.busyClass=(_gRead[1]||{}).cls;
-        // now empty -> advances, and snapshots
+        out.stateAfterBusy=_gState;
+        out.busyClass=(_gNote||{}).cls;
+        // now empty -> advances
         global.__BUS=[];
         gCheckEmpty();
         setTimeout(()=>{
-          out.stepAfterEmpty=_gStep;
-          // step 4 with TWO new watches -> hard stop, seats nothing
-          _gStep=4; _gRead={}; _gSeated=[];
-          global.__BUS=[{path:'1-3.2',product:'a'},{path:'1-3.3',product:'b'}];
+          out.stateAfterEmpty=_gState;
+          // TWO new watches at once -> hard stop, adopts nothing
+          _gState='hubwatch'; _gNote=null; _gAdopted=[]; _gSeen=[];
+          global.__BUS=[{path:'1-3.2',product:'a',serial:'A'},
+                        {path:'1-3.3',product:'b',serial:'B'}];
           gCheckWatch();
           setTimeout(()=>{
-            out.twoClass=(_gRead[4]||{}).cls;
-            out.seatedAfterTwo=_gSeated.length;
-            // exactly one -> seats it
-            _gRead={}; _gSeated=[];
+            out.twoClass=(_gNote||{}).cls;
+            out.adoptedAfterTwo=_gAdopted.length;
+            // exactly one -> adopted
+            _gNote=null; _gAdopted=[]; _gSeen=[];
             global.__BUS=[{path:'1-3.2',product:'a',serial:'S9'}];
             gCheckWatch();
             setTimeout(()=>{
-              out.oneClass=(_gRead[4]||{}).cls;
-              out.seatedAfterOne=_gSeated.length;
+              out.adoptedAfterOne=_gAdopted.length;
+              out.namedItself=calls.some(u=>u.indexOf('/api/onboard/identify/')>=0);
               console.log(JSON.stringify(out));
               process.exit(0);
-            },5);
-          },5);
-        },5);
-      },5);
+            },20);
+          },20);
+        },20);
+      },20);
     """)
     r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
     assert r.returncode == 0, r.stderr[:500]
     out = json.loads(r.stdout.strip().splitlines()[-1])
 
-    assert out["stepAfterBusy"] == 1, "advanced past step 1 with watches still attached"
+    assert out["stateAfterBusy"] == "hubclear", (
+        "went on to register the hub with watches still attached")
     assert out["busyClass"] == "hold"
-    assert out["stepAfterEmpty"] == 2, "did not advance once the bus was empty"
+    assert out["stateAfterEmpty"] == "hubmap", "did not advance once the bus was empty"
 
     assert out["twoClass"] == "stop", "two watches at once was not a hard stop"
-    assert out["seatedAfterTwo"] == 0, (
-        "seated a watch during a multi-watch flood — the exact failure this "
+    assert out["adoptedAfterTwo"] == 0, (
+        "adopted a watch during a multi-watch flood -- the exact failure this "
         "sequence exists to prevent")
-    assert out["oneClass"] == "pass" and out["seatedAfterOne"] == 1
+    assert out["adoptedAfterOne"] == 1
+    assert out["namedItself"], (
+        "the watch was not named automatically -- a new owner should never have "
+        "to look up their watch's codename")
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
@@ -3338,8 +3343,8 @@ def test_device_supplied_strings_reach_the_dom_escaped(tmp_path):
     h = tmp_path / "xss.js"
     h.write_text(_DOM_STUBS + JS + r"""
       const HOSTILE = '<img src=x onerror=alert(1)>';
-      _gStep=1; _gRead={};
-      gRead(1,'hold','2 still connected:\n    1-3.2  '+HOSTILE+'  S1');
+      _gState='hubclear'; _gNote=null;
+      gNote('hold','2 still connected:\n    1-3.2  '+HOSTILE+'  S1');
       const panel=global.__lastGuideHtml||'';
       const out={guide:panel};
       console.log(JSON.stringify(out));
@@ -3348,11 +3353,11 @@ def test_device_supplied_strings_reach_the_dom_escaped(tmp_path):
                 "(global.__els&&global.__els.guide&&global.__els.guide.innerHTML)||''"))
     # capture the guide panel's innerHTML
     src = h.read_text().replace(
-        "_gStep=1; _gRead={};",
+        "_gState='hubclear'; _gNote=null;",
         "const guideEl={id:'guide',style:{},innerHTML:''};"
         "global.__els={guide:guideEl};"
         "global.document.getElementById=id=>global.__els[id]||el();"
-        "_gStep=1; _gRead={};")
+        "_gState='hubclear'; _gNote=null;")
     h.write_text(src)
     r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
     assert r.returncode == 0, r.stderr[:400]

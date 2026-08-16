@@ -286,6 +286,33 @@ def derive_hub_names(hubs: "list[dict]") -> "dict[str, str]":
     return names
 
 
+def register_hubs(cfg: dict, hubs: "list[dict]") -> "list[dict]":
+    """(Re)register scanned hubs into cfg["hubs"], preserving everything already
+    learned for each one -- watch mappings, per-port smart verdicts, socket
+    labels, excludes -- and refreshing only the advertised ppps flag. Hubs in
+    the config that this scan did not see (temporarily unplugged) are kept
+    untouched rather than dropped.
+
+    Shared by the `map` command and the guided setup so the two cannot drift:
+    a second implementation of this merge would be a second set of rules about
+    what survives a re-map.
+    """
+    existing = {hub["location"]: hub for hub in cfg.get("hubs", [])}
+    scanned = {hub["location"] for hub in hubs}
+    registered: list[dict] = []
+    for hub in hubs:
+        loc = hub["location"]
+        entry = {**existing.get(loc, {}), "location": loc,
+                 "ppps": hub.get("ppps", False),
+                 "description": hub.get("description", "")}
+        entry.setdefault("ports", {})
+        entry.setdefault("port_smart", {})
+        registered.append(entry)
+    cfg["hubs"] = registered + [hub for hub in cfg.get("hubs", [])
+                                if hub["location"] not in scanned]
+    return registered
+
+
 def seed_hub_names(cfg: dict, vendor_hubs: "list[dict]") -> bool:
     """If hub_names is unset, auto-name the physical boxes that actually contain
     a configured hub (so stray host hubs on other buses aren't named). Returns

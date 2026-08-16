@@ -198,16 +198,14 @@ _WEB_TEMPLATE = """\
       background:none;border:none;color:#8b949e;font:inherit;font-size:11px;cursor:pointer;
       text-decoration:underline dotted}
     .tmsg-all:hover{color:#c9d1d9}
-    .gstep{display:flex;gap:12px;padding:11px 4px;border-bottom:1px solid #21262d;align-items:flex-start}
-    .gstep:last-child{border-bottom:none}
-    .gnum{flex:none;width:24px;height:24px;border-radius:50%;border:1px solid #30363d;color:#8b949e;
-      display:inline-flex;align-items:center;justify-content:center;font-size:11px}
-    .gstep.now .gnum{border-color:#58a6ff;color:#58a6ff}
-    .gstep.done .gnum{border-color:#3fb950;color:#3fb950}
-    .gstep.todo{opacity:.45}
-    .gbody{flex:1;min-width:0}
-    .gtitle{font-weight:700}
-    .ginstr{color:#c9d1d9;margin:5px 0 7px}
+    .gwrap{padding:16px 20px 20px}
+    .gtitle{font-weight:700;font-size:19px;margin-bottom:9px}
+    .gacts{margin-top:14px;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+    .gskip{color:#6e7681;font-size:12px;margin-left:6px;text-decoration:underline dotted}
+    .gskip:hover{color:#8b949e}
+    .ginput{background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#c9d1d9;
+            padding:6px 9px;font-size:13px;min-width:220px}
+    .ginstr{color:#c9d1d9;margin:5px 0 7px;white-space:pre-wrap;line-height:1.5}
     .gread{font-size:12px;color:#8b949e;border-left:2px solid #30363d;padding:3px 0 3px 9px;margin:6px 0;white-space:pre-wrap}
     .gread.pass{border-left-color:#3fb950;color:#c9d1d9}
     .gread.hold{border-left-color:#d29922}
@@ -606,7 +604,7 @@ _WEB_TEMPLATE = """\
   <div id="alert" class="alert"></div>
   <div class="hdr">
   <h1><span class="hdim">&#x2728;  &#x22C6;  &#x02DA; </span>&#x2726;<span class="htxt">  asteroid-docking-bay  </span>&#x2726;<span class="hdim"> &#x02DA;  &#x22C6;  &#x2728;</span></h1>
-  <p class="meta"><span class="mgrp"><a href="#" id="histlink" class="vtog" onclick="toggleHistory();return false">drain history</a><a href="#" id="hidlink" class="vtog" onclick="toggleShowHidden();return false">all ports</a></span><span class="mgrp"><a href="#" id="reglink" class="mopen" onclick="openRegistry();return false" title="the Fleet Registry &mdash; every watch the rig has ever seen (docked or in orbit), its identity, first/last sighting, and a Log of what changed (kernel, Qt, MACs, resolution) over time. Fleet-wide actions live here too.">fleet registry</a><a href="#" id="btlink" class="mopen" onclick="openBtScan();return false" title="scan for AsteroidOS watches over Bluetooth (they advertise their codename) and pair them &mdash; the first rung of Bluetooth in the Orbit port">scan bt</a><a href="#" id="msglink" class="mopen" onclick="openMsgs();return false" title="every message this session, newest first &mdash; progress, results and errors. Errors stay on screen until dismissed; everything else lands here after it fades, so a message you looked away from is still readable.">messages</a><a href="#" id="guidelink" class="mopen" onclick="openGuide();return false" title="guided setup &mdash; walks a new rig from nothing to a mapped fleet: empty the bus, replug the hub, map it bare, then onboard watches one at a time. Each step waits for the hardware to confirm it happened.">guided setup</a></span><span class="mgrp mpol"><span class="dim">mode</span><a href="#" id="modelink" class="mpref" onclick="toggleMode();return false" title="developer shows everything: diagnostics, drain tests, workbench, wanze, the compile cluster and bootloader steering.&#10;user hides the lab and leaves the fleet: onboarding, charge, flashing, backups, settings, WiFi/BT and orbit.&#10;&#10;A guard rail against clutter and misclicks, not a security boundary — the backend still accepts every op.">developer</a></span><span class="mgrp mpol"><span class="dim">usb</span><a href="#" id="usbpreflink" class="mpref" onclick="toggleUsbPref();return false" title="Fleet USB-mode preference &mdash; how a watch that comes up on its own in the wrong mode is auto-corrected:&#10;&#10;&bull; prefer ADB (standard): a stray SSH watch is switched back to adb &mdash; faster, and how a stock flash enumerates&#10;&bull; prefer SSH: a stray watch is given its own SSH IP so several can run SSH at once &mdash; needed for WiFi/workbench work, but updates are slower&#10;&#10;A watch you switched by hand is left alone. Click to switch.">prefer ADB</a></span></p>
+  <p class="meta"><span class="mgrp"><a href="#" id="histlink" class="vtog" onclick="toggleHistory();return false">drain history</a><a href="#" id="hidlink" class="vtog" onclick="toggleShowHidden();return false">all ports</a></span><span class="mgrp"><a href="#" id="reglink" class="mopen" onclick="openRegistry();return false" title="the Fleet Registry &mdash; every watch the rig has ever seen (docked or in orbit), its identity, first/last sighting, and a Log of what changed (kernel, Qt, MACs, resolution) over time. Fleet-wide actions live here too.">fleet registry</a><a href="#" id="btlink" class="mopen" onclick="openBtScan();return false" title="scan for AsteroidOS watches over Bluetooth (they advertise their codename) and pair them &mdash; the first rung of Bluetooth in the Orbit port">scan bt</a><a href="#" id="msglink" class="mopen" onclick="openMsgs();return false" title="every message this session, newest first &mdash; progress, results and errors. Errors stay on screen until dismissed; everything else lands here after it fades, so a message you looked away from is still readable.">messages</a></span><span class="mgrp mpol"><span class="dim">mode</span><a href="#" id="modelink" class="mpref" onclick="toggleMode();return false" title="developer shows everything: diagnostics, drain tests, workbench, wanze, the compile cluster and bootloader steering.&#10;user hides the lab and leaves the fleet: onboarding, charge, flashing, backups, settings, WiFi/BT and orbit.&#10;&#10;A guard rail against clutter and misclicks, not a security boundary — the backend still accepts every op.">developer</a></span><span class="mgrp mpol"><span class="dim">usb</span><a href="#" id="usbpreflink" class="mpref" onclick="toggleUsbPref();return false" title="Fleet USB-mode preference &mdash; how a watch that comes up on its own in the wrong mode is auto-corrected:&#10;&#10;&bull; prefer ADB (standard): a stray SSH watch is switched back to adb &mdash; faster, and how a stock flash enumerates&#10;&bull; prefer SSH: a stray watch is given its own SSH IP so several can run SSH at once &mdash; needed for WiFi/workbench work, but updates are slower&#10;&#10;A watch you switched by hand is left alone. Click to switch.">prefer ADB</a></span></p>
   <div id="sweeplog" style="display:none;position:fixed;right:14px;bottom:14px;width:min(560px,92vw);max-height:60vh;overflow:auto;background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:10px 12px;font:12px monospace;color:#c9d1d9;white-space:pre-wrap;z-index:300;box-shadow:0 6px 30px rgba(0,0,0,.6)"><a href="#" onclick="document.getElementById('sweeplog').style.display='none';return false" style="float:right;color:#6e7681">close</a><a href="#" onclick="sweepSkip();return false" style="float:right;color:#d29922;margin-right:12px" title="give up on the current port's boot-wait and move to the next socket">skip port</a><b style="color:#3fb950">onboard sweep</b>\\n<span id="sweeplogbody"></span></div>
   </div>
   <div class="tblwrap">
@@ -674,8 +672,8 @@ function watchName(codename){
   if(isDev()||!codename)return codename||'';
   return WATCH_PRODUCT[String(codename).toLowerCase()]||codename;
 }
-function toggleMode(){
-  uiMode=isDev()?'user':'developer';
+function setMode(m){
+  uiMode=(m==='user')?'user':'developer';
   try{localStorage.setItem('adb-mode',uiMode)}catch(e){}
   // One painter, called from here AND at load — the label used to be repainted
   // inline here, so anything added to paintMode applied on refresh but not on
@@ -684,6 +682,7 @@ function toggleMode(){
   closeMenu();
   if(lastData)render(lastData);
 }
+function toggleMode(){ setMode(isDev()?'user':'developer'); }
 const srcs={};
 const chargeEnd={};
 // Onboarding in flight, per slot: {t0, dur} — drives the Onboard pill's timed
@@ -1385,7 +1384,12 @@ function render(data){
   usbPref=(data&&data.usb_mode_preference)==='ssh'?'ssh':'adb';
   const upl=document.getElementById('usbpreflink');
   if(upl)upl.textContent=usbPref==='ssh'?'prefer SSH':'prefer ADB';
-  if(!hubs.length){tb.innerHTML='<tr><td colspan="8" class="dim">No watches configured. Run: asteroid-docking-bay map</td></tr>';return}
+  // Nothing mapped -> the guide opens itself, every page load, until something
+  // is. There is no button to summon it: a user who has just installed a-d-b
+  // does not know it exists, and a rig whose mapping was lost needs it back
+  // without anyone remembering where it lives.
+  if(data&&data.fresh&&!_gDismissed&&!gGuideOpen())openGuide();
+  if(!hubs.length){tb.innerHTML='<tr><td colspan="8" class="dim">No watches configured yet.</td></tr>';return}
   const rows=[];
   const present=new Set();   // serials enumerated this render, for the plug flash
   hubs.forEach(hub=>{
@@ -3005,180 +3009,260 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeWatchImg();clo
 // BARE, then onboard watches ONE AT A TIME. Every step gates on what the
 // hardware reports, never on the user asserting it happened — if a-d-b cannot
 // see the change, the step has not happened.
-let _gStep=0, _gSnap=null, _gBoxes=null, _gNoHub=false, _gSeated=[], _gRead={};
-const G_STEPS=[
-  {t:'Check the host',
-   i:'Nothing to unplug yet — this just confirms the tools and permissions a-d-b needs.'},
-  {t:'Empty the bus',
-   i:'Switch every physical port switch OFF and unplug every watch. Leave the hub plugged in.'},
-  {t:'Replug the hub',
-   i:'Unplug the hub from this computer, wait three seconds, and plug it back in.'},
-  {t:'Map the hub while it is empty',
-   i:'a-d-b will ask each port whether it can switch its own power. Safe now, because nothing is docked.'},
-  {t:'Add watches, one at a time',
-   i:'Dock exactly ONE watch and switch its port on. Repeat for each watch. No hub, or no free port? A watch plugged straight into this computer works too, and a watch on WiFi can be added by its IP without plugging in anything at all.'},
-  {t:'Done', i:''}
-];
+// ── Guided setup ─────────────────────────────────────────────────────────────
+// A state machine, not a fixed list of steps, because the first question
+// depends on what is ALREADY plugged in. The commonest start is not a tidy
+// empty bus: it is a watch that has been sitting in a USB port since before
+// a-d-b was installed. Telling that user to "empty the bus" first asks them to
+// undo the one thing they already did right.
+//
+//   scan        what is connected?  (entered automatically on open)
+//   found       something is  -> keep it where it is, or move it to a hub
+//   choose      nothing is    -> direct port / hub first / over WiFi
+//   waitdirect  polling for a watch to appear on any port
+//   hubclear    unplug the watches, plug the hub in bare
+//   hubmap      register the bare hub
+//   hubwatch    dock watches one at a time
+//   orbit       add by IP with nothing plugged in at all
+//   done        summary
+//
+// The user is NEVER asked to name a watch. The watch knows its own codename
+// and a-d-b reads it; a codename is not something a new owner should have to
+// look up. A name is only ever reported, and a failure to read one is shown
+// as a failure rather than handed to the user as a form.
+let _gState='scan', _gFound=[], _gBoxes=[], _gNoHub=false;
+let _gAdopted=[], _gPoll=null, _gNote=null, _gSeen=[], _gDismissed=false;
+
 function openGuide(){
   if(!panelShow('guide'))return;
-  renderGuide();
+  _gState='scan'; _gNote=null; _gAdopted=[]; _gBoxes=[]; _gNoHub=false;
+  renderGuide(); gScan();
 }
 function closeGuide(){
+  gStopPoll();
+  _gDismissed=true;      // do not spring back open on the next refresh
   panelHide('guide');
 }
-// Read-back text is built from USB DESCRIPTOR strings — product, serial, path —
-// which are whatever the plugged-in device says they are. This project already
-// treats a device-supplied serial as untrusted in a shell (the dump command
-// quotes it); the DOM deserves the same, and guided setup is precisely the flow
-// where unknown hardware gets plugged in. Escaped at render, so no caller has
-// to remember. A newline survives esc(), and .gread is white-space:pre-wrap,
-// so the multi-line read-backs still lay out.
-function gRead(k,cls,text){ _gRead[k]={cls:cls,text:text}; renderGuide(); }
+function gStopPoll(){ if(_gPoll){clearInterval(_gPoll);_gPoll=null;} }
+function gNote(cls,text){ _gNote={cls:cls,text:text}; renderGuide(); }
+function gGuideOpen(){
+  const p=document.getElementById('guide');
+  return !!p && p.style.display!=='none';
+}
+
+// ── the screens ──────────────────────────────────────────────────────────────
+function gView(){
+  if(_gState==='scan') return {
+    t:'Setting up', i:'Checking what is already connected…', a:''};
+
+  if(_gState==='found'){
+    const list=_gFound.map(w=>'    '+(w.product||'watch')+'  on port '+w.path+
+      (w.serial?'  ('+w.serial+')':'')).join('\\n');
+    return {
+      t:_gFound.length>1?'Found '+_gFound.length+' watches already connected'
+                        :'Found a watch already connected',
+      i:'Already plugged in and talking:\\n\\n'+list+'\\n\\n'+
+        'Keep '+(_gFound.length>1?'them':'it')+' on this port, or move to a USB hub? '+
+        'A hub is only needed to switch power per port — charging, drain tests and shelving. '+
+        'Everything else works on any port.',
+      a:`<button class="btn" onclick="gKeepHere()">Keep on this port</button>`+
+        ` <button class="btn" onclick="gMoveToHub()">Move to a hub</button>`+
+        ` <a href="#" class="gskip" onclick="gSkip();return false">skip setup</a>`};
+  }
+
+  if(_gState==='choose') return {
+    t:'Add your first watch',
+    i:'Nothing is connected yet. On the watch, USB access must be on: '+
+      'Settings → USB → ADB (SSH also works).\\n\\nHow do you want to connect it?',
+    a:`<button class="btn" onclick="gWaitDirect()">Straight into this computer</button>`+
+      ` <button class="btn" onclick="gMoveToHub()">Set up a USB hub first</button>`+
+      ` <button class="btn" onclick="gChooseOrbit()">Over WiFi, by IP</button>`+
+      ` <a href="#" class="gskip" onclick="gSkip();return false">skip setup</a>`};
+
+  if(_gState==='waitdirect') return {
+    t:'Plug the watch in',
+    i:'Connect the watch to any USB port on this computer. '+
+      'It will be picked up and named on its own — nothing to click.',
+    a:`<button class="btn" onclick="gScan()">start over</button>`};
+
+  if(_gState==='hubclear') return {
+    t:'Plug the hub in, with no watches on it',
+    i:'Unplug every watch first, then connect the hub. '+
+      'Mapping an empty hub is what keeps a-d-b from powering a port with a watch already on it.',
+    a:`<button class="btn" onclick="gCheckEmpty()">The bus is clear</button>`};
+
+  if(_gState==='hubmap') return {
+    t:'Register the hub',
+    i:'The bus is clear. a-d-b will record the hub and its ports. '+
+      'No power is switched: whether a port can really cut its own power is '+
+      'proven later, the first time it is used with a watch on it.',
+    a:`<button class="btn" onclick="gDoMap()">Register it</button>`};
+
+  if(_gState==='hubwatch') return {
+    t:'Add watches, one at a time',
+    i:'Dock ONE watch and switch its port on. It is named automatically. '+
+      'Repeat for each watch — one at a time, so every watch can be told apart '+
+      'by the port it appeared on.',
+    a:`<button class="btn" onclick="gCheckWatch()">I docked one</button>`+
+      ` <button class="btn" onclick="gDone()">Finished</button>`};
+
+  if(_gState==='orbit') return {
+    t:'Add a watch over WiFi',
+    i:'With nothing plugged in, a watch on the same network can still be added '+
+      'by its address. That gives the Control Center and the diagnostics pull; '+
+      'flashing and power features need a cable.',
+    a:`<input id="gorbip" class="ginput" type="text" spellcheck="false" autocomplete="off" `+
+      `placeholder="watch IP or hostname" onkeydown="if(event.key==='Enter')gDoOrbit()">`+
+      ` <button class="btn" onclick="gDoOrbit()">Add</button>`};
+
+  const ok=_gAdopted.filter(x=>x.ok);
+  return {
+    t:ok.length?'Set up':'Nothing was added',
+    i:(ok.length?ok.map(x=>'  ✓  '+x.label).join('\\n')+
+        '\\n\\n'+(ok.length>1?'They are':'It is')+' on the main screen now.'
+      :'No watch was added.')+
+      (_gNoHub?'\\n\\nWithout a hub that can switch its ports, charging, drain tests '+
+               'and shelving stay unavailable. Everything else works.':''),
+    a:`<button class="btn" onclick="closeGuide()">Close</button>`+
+      ` <button class="btn" onclick="gScan()">Add another watch</button>`};
+}
 function renderGuide(){
   const p=document.getElementById('guide'); if(!p)return;
-  const rows=G_STEPS.map((st,n)=>{
-    const cls=n<_gStep?'done':(n===_gStep?'now':'todo');
-    const r=_gRead[n];
-    const body=n===_gStep
-      ? `<div class="ginstr">${st.i}</div>`+
-        (r?`<div class="gread ${r.cls}">${esc(r.text)}</div>`:'')+
-        gActions(n)
-      : (n<_gStep&&r?`<div class="gread ${r.cls}">${esc(r.text)}</div>`:'');
-    return `<div class="gstep ${cls}"><span class="gnum">${n<_gStep?'&#10003;':n+1}</span>`+
-           `<div class="gbody"><div class="gtitle">${st.t}</div>${body}</div></div>`;
-  }).join('');
+  const v=gView();
+  const note=_gNote?`<div class="gread ${_gNote.cls}">${esc(_gNote.text)}</div>`:'';
   p.innerHTML='<div class="reg-hd"><b>Guided setup</b>'+
-    `<span class="dim">${_gNoHub?'no smart hub — power features unavailable':'step '+(_gStep+1)+' of '+G_STEPS.length}</span>`+
     '<a href="#" class="reg-x" onclick="closeGuide();return false">&times;</a></div>'+
-    '<div class="reg-body" style="padding:6px 14px 14px">'+rows+'</div>';
+    '<div class="reg-body gwrap">'+
+      `<div class="gtitle">${esc(v.t)}</div>`+
+      `<div class="ginstr">${esc(v.i)}</div>`+
+      note+
+      `<div class="gacts">${v.a}</div>`+
+    '</div>';
 }
-function gActions(n){
-  if(n===0)return `<button class="btn" onclick="gCheckHost()">Check the host</button>`;
-  if(n===1)return `<button class="btn" onclick="gCheckEmpty()">Check now</button>`;
-  if(n===2)return `<button class="btn" onclick="gCheckHubs()">Check now</button>`;
-  if(n===3)return `<button class="btn" onclick="gMapBare()">Map the ports</button>`+
-    ` <button class="btn" onclick="gSkipMap()">I have no smart hub</button>`;
-  if(n===4)return `<button class="btn" onclick="gCheckWatch()">Check now</button>`+
-    ` <button class="btn" onclick="gOrbitAdd()">add over WiFi instead</button>`+
-    ` <button class="btn" onclick="gFinish()">Finish</button>`;
-  return `<button class="btn" onclick="closeGuide()">Close</button>`;
+
+// ── actions ──────────────────────────────────────────────────────────────────
+function gScan(){
+  gStopPoll();
+  _gState='scan'; _gAdopted=[]; gNote('hold','looking at what is connected…');
+  fetch('/api/onboard/guide/bus').then(r=>r.json()).then(d=>{
+    _gFound=d.watches||[];
+    _gState=_gFound.length?'found':'choose';
+    _gNote=null; renderGuide();
+  }).catch(()=>gNote('stop','could not read the USB bus'));
 }
-function gCheckHost(){
-  fetch('/api/onboard/guide/preflight').then(r=>r.json()).then(d=>{
-    const lines=(d.checks||[]).map(c=>(c.ok?'✓ ':'✗ ')+c.id+' — '+c.detail+
-      (c.ok?'':'\\n    fix: '+c.fix)).join('\\n');
-    if(d.ready){ gRead(0,'pass',lines); _gStep=1; renderGuide(); }
-    else gRead(0,'hold',lines);
-  }).catch(()=>gRead(0,'stop','could not reach a-d-b'));
+// Naming is automatic and serialized: each one is an ADB round-trip to the
+// watch, and asking several at once would interleave on one adb server.
+function gAdoptAll(list,then){
+  const out=[];
+  const next=i=>{
+    if(i>=list.length){ _gAdopted=_gAdopted.concat(out); then(out); return; }
+    const w=list[i];
+    if(!w.serial){
+      out.push({ok:false,label:(w.product||w.path)+' — no serial on the bus'});
+      next(i+1); return;
+    }
+    fetch('/api/onboard/identify/'+encodeURIComponent(w.serial),{method:'POST'})
+      .then(r=>r.json()).then(d=>{
+        out.push(d&&d.ok?{ok:true,label:d.codename+'  on '+w.path}
+                        :{ok:false,label:(w.product||w.serial)+' — '+((d&&d.error)||'did not answer')});
+        next(i+1);
+      }).catch(()=>{out.push({ok:false,label:w.serial+' — did not answer'});next(i+1);});
+  };
+  gNote('hold','reading '+list.length+' watch(es)…'); next(0);
+}
+function gKeepHere(){
+  _gNoHub=true;
+  gAdoptAll(_gFound,()=>{ gGoDone(); refresh(); });
+}
+function gMoveToHub(){ _gState='hubclear'; _gNote=null; renderGuide(); }
+function gChooseOrbit(){ _gState='orbit'; _gNote=null; renderGuide(); }
+function gWaitDirect(){
+  _gNoHub=true; _gState='waitdirect'; _gNote=null; renderGuide();
+  fetch('/api/onboard/guide/bus').then(r=>r.json()).then(d=>{
+    _gSeen=(d.watches||[]).map(w=>w.path);
+    gStopPoll(); _gPoll=setInterval(gPollDirect,2000);
+  }).catch(()=>gNote('stop','could not read the USB bus'));
+}
+function gPollDirect(){
+  fetch('/api/onboard/guide/bus').then(r=>r.json()).then(d=>{
+    const fresh=(d.watches||[]).filter(w=>_gSeen.indexOf(w.path)<0);
+    if(!fresh.length)return;
+    gStopPoll();
+    gAdoptAll(fresh,()=>{ gGoDone(); refresh(); });
+  }).catch(()=>{});
 }
 function gCheckEmpty(){
   fetch('/api/onboard/guide/bus').then(r=>r.json()).then(d=>{
     const w=d.watches||[];
-    if(!w.length){ _gSnap=[]; gRead(1,'pass','no watches on the bus — good'); _gStep=2; renderGuide(); }
-    else gRead(1,'hold',w.length+' still connected:\\n'+
-      w.map(x=>'    '+x.path+'  '+(x.product||'?')+'  '+(x.serial||'')).join('\\n'));
-  }).catch(()=>gRead(1,'stop','could not read the bus'));
+    if(!w.length){ _gState='hubmap'; _gNote=null; renderGuide(); return; }
+    gNote('hold',w.length+' still connected — unplug '+(w.length>1?'these':'this')+' first:\\n'+
+      w.map(x=>'    '+x.path+'  '+(x.product||'?')).join('\\n'));
+  }).catch(()=>gNote('stop','could not read the USB bus'));
 }
-function gCheckHubs(){
-  fetch('/api/onboard/guide/hubs').then(r=>r.json()).then(d=>{
-    const b=d.boxes||[];
-    if(!b.length){ gRead(2,'hold','no switchable hub found yet. If your hub cannot switch its ports, choose "I have no smart hub" on the next step.'); _gStep=3; renderGuide(); return; }
-    _gBoxes=b;
-    gRead(2,'pass',b.map(x=>'✓ one hub box at '+x.root+' — '+x.ports+' ports'+
-      (x.chips.length>1?' across '+x.chips.length+' internal chips (normal: one box reports as several hubs)':'')).join('\\n'));
-    _gStep=3; renderGuide();
-  }).catch(()=>gRead(2,'stop','could not read the hubs'));
-}
-function gSkipMap(){
-  _gNoHub=true;
-  gRead(3,'hold','No smart hub. Watches can still be onboarded, but charge, drain, shelve and automatic recovery cycles are unavailable — they all need a port that can switch its own power.');
-  _gStep=4; renderGuide();
-}
-// Serialized on purpose: one port at a time, never a burst.
-function gMapBare(){
-  if(!_gBoxes||!_gBoxes.length){ gSkipMap(); return; }
-  const ports=[];
-  _gBoxes.forEach(b=>b.chips.forEach(c=>c.ports.forEach(pn=>ports.push([c.location,pn]))));
-  const results=[];
-  gRead(3,'hold','probing '+ports.length+' ports, one at a time…');
-  const next=i=>{
-    if(i>=ports.length){
-      const smart=results.filter(r=>r.responds).length;
-      _gNoHub=(smart===0);
-      gRead(3,smart?'pass':'hold',
-        smart+' of '+ports.length+' ports switch power.\\n'+
-        results.map(r=>(r.responds?'✓ ':'✗ ')+r.loc+' p'+r.port+
-          (r.responds?'':' — dumb port')).join('\\n')+
-        '\\n\\nThis is the power register answering. Whether VBUS really drops is confirmed on the next step, by the first watch reporting that it is charging.');
-      _gStep=4; renderGuide(); return;
-    }
-    const [loc,pn]=ports[i];
-    fetch('/api/onboard/guide/probe/'+loc+'/'+pn,{method:'POST'}).then(r=>r.json()).then(d=>{
-      results.push({loc:loc,port:pn,responds:!!d.responds});
-      next(i+1);
-    }).catch(()=>{results.push({loc:loc,port:pn,responds:false});next(i+1);});
-  };
-  next(0);
+function gDoMap(){
+  gNote('hold','registering the hub…');
+  fetch('/api/onboard/map_hubs',{method:'POST'}).then(r=>r.json()).then(d=>{
+    if(!d||!d.ok){ gNote('stop',(d&&d.error)||'no hub found — is it plugged in?'); return; }
+    _gBoxes=d.hubs||[];
+    const smart=_gBoxes.filter(h=>h.ppps).length;
+    _gNoHub=(smart===0);
+    _gState='hubwatch';
+    gNote(smart?'pass':'hold',
+      _gBoxes.map(h=>(h.ppps?'✓ ':'✗ ')+(h.name||h.location)+'  '+h.location+
+        (h.ppps?'':' — cannot switch its own power')).join('\\n')+
+      (smart?'':'\\n\\nThis hub cannot switch port power. Watches on it still work; '+
+               'charging, drain tests and shelving do not.'));
+    refresh();
+  }).catch(()=>gNote('stop','could not register the hub'));
 }
 function gCheckWatch(){
   fetch('/api/onboard/guide/bus').then(r=>r.json()).then(d=>{
-    const seen=(d.watches||[]).map(w=>w.path);
-    const known=new Set((_gSnap||[]).concat(_gSeated.map(s=>s.path)));
-    const fresh=(d.watches||[]).filter(w=>!known.has(w.path));
-    if(fresh.length===0){
-      gRead(4,'hold','No new watch yet. Check the port’s physical switch, the cradle seating, and that the port is powered on.');
-    }else if(fresh.length>1){
-      gRead(4,'stop','More than one watch appeared — switch the others off and add them one at a time:\\n'+
+    const all=d.watches||[];
+    const fresh=all.filter(w=>_gSeen.indexOf(w.path)<0);
+    if(!fresh.length){
+      gNote('hold','No new watch yet. Check the port’s physical switch, the cradle seating, and that the port is powered on.');
+      return;
+    }
+    if(fresh.length>1){
+      gNote('stop','More than one watch appeared — switch the others off and add them one at a time:\\n'+
         fresh.map(w=>'    '+w.path+'  '+(w.product||'?')).join('\\n'));
-    }else{
-      const w=fresh[0];
-      _gSeated.push(w);
-      gRead(4,'pass','✓ '+(w.product||'watch')+' at '+w.path+
-        (w.serial?'  serial '+w.serial:'')+
-        '\\n'+_gSeated.length+' watch(es) added. Dock the next one, or Finish.');
+      return;
     }
-  }).catch(()=>gRead(4,'stop','could not read the bus'));
+    _gSeen=all.map(w=>w.path);
+    gAdoptAll(fresh,out=>{
+      const last=out[out.length-1];
+      gNote(last&&last.ok?'pass':'stop',
+        (last?last.label:'')+'\\n\\n'+_gAdopted.filter(x=>x.ok).length+
+        ' added so far. Dock the next one, or finish.');
+      refresh();
+    });
+  }).catch(()=>gNote('stop','could not read the USB bus'));
 }
-function gFinish(){
-  // Finish WRITES. Every earlier step only reads hardware, so up to here the
-  // guide has changed nothing; this is where a watch stops being something
-  // a-d-b can see and becomes something it knows. Naming is what makes it
-  // stick: a watch with no port cannot be remembered by port, so it is
-  // remembered by serial. Serialized, one request at a time, because each one
-  // asks the watch a question over ADB.
-  _gStep=5; renderGuide();
-  const list=_gSeated.filter(w=>w.serial);
-  if(!list.length){
-    gRead(5,'hold','No watch was added. A watch on WiFi can still be added by its IP from the Orbit section on the main screen.');
-    return;
-  }
-  gRead(5,'hold','naming '+list.length+' watch(es)…');
-  const done=[];
-  const next=i=>{
-    if(i>=list.length){
-      gRead(5,'pass',done.join('\\n')+'\\n\\nThey are on the main screen now.'+
-        (_gNoHub?' Charge, drain and shelve stay unavailable: those need a hub that can switch its own ports.':''));
-      refresh(); return;
-    }
-    const w=list[i];
-    fetch('/api/onboard/identify/'+encodeURIComponent(w.serial),{method:'POST'})
-      .then(r=>r.json()).then(d=>{
-        done.push(d&&d.ok ? '✓ '+d.codename+'  '+w.serial
-                          : '✗ '+w.serial+' — '+((d&&d.error)||'could not be named'));
-        next(i+1);
-      }).catch(()=>{done.push('✗ '+w.serial+' — could not be named');next(i+1);});
-  };
-  next(0);
+function gDoOrbit(){
+  const el=document.getElementById('gorbip'); if(!el)return;
+  const ip=(el.value||'').trim(); if(!ip){el.focus();return;}
+  gNote('hold','looking for a watch at '+ip+'…');
+  fetch('/api/orbit/launch/'+encodeURIComponent(ip),{method:'POST'})
+    .then(r=>r.json()).then(d=>{
+      if(d&&d.ok){
+        _gAdopted.push({ok:true,label:(d.member.codename||d.member.serial)+'  over WiFi'});
+        _gNoHub=true; gGoDone(); refresh();
+      }else gNote('stop',(d&&d.error)||'no watch answered there — is it on WiFi with SSH enabled?');
+    }).catch(()=>gNote('stop','could not reach that address'));
 }
-function gOrbitAdd(){
-  // No USB port at all is a real starting point -- a watch on WiFi can be
-  // onboarded with nothing plugged in, which still gives the Control Center
-  // and the diagnostics pull. The launch box lives in the Orbit header, so
-  // send the user there rather than building a second one here.
-  closeGuide();
-  const el=document.getElementById('orbip');
-  if(el){el.scrollIntoView({block:'center'});el.focus();}
+function gDone(){ gGoDone(); }
+// Every route into the summary goes through here, so the mode switch cannot be
+// forgotten on one of them. Finishing the guide lands the user in USER mode:
+// somebody who needed the guide is not looking for the drain lab, the
+// workbench and the compile cluster on their first screen. Skipping does the
+// opposite -- only somebody who knows what this is skips the introduction --
+// so it leaves DEVELOPER mode alone and simply gets out of the way.
+function gGoDone(){
+  gStopPoll(); _gState='done'; _gNote=null;
+  if(_gAdopted.some(x=>x.ok))setMode('user');
+  renderGuide();
 }
+function gSkip(){ setMode('developer'); closeGuide(); }
 // Every floating panel is a <div id="X"> with a <div id="Xmask"> behind it, so
 // showing and hiding one is the same three lines each time. It was written out
 // eight times — four panels x open/close — which is how `msgs` and `guide`
