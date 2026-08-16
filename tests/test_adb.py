@@ -327,3 +327,53 @@ def test_the_device_listing_cannot_hang_forever(monkeypatch):
         "a timed-out listing was reported as a successful empty result — every "
         "watch would read as gone")
     assert a.adb_devices() == {}, "the {}-on-failure contract changed"
+
+
+def test_external_power_reads_the_kernel_not_dumpsys(monkeypatch):
+    """The corroborating half of the PPPS verdict has to work on the OS this
+    fleet actually runs.
+
+    It asked `dumpsys battery` -- an Android command. AsteroidOS is plain Linux
+    and has none, so this returned None on every AsteroidOS watch and the
+    branch that catches a hub which did NOT cut VBUS could never fire: the
+    check answered "unknown" every single time, which reads as caution while
+    verifying nothing.
+
+    Two more things pinned here, both measured on sturgeon 2026-08-16:
+
+    - The glob MUST be escaped. adb_shell hands its command to a host shell,
+      so a bare `*` expands against the laptop's own /sys and ships the host's
+      supply names (AC, BAT0) to the watch, which answers "No such file". That
+      failure is silent: it looks exactly like a watch with no power_supply.
+    - `usb/online` reports POWER PRESENT, not charging, so a Full battery must
+      still read as externally powered -- otherwise every topped-up watch on
+      the rig would be read as having lost VBUS.
+    """
+    import asteroid_docking_bay.adb as a
+    seen = []
+
+    def fake(serial, cmd, timeout=8):
+        seen.append(cmd)
+        if "power_supply" in cmd:
+            assert "\\*" in cmd, (
+                "the glob was not escaped -- the host shell will expand it "
+                "against the laptop's own /sys before the watch sees it")
+            return 0, "0\n1", ""          # battery not a supply, usb powered
+        return 0, "", ""
+    monkeypatch.setattr(a, "adb_shell", fake)
+    assert a.adb_external_power("S1") is True
+    assert not any("dumpsys" in c for c in seen), (
+        "fell through to the Android command on a watch that answered")
+
+    # a watch on no external power -- the verdict that proves a real VBUS cut
+    monkeypatch.setattr(a, "adb_shell",
+                        lambda s, c, timeout=8: (0, "0\n0", ""))
+    assert a.adb_external_power("S1") is False
+
+    # Wear OS reference units have no power_supply readout and keep dumpsys
+    def wear(serial, cmd, timeout=8):
+        if "power_supply" in cmd:
+            return 0, "cat: not found", ""
+        return 0, "  AC powered: false\n  USB powered: true\n", ""
+    monkeypatch.setattr(a, "adb_shell", wear)
+    assert a.adb_external_power("S1") is True

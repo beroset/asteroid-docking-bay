@@ -346,7 +346,34 @@ def _wait_adb_state(serial: str, present: bool, timeout: float) -> bool:
 
 
 def adb_external_power(serial: str) -> bool | None:
-    """Watch's own view: is it on external power (AC/USB/wireless)? None = unknown."""
+    """Watch's own view: is it on external power (AC/USB/wireless)? None = unknown.
+
+    This is the corroborating half of the PPPS verdict: when a watch stays on
+    ADB through a power-off command, its own answer is what separates a hub
+    that never cut VBUS from a self-powered watch holding the data link up.
+
+    It asked only `dumpsys battery`, which is ANDROID. AsteroidOS is plain
+    Linux and has no dumpsys, so across the whole AsteroidOS fleet this
+    returned None and both branches that depend on it were unreachable -- the
+    check existed and answered "unknown" every time. Measured on sturgeon
+    2026-08-16: `dumpsys: command not found`.
+
+    So read the kernel's own power_supply class first, which is the authority
+    on a Linux watch. `usb/online` is 1 while external power is present and
+    stays 1 with a Full battery: it reports POWER, not charging, which is
+    exactly the question here. Wear OS reference units keep the dumpsys path.
+    """
+    # The glob is ESCAPED on purpose: adb_shell hands its command to a host
+    # shell, so a bare * expands against THIS machine's /sys and ships the
+    # laptop's own supply names (AC, BAT0) to the watch, which answers "No such
+    # file". Escaped, the watch's own shell does the expansion. Measured here
+    # 2026-08-16 -- the unescaped form returned the host's AC path.
+    rc, out, _ = adb_shell(serial, r"cat /sys/class/power_supply/\*/online 2>/dev/null")
+    if rc == 0 and out.strip():
+        vals = [line.strip() for line in out.splitlines()
+                if line.strip() in ("0", "1")]
+        if vals:
+            return any(v == "1" for v in vals)
     rc, out, _ = adb_shell(serial, "dumpsys battery")
     if rc != 0 or not out.strip():
         return None

@@ -41,7 +41,7 @@ from .config import (_config_lock, _store_smart_verdict, allocate_ssh_ip,
                      orbit_add, orbit_forget, orbit_members,
                      hands_cal_for, set_hands_cal, set_hub_name,
                      register_hubs, seed_hub_names, hub_name_for)
-from .usb import (_sysfs_hub_scan, test_port_power_switching, _sysfs_path_to_serial_map, adb_usb_paths,
+from .usb import (_sysfs_hub_scan, _sysfs_path_to_serial_map, adb_usb_paths,
                   _sysfs_serial_at, xhci_slots,
                   test_port_power_switching, uhubctl_cycle, uhubctl_set_power, watch_devices_on_bus,
                   uhubctl_get_power, port_device_info, discover_hubs,
