@@ -3050,6 +3050,7 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeWatchImg();clo
 let _gState='scan', _gFound=[], _gBoxes=[], _gNoHub=false;
 let _gAdopted=[], _gPoll=null, _gNote=null, _gSeen=[], _gDismissed=false;
 let _gPort=null;      // capability of the port the found watch sits on
+let _gHasSmart=false; // a mapped hub that announces per-port switching
 
 function openGuide(){
   if(!panelShow('guide'))return;
@@ -3245,9 +3246,16 @@ function gView(){
          'whole point — a watch that merely loses power without being shut down '+
          'keeps running on its own battery, draining, while looking switched off '+
          'from the outside.':'')+
+      (_gHasSmart&&ok.length
+        ?'\\n\\nThe hub\u2019s other ports are still powered, so any watch docked there '+
+         'would come up on its own. Switching the unused ones off now leaves the '+
+         'rig dark until you choose otherwise. Ports with a watch on them are left '+
+         'alone \u2014 those want shelving, not a power cut.':'')+
       (_gNoHub?'\\n\\nWithout a hub that can switch its ports, charging, drain tests '+
                'and shelving stay unavailable. Everything else works.':''),
-    a:`<button class="btn" onclick="closeGuide()">Close</button>`};
+    a:(_gHasSmart&&ok.length
+        ?`<button class="btn" onclick="gPortsOff()">Switch unused ports off</button> `:'')+
+      `<button class="btn" onclick="closeGuide()">Close</button>`};
 }
 function renderGuide(){
   const p=document.getElementById('guide'); if(!p)return;
@@ -3351,6 +3359,7 @@ function gDoMap(){
     const list=Object.keys(boxes).map(k=>boxes[k]);
     const smart=list.filter(b=>b.ppps>0).length;
     _gNoHub=(smart===0);
+    _gHasSmart=(smart>0);
     _gState='hubwatch';
     gNote(smart?'pass':'hold',
       list.map(b=>(b.ppps?'✓ ':'✗ ')+b.key+' — '+b.ports+' ports'+
@@ -3399,6 +3408,22 @@ function gDoOrbit(){
         _gNoHub=true; gGoDone(); refresh();
       }else gNote('stop',(d&&d.error)||'no watch answered there — is it on WiFi with SSH enabled?');
     }).catch(()=>gNote('stop','could not reach that address'));
+}
+function gPortsOff(){
+  // Offered, never automatic, and never on an occupied port -- a watch that
+  // loses VBUS without being shut down first keeps running on its battery.
+  gNote('hold','switching unused ports off, one at a time…');
+  fetch('/api/onboard/ports_off',{method:'POST'}).then(r=>r.json()).then(d=>{
+    if(!d||!d.ok){gNote('stop',(d&&d.error)||'could not switch the ports');return;}
+    const bits=[];
+    if(d.off.length)bits.push(d.off.length+' port(s) switched off');
+    if(d.already_off.length)bits.push(d.already_off.length+' already off');
+    if(d.occupied.length)bits.push(d.occupied.length+' left alone (a watch is on them — '+
+      'shelve those from their row so the watch is shut down first)');
+    if(d.failed.length)bits.push(d.failed.length+' could not be switched: '+d.failed.join(', '));
+    gNote(d.failed.length?'stop':'pass',bits.join('\\n')||'nothing to switch');
+    refresh();
+  }).catch(()=>gNote('stop','could not switch the ports'));
 }
 function gDone(){ gGoDone(); }
 // Every route into the summary goes through here, so the mode switch cannot be

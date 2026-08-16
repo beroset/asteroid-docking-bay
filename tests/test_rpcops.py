@@ -113,7 +113,7 @@ def test_registered_ops_are_the_documented_contract():
         "drain.start", "drain.stop", "drain.history",
         "flash.start", "onboard.start", "onboard.sweep_prepare", "onboard.sweep_run",
         "onboard.sweep_skip", "onboard.sweep_restore", "onboard.guide",
-        "onboard.identify", "onboard.map_hubs",
+        "onboard.identify", "onboard.map_hubs", "onboard.ports_off",
     }
 
 
@@ -1812,3 +1812,49 @@ def test_a_half_hidden_box_resolves_rather_than_toggling_out_of_step(monkeypatch
 
     rpcops.DISPATCH._data["hub.hide"]({"loc": "1-6.1"})       # was shown -> hide all
     assert all(h["hidden"] for h in cfg["hubs"]), "the box is still mixed"
+
+
+def test_parking_the_rig_never_cuts_power_under_a_watch(monkeypatch):
+    """The offer at the end of onboarding: leave the rig dark so the next watch
+    docked anywhere does not come up on its own.
+
+    The one thing it must never do is switch off a port with a watch on it.
+    Cutting VBUS under a running watch does not turn it off -- it keeps running
+    on its own battery, which is how a watch flattens itself while looking
+    switched off (measured on sol, 2026-08-16). An occupied port is reported
+    back so the user can SHELVE it instead, which shuts the watch down first.
+
+    Also pinned: only mapped hubs that announce per-port switching are touched
+    (a dumb hub has nothing to switch, and an unmapped one is not ours to act
+    on), and a port already off is not re-commanded.
+    """
+    import asteroid_docking_bay.rpcops as ro
+    switched = []
+
+    monkeypatch.setattr(ro, "load_config", lambda: {"hubs": [
+        {"location": "1-3", "ppps": True},        # ours, switchable
+        {"location": "1-6", "ppps": False},       # mapped but dumb
+    ]})
+    monkeypatch.setattr(ro, "discover_hubs", lambda: [
+        {"location": "1-3", "ports": [1, 2, 3]},
+        {"location": "1-6", "ports": [1]},
+        {"location": "1-9", "ports": [1]},        # never mapped
+    ])
+    # a watch sits on 1-3 port 2; port 3 is already dark
+    monkeypatch.setattr(ro, "port_device_info",
+                        lambda loc, port: {"serial": "S1"} if (loc, port) == ("1-3", 2) else None)
+    monkeypatch.setattr(ro, "uhubctl_get_power",
+                        lambda loc, port: False if (loc, port) == ("1-3", 3) else True)
+    monkeypatch.setattr(ro, "uhubctl_set_power",
+                        lambda loc, port, on: switched.append((loc, port, on)))
+    monkeypatch.setattr(ro.time, "sleep", lambda s: None)
+
+    d = ro.DISPATCH._data["onboard.ports_off"]({})
+    assert d["ok"]
+    assert switched == [("1-3", 1, False)], (
+        f"switched the wrong ports: {switched}")
+    assert d["occupied"] == ["1-3:2"], (
+        "a port with a watch on it was not reported back -- the user needs to "
+        "know it wants shelving, not a power cut")
+    assert d["already_off"] == ["1-3:3"]
+    assert all(on is False for _, _, on in switched), "powered a port ON"

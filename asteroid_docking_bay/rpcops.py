@@ -2428,6 +2428,51 @@ def _onboard_map_hubs(args):
          "name": hub_name_for(cfg, h["location"])} for h in registered]}
 
 
+@DISPATCH.op("onboard.ports_off")
+def _onboard_ports_off(args):
+    """Park the rig: switch the UNUSED ports of mapped PPPS hubs off.
+
+    After mapping, every port a hub can switch is sitting powered, so the next
+    watch docked anywhere comes up on its own. The resting state a user wants
+    is the opposite -- dark, and powering up only what they choose.
+
+    Offered, never automatic, and never on a port with a watch on it. Cutting
+    VBUS under a running watch does not switch it off: it keeps running on its
+    own battery, invisible if its data link goes with the power and merely
+    unexplained if it does not (measured on sol, 2026-08-16). That is what
+    shelving is for -- shut the watch down first, then cut the port -- so an
+    occupied port is reported back, not acted on.
+
+    One port at a time, because powering a whole hub in one sweep is what
+    crashes adb and half-enumerates cascades. Off is the safe direction, but
+    the ordering rule is the same either way.
+    """
+    cfg = load_config()
+    mapped = {h["location"]: h for h in cfg.get("hubs", [])}
+    off, occupied, already, failed = [], [], [], []
+    for hub in discover_hubs():
+        loc = hub["location"]
+        entry = mapped.get(loc)
+        if entry is None or not entry.get("ppps"):
+            continue                       # unmapped, or nothing to switch
+        for port in hub.get("ports") or []:
+            slot = f"{loc}:{port}"
+            if port_device_info(loc, port) is not None:
+                occupied.append(slot)
+                continue
+            if uhubctl_get_power(loc, port) is False:
+                already.append(slot)
+                continue
+            try:
+                uhubctl_set_power(loc, port, False)
+                off.append(slot)
+            except Exception as exc:
+                failed.append(f"{slot} ({exc})")
+            time.sleep(0.15)               # serialized on purpose
+    return {"ok": True, "off": off, "occupied": occupied,
+            "already_off": already, "failed": failed}
+
+
 @DISPATCH.op("onboard.identify")
 def _onboard_identify(args):
     """Name a connected watch and remember it -- onboarding for a watch whose

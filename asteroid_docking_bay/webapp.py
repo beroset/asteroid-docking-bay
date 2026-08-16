@@ -73,6 +73,7 @@ _JSON_ROUTES = [
     ("POST", "/api/onboard/guide/probe/<loc>/<port:int>", "onboard.guide", {"action": "probe"}, False),
     ("POST", "/api/onboard/identify/<serial>", "onboard.identify", {},        False),
     ("POST", "/api/onboard/map_hubs",          "onboard.map_hubs", {},       False),
+    ("POST", "/api/onboard/ports_off",         "onboard.ports_off", {},      True),
     ("GET",  "/api/onboard/portinfo/<path>",    "onboard.guide", {"action": "portinfo"}, False),
     ("POST", "/api/onboard/porttest/<path>",    "onboard.guide", {"action": "porttest"}, False),
     ("POST", "/api/hide/<loc>/<port:int>",         "port.hide",       {},             True),
