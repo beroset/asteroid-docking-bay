@@ -6,6 +6,7 @@ member on ro.serialno (the fleet serial, so orbit == docked identity), refuses
 anything that does not answer as a watch, and the launch/de-orbit ops round-trip
 through config without duplicating a re-launched watch."""
 
+import json
 import asteroid_docking_bay.orbit as orbit
 import asteroid_docking_bay.rpcops as rpcops
 import asteroid_docking_bay.webstatus as ws
@@ -295,3 +296,133 @@ def test_deorbit_op_noop_skips_write(monkeypatch):
                         lambda cfg: calls.__setitem__("saved", calls["saved"] + 1))
     d = rpcops.DISPATCH._data["orbit.deorbit"]({"serial": "S9"})
     assert d["ok"] is False and calls["saved"] == 0
+
+
+# ── Direct USB: watches on a port no hub owns ────────────────────────────────
+
+def test_direct_view_shows_a_watch_no_mapped_port_owns(monkeypatch):
+    """The first thing a new user does: one watch, no smart hub, plugged
+    straight into the machine. Rows are built by walking the CONFIGURED hubs,
+    so without this view a-d-b talks to the watch over ADB while showing an
+    empty table.
+
+    Three cases that must sort correctly:
+      - "1-1"     a root port. It has no dotted parent, so it can NEVER belong
+                  to a hub -- the bare-laptop-socket case.
+      - "1-6.2"   a hub that exists on the bus but nobody has mapped. Same
+                  situation from a-d-b's side: connected, unowned.
+      - "1-3.2"   a MAPPED hub port. Already has a real row with power and
+                  charge cells; showing it twice would be a lie about where
+                  the watch is.
+    """
+    cfg = {"hubs": [{"location": "1-3", "ports": {"2": "catfish"}}],
+           "serials": {"SER-ROOT": "sturgeon"}}
+    monkeypatch.setattr(ws, "_adb_state", lambda devices, serial: "device")
+    view = ws._direct_hub_view(
+        cfg,
+        devices={"SER-ROOT": "device", "SER-UNMAPPED": "device", "SER-MAPPED": "device"},
+        adb_paths={"SER-ROOT": "1-1", "SER-UNMAPPED": "1-6.2", "SER-MAPPED": "1-3.2"},
+        fb_by_path={})
+    assert view is not None
+    serials = {r["serial"] for r in view["ports"]}
+    assert serials == {"SER-ROOT", "SER-UNMAPPED"}, (
+        "a watch on a mapped hub port was duplicated into the direct view, or "
+        "a watch on an unmapped port was dropped from it")
+
+    rows = {r["serial"]: r for r in view["ports"]}
+    # A bare port cannot switch power. Saying so once, as a property of the
+    # port, is what keeps the UI from drawing controls that cannot work.
+    assert rows["SER-ROOT"]["smart"] is False
+    assert rows["SER-ROOT"]["power"] is None
+    # Identity comes from config when known and falls back to the serial, so an
+    # unknown watch is still addressable rather than blank.
+    assert rows["SER-ROOT"]["machine"] == "sturgeon" and rows["SER-ROOT"]["named"]
+    assert rows["SER-UNMAPPED"]["machine"] is None
+    assert rows["SER-UNMAPPED"]["codename"] == "SER-UNMAPPED"
+    assert not rows["SER-UNMAPPED"]["named"]
+
+
+def test_direct_view_reads_no_hardware_and_stays_quiet_when_empty(monkeypatch):
+    """Two contracts.
+
+    It must not touch the bus: this runs on every status refresh, and a watch
+    that is slow to answer would stall the whole page. Identity comes from
+    config and the last-seen cache only.
+
+    And it returns None with nothing to show. Orbit is emitted empty because
+    its header carries the launch-by-IP box; this section has no control of
+    its own, so an always-present empty one is pure noise.
+    """
+    def boom(*a, **k):
+        raise AssertionError("the direct view probed hardware during a refresh")
+    for name in ("get_watch_codename", "adb_devices"):
+        if hasattr(ws, name):
+            monkeypatch.setattr(ws, name, boom)
+
+    assert ws._direct_hub_view({"hubs": []}, {}, {}, {}) is None
+    # every watch accounted for by a mapped hub -> still nothing to add
+    cfg = {"hubs": [{"location": "1-3", "ports": {"2": "catfish"}}]}
+    monkeypatch.setattr(ws, "_adb_state", lambda devices, serial: "device")
+    assert ws._direct_hub_view(cfg, {"S": "device"}, {"S": "1-3.2"}, {}) is None
+
+
+def test_direct_view_sees_a_watch_in_fastboot(monkeypatch):
+    """A watch in its bootloader on a bare port is exactly when a user needs to
+    see it -- that is the flashing case, which works without a hub. ADB cannot
+    see it, so the fastboot path must feed the view too."""
+    monkeypatch.setattr(ws, "_adb_state", lambda devices, serial: None)
+    view = ws._direct_hub_view({"hubs": []}, devices={},
+                               adb_paths={}, fb_by_path={"1-1": "FBSER"})
+    assert view and len(view["ports"]) == 1
+    assert view["ports"][0]["adb"] == "fastboot", (
+        "a watch in fastboot on an unmapped port must not render as offline")
+
+
+def test_identify_writes_a_fresh_config_and_keeps_the_rest(monkeypatch, tmp_path):
+    """The onboarding write for a portless watch, and the guard against
+    repeating 2026-08-16: a helper that persisted the cfg dict it was HANDED
+    saved a caller's near-empty copy over a full config and erased 12 hubs.
+
+    So this op must load the config fresh at write time and save that. The test
+    plants a rich config on disk AFTER the op is entered, which a
+    load-at-entry implementation would already have missed.
+    """
+    import asteroid_docking_bay.rpcops as ro
+    import asteroid_docking_bay.config as cfgmod
+
+    disk = {"hubs": [{"location": "1-3", "ports": {"1": "catfish"}}],
+            "serials": {"OLD": "sol"}, "orbit": {"keep": "me"}}
+    saved = {}
+    monkeypatch.setattr(ro, "load_config", lambda: json.loads(json.dumps(disk)))
+    monkeypatch.setattr(ro, "save_config", lambda c: saved.update(c))
+    monkeypatch.setattr(ro, "get_watch_codename", lambda s: "sturgeon")
+    monkeypatch.setattr(ro.registry, "note", lambda *a, **k: None)
+
+    d = ro.DISPATCH._data["onboard.identify"]({"serial": "NEWSER"})
+    assert d["ok"] and d["codename"] == "sturgeon"
+    assert saved["serials"]["NEWSER"] == "sturgeon"
+    assert saved["serials"]["OLD"] == "sol", "an existing serial was dropped"
+    assert saved["hubs"] == disk["hubs"], (
+        "the hub map did not survive naming one watch -- this is the config-wipe "
+        "shape: writing a dict that was not loaded fresh at write time")
+    assert saved["orbit"] == {"keep": "me"}
+
+
+def test_identify_refuses_what_it_cannot_name(monkeypatch):
+    """Two refusals, both of which would otherwise write junk into the config
+    that every later sighting is matched against.
+
+    A watch that does not answer must NOT be stored under a guessed name, and
+    a serial that is not a serial (adb's own error strings arrive here) must
+    never become a config key."""
+    import asteroid_docking_bay.rpcops as ro
+    wrote = []
+    monkeypatch.setattr(ro, "save_config", lambda c: wrote.append(c))
+    monkeypatch.setattr(ro, "get_watch_codename", lambda s: None)
+    d = ro.DISPATCH._data["onboard.identify"]({"serial": "H1NZCJ010087020"})
+    assert not d["ok"] and "did not answer" in d["error"]
+
+    monkeypatch.setattr(ro, "get_watch_codename", lambda s: "sturgeon")
+    bad = ro.DISPATCH._data["onboard.identify"]({"serial": "no permissions"})
+    assert not bad["ok"]
+    assert not wrote, "a refused identify still wrote to the config"
