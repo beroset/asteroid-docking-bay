@@ -198,6 +198,16 @@ _WEB_TEMPLATE = """\
       background:none;border:none;color:#8b949e;font:inherit;font-size:11px;cursor:pointer;
       text-decoration:underline dotted}
     .tmsg-all:hover{color:#c9d1d9}
+    /* Sit BELOW the header and the first watch row rather than at the top of
+       the viewport. The mask dims them but leaves them readable, so a first
+       time user can see the page they are setting up -- the title, and one
+       real row behaving -- instead of a panel floating on a blank screen.
+       Clamped so it still fits on a short window, and the panel stays
+       draggable if it lands somewhere awkward. */
+    /* Fallback only: on open the panel is anchored just below the Orbit
+       header by gAnchorBelowOrbit, which measures the table instead of
+       guessing at it. This keeps it sane if that measurement finds nothing. */
+    #guide{top:clamp(150px,25vh,255px);max-height:calc(94vh - 150px)}
     .gwrap{padding:18px 22px 22px;text-align:center}
     .gtitle{font-weight:700;font-size:19px;margin-bottom:9px}
     .gacts{margin-top:16px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:center}
@@ -3039,6 +3049,27 @@ function openGuide(){
   _gState='scan'; _gNote=null; _gAdopted=[]; _gBoxes=[]; _gNoHub=false;
   gBeatStart();
   renderGuide(); gScan();
+  // After a tick, so the table it measures has been laid out.
+  setTimeout(gAnchorBelowOrbit,0);
+}
+// Start the panel just under the Orbit header rather than at a guessed pixel
+// offset: Orbit is always the last section, so everything a-d-b can currently
+// show sits above it. The mask dims those rows but leaves them readable, and a
+// first-time user watching a real row behave is reassured in a way an empty
+// backdrop cannot manage. A guessed offset would drift the moment a section
+// appeared or vanished -- which during onboarding is constantly.
+//
+// Only on open. Once the user drags the panel it is theirs, and a refresh must
+// not yank it back.
+function gAnchorBelowOrbit(){
+  const p=document.getElementById('guide'); if(!p)return;
+  const row=document.querySelector('.orbit-hdr');
+  if(!row)return;                       // no Orbit section yet -> CSS default
+  const top=Math.round(row.getBoundingClientRect().bottom+14);
+  const lo=120, hi=Math.round(window.innerHeight*0.55);
+  const at=Math.max(lo,Math.min(top,hi));
+  p.style.top=at+'px';
+  p.style.maxHeight='calc(96vh - '+at+'px)';
 }
 function closeGuide(){
   gStopPoll(); gBeatStop();
