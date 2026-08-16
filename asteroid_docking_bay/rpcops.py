@@ -2409,10 +2409,16 @@ def _onboard_identify(args):
     serial = (args.get("serial") or "").strip()
     if not is_a_serial(serial):
         return {"ok": False, "error": "not a usable serial"}
-    codename = get_watch_codename(serial)
+    # Over whichever link reaches it. Onboarding tells the user SSH works, so
+    # naming has to work there too; an ADB-only read made an SSH watch
+    # unnameable and blamed the watch for not answering.
+    transport = _reachable_transport(serial)
+    codename = get_watch_codename(serial,
+                                  shell=transport.shell if transport else None)
     if not codename:
         return {"ok": False,
-                "error": "the watch did not answer -- is it on ADB and booted?"}
+                "error": "the watch did not answer -- is it booted and "
+                         "connected over ADB or SSH?"}
     with _config_lock:
         cfg = load_config()
         cfg.setdefault("serials", {})[serial] = codename

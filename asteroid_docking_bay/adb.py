@@ -205,15 +205,22 @@ def is_a_serial(value: "str | None") -> bool:
     return not any(c in _IMPOSSIBLE_IN_SERIAL for c in s)
 
 
-def get_watch_codename(serial: str) -> str | None:
+def get_watch_codename(serial: str, shell=None) -> str | None:
     """
     Read the AsteroidOS codename from the watch.
 
     AsteroidOS is a plain Linux OS, not Android, so getprop is not available.
     We read /etc/asteroid-release (MACHINE= key) first, then fall back to
     /etc/os-release and finally hostname.
+
+    `shell` runs the reads over any transport, exactly as battery_and_screen
+    does. Naming was ADB-only, so a watch connected in SSH/developer mode --
+    which onboarding explicitly tells the user is supported -- could not be
+    named at all and came back as "did not answer". SshTransport.shell has the
+    same signature as this default, so every read below is unchanged.
     """
-    rc, out, _ = adb_shell(serial, "cat /etc/asteroid-release 2>/dev/null")
+    run = shell or (lambda c: adb_shell(serial, c))
+    rc, out, _ = run("cat /etc/asteroid-release 2>/dev/null")
     if rc == 0:
         for line in out.splitlines():
             line = line.strip()
@@ -221,14 +228,14 @@ def get_watch_codename(serial: str) -> str | None:
                 if line.startswith(key):
                     return line.split("=", 1)[1].strip("\"'")
 
-    rc, out, _ = adb_shell(serial, "cat /etc/os-release 2>/dev/null")
+    rc, out, _ = run("cat /etc/os-release 2>/dev/null")
     if rc == 0:
         for line in out.splitlines():
             if line.strip().startswith("VARIANT_ID="):
                 return line.split("=", 1)[1].strip("\"'")
 
     # Last resort: hostname (often set to the codename on AsteroidOS).
-    rc, out, _ = adb_shell(serial, "hostname")
+    rc, out, _ = run("hostname")
     if rc == 0 and is_a_codename(out):
         return out.strip()
 

@@ -395,7 +395,7 @@ def test_identify_writes_a_fresh_config_and_keeps_the_rest(monkeypatch, tmp_path
     saved = {}
     monkeypatch.setattr(ro, "load_config", lambda: json.loads(json.dumps(disk)))
     monkeypatch.setattr(ro, "save_config", lambda c: saved.update(c))
-    monkeypatch.setattr(ro, "get_watch_codename", lambda s: "sturgeon")
+    monkeypatch.setattr(ro, "get_watch_codename", lambda s, **kw: "sturgeon")
     monkeypatch.setattr(ro.registry, "note", lambda *a, **k: None)
 
     d = ro.DISPATCH._data["onboard.identify"]({"serial": "NEWSER"})
@@ -418,11 +418,45 @@ def test_identify_refuses_what_it_cannot_name(monkeypatch):
     import asteroid_docking_bay.rpcops as ro
     wrote = []
     monkeypatch.setattr(ro, "save_config", lambda c: wrote.append(c))
-    monkeypatch.setattr(ro, "get_watch_codename", lambda s: None)
+    monkeypatch.setattr(ro, "get_watch_codename", lambda s, **kw: None)
     d = ro.DISPATCH._data["onboard.identify"]({"serial": "H1NZCJ010087020"})
     assert not d["ok"] and "did not answer" in d["error"]
 
-    monkeypatch.setattr(ro, "get_watch_codename", lambda s: "sturgeon")
+    monkeypatch.setattr(ro, "get_watch_codename", lambda s, **kw: "sturgeon")
     bad = ro.DISPATCH._data["onboard.identify"]({"serial": "no permissions"})
     assert not bad["ok"]
     assert not wrote, "a refused identify still wrote to the config"
+
+
+def test_identify_names_a_watch_that_is_only_on_ssh(monkeypatch):
+    """Onboarding tells the user SSH works, so naming has to work there.
+
+    Reading the codename was ADB-only: a watch in developer/SSH mode came back
+    "did not answer", which blames the watch for a link the reader never
+    tried. The op must hand the reader whichever transport reaches the watch.
+    """
+    import asteroid_docking_bay.rpcops as ro
+
+    class FakeSsh:
+        kind = "ssh (usb)"
+        def shell(self, cmd, timeout=8, check=False):
+            return 0, "MACHINE=sturgeon", ""
+
+    used = {}
+    monkeypatch.setattr(ro, "_reachable_transport", lambda s: FakeSsh())
+    def reader(serial, shell=None):
+        used["shell"] = shell
+        if shell is None:
+            return None                      # ADB path finds nothing here
+        rc, out, _ = shell("cat /etc/asteroid-release")
+        return out.split("=", 1)[1] if "=" in out else None
+    monkeypatch.setattr(ro, "get_watch_codename", reader)
+    monkeypatch.setattr(ro, "load_config", lambda: {})
+    monkeypatch.setattr(ro, "save_config", lambda c: None)
+    monkeypatch.setattr(ro.registry, "note", lambda *a, **k: None)
+
+    d = ro.DISPATCH._data["onboard.identify"]({"serial": "H1NZCJ010087020"})
+    assert d["ok"] and d["codename"] == "sturgeon"
+    assert used["shell"] is not None, (
+        "the SSH transport was never handed to the codename reader -- an "
+        "SSH-only watch stays unnameable")
