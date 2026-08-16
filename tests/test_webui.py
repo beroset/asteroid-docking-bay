@@ -3318,3 +3318,78 @@ def test_escape_closes_every_panel_not_just_the_first_two(tmp_path):
     assert esc, "no Escape handler found"
     assert "panelHideAll()" in esc.group(1), (
         f"Escape names panels individually again: {esc.group(1)}")
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_device_supplied_strings_reach_the_dom_escaped(tmp_path):
+    """USB descriptor strings are whatever the plugged-in device says.
+
+    This project already treats a device-supplied serial as untrusted in a
+    shell — the dump command quotes it — but the guided setup built its
+    read-back text from `product`, `serial` and `path` straight off the bus and
+    interpolated it into innerHTML raw. Guided setup is exactly the flow where
+    unknown hardware gets plugged in one piece at a time, which makes it the
+    worst place to trust a descriptor.
+
+    Also pinned: the Battery-Info click handler puts the serial into a
+    single-quoted JS string inside an HTML attribute, and used it raw while the
+    codename beside it was escaped. jsq() exists for precisely that context."""
+    import json
+    h = tmp_path / "xss.js"
+    h.write_text(_DOM_STUBS + JS + r"""
+      const HOSTILE = '<img src=x onerror=alert(1)>';
+      _gStep=1; _gRead={};
+      gRead(1,'hold','2 still connected:\n    1-3.2  '+HOSTILE+'  S1');
+      const panel=global.__lastGuideHtml||'';
+      const out={guide:panel};
+      console.log(JSON.stringify(out));
+      process.exit(0);
+    """.replace("global.__lastGuideHtml||''",
+                "(global.__els&&global.__els.guide&&global.__els.guide.innerHTML)||''"))
+    # capture the guide panel's innerHTML
+    src = h.read_text().replace(
+        "_gStep=1; _gRead={};",
+        "const guideEl={id:'guide',style:{},innerHTML:''};"
+        "global.__els={guide:guideEl};"
+        "global.document.getElementById=id=>global.__els[id]||el();"
+        "_gStep=1; _gRead={};")
+    h.write_text(src)
+    r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
+    assert r.returncode == 0, r.stderr[:400]
+    o = json.loads(r.stdout.strip().splitlines()[-1])
+
+    assert "<img" not in o["guide"], (
+        "a USB product string reached the DOM as live markup — a plugged-in "
+        f"device could run script in the UI: {o['guide'][:160]}")
+    assert "&lt;img" in o["guide"], "the hostile string was dropped rather than escaped"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_a_serial_with_a_quote_cannot_escape_the_click_handler(tmp_path):
+    """The Battery-Info handler puts the serial into a single-quoted JS string
+    that itself lives inside an HTML attribute. It used the serial RAW while
+    the codename immediately beside it was escaped.
+
+    jsq() exists for exactly this context, and its choice is not arbitrary: it
+    escapes for JS with a BACKSLASH rather than as `&#39;`, because the HTML
+    parser decodes entities first — an entity-escaped quote would reach the JS
+    parser as a plain quote and close the string anyway. So the correct
+    rendering of a serial S'1 is openBI('S\\'1', ...) and the broken one is
+    openBI('S'1', ...)."""
+    import json
+    h = tmp_path / "serial.js"
+    h.write_text(_DOM_STUBS + JS + """
+      const bi = mkstrip({codename:'x',serial:"S'1",slot_loc:'1-3',port:2,
+                          adb:'device',power:true,flaps:0},72);
+      console.log(JSON.stringify({bi:bi}));
+      process.exit(0);
+    """)
+    r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
+    assert r.returncode == 0, r.stderr[:400]
+    bi = json.loads(r.stdout.strip().splitlines()[-1])["bi"]
+
+    assert "openBI(" in bi, "the Battery-Info handler was not rendered at all"
+    assert "openBI('S\\'1'" in bi, (
+        f"the serial is not jsq-escaped in the click handler: {bi[-200:]}")
+    assert "openBI('S'1'" not in bi, (
+        "a raw quote in the serial closed the JS string inside the attribute")

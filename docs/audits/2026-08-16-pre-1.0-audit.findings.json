@@ -127,6 +127,18 @@
    "not_the_gap": "The systemd timer (cmd_check_charge) is a separate entry point, guarded from the other side by _web_busy_slots. Deliberately unchanged.",
    "lesson": "F1 shipped as 'fixed' on an unverified assumption about the other call sites. Finishing a shipped fix outranks finding a new one.",
    "test": "test_interactive_charge_respects_a_busy_or_locked_port \u2014 covers both an oplock and a drain owning the slot. Uses a tripwire on the first call past the guard: asserting only 'no power switched' let the planted bug run the real charge loop and HANG the suite instead of failing."
+  },
+  {
+   "id": "F9",
+   "severity": "medium",
+   "area": "webtemplate / untrusted device strings",
+   "status": "FIXED",
+   "summary": "USB descriptor strings reached the DOM unescaped, and a serial went raw into a click handler",
+   "detail": "Two seams. (1) The guided setup builds its read-back text from product, serial and path straight off the bus (watch_devices_on_bus) and interpolated it into innerHTML RAW \u2014 so a device whose USB product string contains markup could run script in the UI. Guided setup is exactly the flow where unknown hardware is plugged in one piece at a time. (2) mkstrip's Battery-Info handler put the serial into a single-quoted JS string inside an HTML attribute unescaped, while the codename beside it was escaped; three sibling openBI sites already used jsq().",
+   "standard": "This project already treats a device-supplied serial as untrusted in a SHELL (the dump command quotes it). The DOM gets the same treatment now.",
+   "census": "51 interpolations of device-supplied fields: 47 already escaped, 2 URL-encoded, 2 raw \u2014 both fixed.",
+   "test": "test_device_supplied_strings_reach_the_dom_escaped and test_a_serial_with_a_quote_cannot_escape_the_click_handler.",
+   "testing_note": "The first version of the serial assertion was VACUOUS \u2014 it ran in a harness where the handler was never rendered, so both assertions passed on absent text. Splitting it into a minimal harness exposed that. A second plant then also passed because it patched one of four openBI sites rather than the one under test."
   }
  ]
 }

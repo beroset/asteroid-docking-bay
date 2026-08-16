@@ -913,7 +913,7 @@ function mkstrip(p,wearH){
   let out='';
   // 0. power state — first, so it reads at the same spot on every row.
   if(p.codename)out+=pdot(p);
-  const biClk=p.serial?`openBI('${p.serial}','${esc(p.codename||'')}',event)`:'';
+  const biClk=p.serial?`openBI('${jsq(p.serial)}','${esc(p.codename||'')}',event)`:'';
   const slot=p.slot_loc+':'+p.port;
   const wearClk=`menuWear(event,'${slot}',${!!(p.drain&&p.drain.active)},'${jsq(p.serial||'')}',${p.wear?1:0},'${jsq(p.codename||'')}')`;
   // 1. wearable verdict from the last drain test; an untested watch shows a
@@ -2989,6 +2989,13 @@ function openGuide(){
 function closeGuide(){
   panelHide('guide');
 }
+// Read-back text is built from USB DESCRIPTOR strings — product, serial, path —
+// which are whatever the plugged-in device says they are. This project already
+// treats a device-supplied serial as untrusted in a shell (the dump command
+// quotes it); the DOM deserves the same, and guided setup is precisely the flow
+// where unknown hardware gets plugged in. Escaped at render, so no caller has
+// to remember. A newline survives esc(), and .gread is white-space:pre-wrap,
+// so the multi-line read-backs still lay out.
 function gRead(k,cls,text){ _gRead[k]={cls:cls,text:text}; renderGuide(); }
 function renderGuide(){
   const p=document.getElementById('guide'); if(!p)return;
@@ -2997,9 +3004,9 @@ function renderGuide(){
     const r=_gRead[n];
     const body=n===_gStep
       ? `<div class="ginstr">${st.i}</div>`+
-        (r?`<div class="gread ${r.cls}">${r.text}</div>`:'')+
+        (r?`<div class="gread ${r.cls}">${esc(r.text)}</div>`:'')+
         gActions(n)
-      : (n<_gStep&&r?`<div class="gread ${r.cls}">${r.text}</div>`:'');
+      : (n<_gStep&&r?`<div class="gread ${r.cls}">${esc(r.text)}</div>`:'');
     return `<div class="gstep ${cls}"><span class="gnum">${n<_gStep?'&#10003;':n+1}</span>`+
            `<div class="gbody"><div class="gtitle">${st.t}</div>${body}</div></div>`;
   }).join('');
