@@ -1200,6 +1200,14 @@ def _direct_hub_view(cfg: dict, devices: dict, adb_paths: dict,
             "power": None,
             "os": cached.get("os"),
             "product": (bus.get(path) or {}).get("product"),
+            # The address a-d-b would ACTUALLY use, not just an allocated one.
+            # A watch on the shared default has no allocation, so an
+            # allocation-only lookup left this empty and the badge read "no
+            # address / not reachable" over a watch that was answering fine --
+            # alarming on the one screen where a new user is deciding whether
+            # their setup works. Costs ~7ms: sysfs links plus a bounded probe.
+            "ssh_ip": (ssh_reach_ip(cfg, serial) if state == "ssh"
+                       else ssh_ip_for_serial(cfg, serial)),
             "battery": cached.get("battery") if state in ("device", "ssh") else None,
             "battery_cached": cached.get("battery"),
             "last_live_ts": cached.get("last_live_ts"),

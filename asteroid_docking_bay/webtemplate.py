@@ -1301,7 +1301,7 @@ function renderDirect(hub,rows,lo,hi){
       `<tr class="wr direct-row" id="wr-direct-${esc(p.serial)}">`+
       `<td class="pcell"><span class="dirglyph" title="plugged straight in - on no mapped hub port">&#x1F50C;</span></td>`+
       `<td class="smtc"><span class="cbadge no" title="${ux('bare port: no per-port power switching','this socket is always powered - it cannot be switched off')}">${ux('NO!','always on')}</span></td>`+
-      `<td class="connc">${mkadb(p.adb,null,p.os,p.serial,null,nm)}</td>`+
+      `<td class="connc">${mkadb(p.adb,null,p.os,p.serial,p.ssh_ip,nm)}</td>`+
       `<td class="thumb">${mkthumb(p)}</td>`+
       `<td><b class="cn" onclick="openCC('${jsq(p.serial)}','${jsq(p.machine||p.serial)}',event)" title="${ux('open Control Center','click for details')}">${esc(nm)}</b></td>`+
       `<td class="stats"></td>`+
