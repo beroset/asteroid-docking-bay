@@ -27,6 +27,7 @@ from . import orbit
 from .usb import (_parse_hub_port_path, _port_device_present, _sysfs_hub_scan,
                   port_device_info,
                   _sysfs_path_to_serial_map, _sysfs_usb_mode, adb_usb_paths,
+                  watch_devices_on_bus,
                   recovery_cycle_lock, uhubctl_cycle,
                   uhubctl_list)
 from .fastboot import (_detect_rndis, _fastboot_getvar_product,
@@ -1165,14 +1166,31 @@ def _direct_hub_view(cfg: dict, devices: dict, adb_paths: dict,
         if path and _unmapped(path):
             found.setdefault(serial, path)
             fb_serials.add(serial)
+    # sysfs LAST and independently: a watch in SSH/developer mode is on neither
+    # the ADB nor the fastboot list, so a view built from those two alone shows
+    # an empty table while a watch sits plugged in and reachable -- which is
+    # what a-d-b did the moment a watch was switched to SSH during onboarding.
+    # The bus knows about it regardless of which service can talk to it.
+    bus: "dict[str, dict]" = {}
+    try:
+        for dev in watch_devices_on_bus(known_paths=set(fb_by_path or {})):
+            path = dev.get("path")
+            if path and _unmapped(path):
+                bus[path] = dev
+                serial = dev.get("serial")
+                if serial:
+                    found.setdefault(serial, path)
+    except OSError:
+        pass
 
     rows: list[dict] = []
     for serial, path in found.items():
         machine = find_codename_for_serial(cfg, serial)
         cached = last_seen.get(serial) or {}
-        state = _adb_state(devices, serial) if serial in devices else None
-        if state is None and serial in fb_serials:
-            state = "fastboot"
+        state = _resolve_conn_state(
+            _adb_state(devices, serial) if serial in devices else None,
+            serial in fb_serials,
+            lambda: _sysfs_usb_mode(path) == "ssh")
         rows.append({
             "codename": machine or serial, "machine": machine, "serial": serial,
             "direct": True, "empty": False,
@@ -1181,6 +1199,7 @@ def _direct_hub_view(cfg: dict, devices: dict, adb_paths: dict,
             "smart": False,          # a bare port is always on -- no control
             "power": None,
             "os": cached.get("os"),
+            "product": (bus.get(path) or {}).get("product"),
             "battery": cached.get("battery") if state in ("device", "ssh") else None,
             "battery_cached": cached.get("battery"),
             "last_live_ts": cached.get("last_live_ts"),

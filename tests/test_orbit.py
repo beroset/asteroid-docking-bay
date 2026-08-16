@@ -318,6 +318,7 @@ def test_direct_view_shows_a_watch_no_mapped_port_owns(monkeypatch):
     cfg = {"hubs": [{"location": "1-3", "ports": {"2": "catfish"}}],
            "serials": {"SER-ROOT": "sturgeon"}}
     monkeypatch.setattr(ws, "_adb_state", lambda devices, serial: "device")
+    monkeypatch.setattr(ws, "watch_devices_on_bus", lambda known_paths=None: [])
     view = ws._direct_hub_view(
         cfg,
         devices={"SER-ROOT": "device", "SER-UNMAPPED": "device", "SER-MAPPED": "device"},
@@ -359,11 +360,18 @@ def test_direct_view_reads_no_hardware_and_stays_quiet_when_empty(monkeypatch):
         if hasattr(ws, name):
             monkeypatch.setattr(ws, name, boom)
 
+    monkeypatch.setattr(ws, "watch_devices_on_bus", lambda known_paths=None: [])
     assert ws._direct_hub_view({"hubs": []}, {}, {}, {}) is None
     # every watch accounted for by a mapped hub -> still nothing to add
     cfg = {"hubs": [{"location": "1-3", "ports": {"2": "catfish"}}]}
     monkeypatch.setattr(ws, "_adb_state", lambda devices, serial: "device")
     assert ws._direct_hub_view(cfg, {"S": "device"}, {"S": "1-3.2"}, {}) is None
+
+    # a sysfs read that fails must not take the whole status page down
+    def boom_bus(known_paths=None):
+        raise OSError("sysfs went away")
+    monkeypatch.setattr(ws, "watch_devices_on_bus", boom_bus)
+    assert ws._direct_hub_view({"hubs": []}, {}, {}, {}) is None
 
 
 def test_direct_view_sees_a_watch_in_fastboot(monkeypatch):
@@ -371,6 +379,7 @@ def test_direct_view_sees_a_watch_in_fastboot(monkeypatch):
     see it -- that is the flashing case, which works without a hub. ADB cannot
     see it, so the fastboot path must feed the view too."""
     monkeypatch.setattr(ws, "_adb_state", lambda devices, serial: None)
+    monkeypatch.setattr(ws, "watch_devices_on_bus", lambda known_paths=None: [])
     view = ws._direct_hub_view({"hubs": []}, devices={},
                                adb_paths={}, fb_by_path={"1-1": "FBSER"})
     assert view and len(view["ports"]) == 1
@@ -511,3 +520,28 @@ def test_a_wear_os_watch_names_itself_through_getprop(monkeypatch):
     assert not any("hostname" in c for c in asked), (
         "fell through to hostname, which on Android is 'localhost' and is "
         "refused -- the watch would read as unnameable")
+
+
+def test_direct_view_shows_a_watch_that_is_only_on_ssh(monkeypatch):
+    """A watch in SSH/developer mode is on NEITHER the ADB list nor the
+    fastboot one. Built from those two alone, the view showed an empty table
+    while a watch sat plugged in and reachable -- which is exactly what a-d-b
+    did the moment a watch was switched to SSH during onboarding, with the
+    guide still telling the user SSH was supported.
+
+    sysfs knows about it regardless of which service can talk to it.
+    """
+    monkeypatch.setattr(ws, "watch_devices_on_bus", lambda known_paths=None: [
+        {"path": "1-1", "serial": "SER-SSH", "product": "HUAWEI WATCH",
+         "pid": "0a02", "vendor": "18d1"}])
+    monkeypatch.setattr(ws, "_sysfs_usb_mode", lambda path: "ssh")
+    monkeypatch.setattr(ws, "_adb_state", lambda devices, serial: None)
+
+    view = ws._direct_hub_view({"hubs": []}, devices={}, adb_paths={}, fb_by_path={})
+    assert view is not None, "a watch on SSH left the table empty"
+    row = view["ports"][0]
+    assert row["serial"] == "SER-SSH"
+    assert row["adb"] == "ssh", (
+        "an SSH watch rendered as offline -- the row exists but claims the "
+        "watch cannot be reached, which is the opposite of true")
+    assert row["product"] == "HUAWEI WATCH"

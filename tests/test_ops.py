@@ -839,3 +839,27 @@ def test_the_warmer_leaves_a_watch_alone_during_onboarding(monkeypatch):
     monkeypatch.setattr(ops, "_last_ssh_realign", 0.0, raising=False)
     ops._maybe_realign_stray_ssh({"ssh_ips": {}, "usb_mode_preference": "adb"})
     assert switched, "the warmer never resumed after onboarding closed"
+
+
+def test_no_fleet_corrections_in_the_first_seconds_after_a_restart(monkeypatch):
+    """A restart must not become a licence to act.
+
+    The quiet window is in memory, so restarting clears it -- and the warmer's
+    first pass runs about a second into startup, before an open guide's next
+    heartbeat can re-arm it. Observed on 2026-08-16: the gate refused twice,
+    a deploy restarted the service, and one second later the watch was
+    switched anyway, mid-experiment.
+
+    Starting armed also matches what a-d-b knows at that moment, which is
+    nothing: it has not yet seen the bus and cannot tell a stray from a watch
+    somebody is holding.
+    """
+    import importlib
+    from asteroid_docking_bay import util
+    fresh = importlib.reload(util)
+    try:
+        assert fresh.onboarding_active(), (
+            "a freshly started process is willing to correct the fleet "
+            "immediately -- a restart mid-onboarding undoes the user's watch")
+    finally:
+        importlib.reload(util)

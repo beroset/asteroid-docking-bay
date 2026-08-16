@@ -77,7 +77,17 @@ def setup_logging(verbose=False):
 # time-bounded, because a browser tab killed mid-guide must not leave the fleet
 # unmanaged forever.
 ONBOARD_QUIET_SECS = 60.0
-_onboarding_until = 0.0
+# ARMED AT STARTUP, not zero. The window lives in memory, so a restart clears
+# it -- and the warmer's first pass runs about a second into startup, long
+# before an open guide's next heartbeat can re-arm it. Measured exactly that on
+# 2026-08-16: the gate refused twice, a deploy restarted the service, and one
+# second later the same watch was switched anyway.
+#
+# Starting armed also matches what a-d-b actually knows at that moment, which
+# is nothing: it has just come up, it has not yet seen the bus, and it cannot
+# tell a stray from a watch somebody is holding. A minute of not correcting
+# anything is the honest default.
+_onboarding_until = time.time() + ONBOARD_QUIET_SECS
 
 
 def note_onboarding_activity() -> None:
