@@ -234,6 +234,15 @@ def get_watch_codename(serial: str, shell=None) -> str | None:
             if line.strip().startswith("VARIANT_ID="):
                 return line.split("=", 1)[1].strip("\"'")
 
+    # A Wear OS watch has neither file: it is Android. Its device codename is
+    # the SAME name AsteroidOS uses (sturgeon, lenok, bass...), because the
+    # port takes the vendor's, so getprop answers the identity question
+    # directly. Tried before hostname because Android hostnames are usually
+    # "localhost", which is refused below and would end the search early.
+    rc, out, _ = run("getprop ro.product.device")
+    if rc == 0 and is_a_codename(out):
+        return out.strip()
+
     # Last resort: hostname (often set to the codename on AsteroidOS).
     rc, out, _ = run("hostname")
     if rc == 0 and is_a_codename(out):

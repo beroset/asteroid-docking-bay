@@ -460,3 +460,54 @@ def test_identify_names_a_watch_that_is_only_on_ssh(monkeypatch):
     assert used["shell"] is not None, (
         "the SSH transport was never handed to the codename reader -- an "
         "SSH-only watch stays unnameable")
+
+
+def test_identify_names_a_watch_in_its_bootloader(monkeypatch):
+    """A watch in fastboot has no shell, so no transport reaches it -- and it
+    is a real way to meet one during setup: a user arriving from a flash, or a
+    watch that fell into its bootloader. Telling them "did not answer" sends
+    them hunting for a fault that is not there, when the bootloader will say
+    what it is.
+    """
+    import asteroid_docking_bay.rpcops as ro
+    saved = {}
+    monkeypatch.setattr(ro, "_fastboot_list", lambda: {"H1NZCJ010087020": "1-1"})
+    monkeypatch.setattr(ro, "_fastboot_getvar_product", lambda s: "sparrow")
+    monkeypatch.setattr(ro, "load_config", lambda: {"hubs": [{"location": "1-3"}]})
+    monkeypatch.setattr(ro, "save_config", lambda c: saved.update(c))
+    monkeypatch.setattr(ro.registry, "note", lambda *a, **k: None)
+    # the ADB reader must never be reached for a bootloader watch
+    monkeypatch.setattr(ro, "get_watch_codename",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("tried to shell into a bootloader")))
+
+    d = ro.DISPATCH._data["onboard.identify"]({"serial": "H1NZCJ010087020"})
+    assert d["ok"] and d["codename"] == "sparrow" and d["via"] == "fastboot"
+    assert saved["serials"]["H1NZCJ010087020"] == "sparrow"
+    assert saved["hubs"], "naming from fastboot dropped the rest of the config"
+
+
+def test_a_wear_os_watch_names_itself_through_getprop(monkeypatch):
+    """Wear OS reference units are Android: no /etc/asteroid-release, no
+    /etc/os-release, and a hostname of "localhost" that is correctly refused as
+    an identity. Their device codename is the SAME name AsteroidOS uses --
+    the port takes the vendor's -- so getprop answers it directly.
+
+    Order matters: getprop must be tried BEFORE hostname, or the search ends on
+    a refused "localhost" and the watch reads as unnameable.
+    """
+    import asteroid_docking_bay.adb as a
+    asked = []
+
+    def shell(cmd, timeout=8, check=False):
+        asked.append(cmd)
+        if "asteroid-release" in cmd or "os-release" in cmd:
+            return 1, "", "No such file"
+        if "getprop" in cmd:
+            return 0, "sturgeon", ""
+        return 0, "localhost", ""          # Android hostname, not an identity
+
+    assert a.get_watch_codename("S1", shell=shell) == "sturgeon"
+    assert not any("hostname" in c for c in asked), (
+        "fell through to hostname, which on Android is 'localhost' and is "
+        "refused -- the watch would read as unnameable")

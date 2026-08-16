@@ -50,7 +50,8 @@ from . import drainlog, wifi
 from .watchctl import BACKUP_ROOT, DIAG_ROOT, Watch, _watch_os
 from .ops import ChargeOp, DrainOp, WorkbenchOp, _flash_one_watch
 from .fastboot import (_switch_ssh_to_adb, _usb_moded_switch_failed,
-                       _detect_rndis, _fastboot_list, bootloader_unlocked,
+                       _detect_rndis, _fastboot_list, _fastboot_getvar_product,
+                       bootloader_unlocked,
                        fastboot_getvar_all, parse_getvar,
                        ssh_reach_ip)
 from .transport import SshTransport, USB_SSH_IP
@@ -2420,6 +2421,24 @@ def _onboard_identify(args):
     serial = (args.get("serial") or "").strip()
     if not is_a_serial(serial):
         return {"ok": False, "error": "not a usable serial"}
+    # A watch in its BOOTLOADER has no shell at all, so no amount of transport
+    # juggling reaches it -- but fastboot will say what it is. This is a real
+    # way to meet a watch during setup: a user arriving from a flash, or one
+    # that fell into fastboot, and being told "did not answer" would send them
+    # hunting for a fault that is not there.
+    if serial in _fastboot_list():
+        product = _fastboot_getvar_product(serial)
+        if product:
+            with _config_lock:
+                cfg = load_config()
+                cfg.setdefault("serials", {})[serial] = product
+                save_config(cfg)
+            registry.note(serial, source="onboard-fastboot", codename=product)
+            return {"ok": True, "serial": serial, "codename": product,
+                    "via": "fastboot"}
+        return {"ok": False,
+                "error": "the bootloader did not report a product name"}
+
     # Over whichever link reaches it. Onboarding tells the user SSH works, so
     # naming has to work there too; an ADB-only read made an SSH watch
     # unnameable and blamed the watch for not answering.
@@ -2429,7 +2448,7 @@ def _onboard_identify(args):
     if not codename:
         return {"ok": False,
                 "error": "the watch did not answer -- is it booted and "
-                         "connected over ADB or SSH?"}
+                         "connected over ADB, SSH or fastboot?"}
     with _config_lock:
         cfg = load_config()
         cfg.setdefault("serials", {})[serial] = codename
