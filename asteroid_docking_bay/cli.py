@@ -27,6 +27,7 @@ from .usb import (hub_vendors, test_port_power_switching,
 from .events import event_log
 from .fastboot import _fastboot_devices
 from .ops import _flash_one_watch, charge_to_target
+from . import oplock
 from .tasks import active_op_on_slot
 from .watchctl import wait_for_adb
 
@@ -194,6 +195,21 @@ def _busy_guard(codename: str, loc: str, port: int) -> bool:
     port is powered mid-run recharges the watch and quietly invents its own
     result — five hours of readings were destroyed exactly this way.
     """
+    # The operation LOCK first, because it is the claim a separate process can
+    # actually see: it lives in the config file, so it is readable here whether
+    # or not the web service is running. It is what a dump, a wanze run or a
+    # flash holds, and none of those appear in the task registries below — so
+    # without this an interactive `off` or `cycle` cut VBUS underneath a
+    # running 4 GB dump, which is the failure the lock exists to prevent.
+    # (The systemd charge timer already covered this from the other side, via
+    # `held` in /api/status — but only while the web service is up.)
+    cfg = load_config()
+    lock = oplock.held(cfg, find_serial_for_loc_port(cfg, loc, port))
+    if lock:
+        log.error("%s: this watch is held: %s — refusing.\n"
+                  "  Release it first, or wait for it to expire.",
+                  codename, oplock.describe(lock))
+        return True
     kind = active_op_on_slot(f"{loc}:{port}")
     if kind is None:
         return False

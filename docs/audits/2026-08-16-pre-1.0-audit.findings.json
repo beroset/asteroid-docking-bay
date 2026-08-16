@@ -3,5 +3,25 @@
  "date": "2026-08-16",
  "baseline": "onboard-discovery-rework 1.0dev",
  "method": "code-only; no rig actuation; consolidations must keep existing tests passing unchanged",
- "findings": []
+ "findings": [
+  {
+   "id": "F1",
+   "severity": "high",
+   "area": "cli / oplock",
+   "status": "FIXED",
+   "summary": "interactive CLI on/off/cycle ignored the operation lock, so `off` during a dump cut VBUS",
+   "detail": "_busy_guard consulted active_op_on_slot, which reads only the charge/drain/workbench task registries. A dump, wanze run or flash holds the OPLOCK, which lives in the config file precisely so a separate process can read it. So an interactive `asteroid-docking-bay off <watch>` would cut power under a running 4 GB transfer \u2014 the exact failure the lock was introduced to prevent.",
+   "not_the_gap": "The systemd charge timer was already covered from the other side: _web_busy_slots reads `held` from /api/status (#41). But that only works while the web service is up; the lock in the config is readable regardless, so reading it directly is the stronger check and the only one an interactive command has.",
+   "fix": "_busy_guard now checks oplock.held(load_config(), serial) first, mirroring rpcops._refuse_if_busy. Purely additive \u2014 it can only refuse, never actuate.",
+   "test": "test_cli_power_commands_refuse_a_watch_held_under_an_oplock; written failing first, and it also pins that an EXPIRED lock does not block."
+  },
+  {
+   "id": "N1",
+   "severity": "none",
+   "area": "webtemplate / js",
+   "status": "MEASURED \u2014 NOT WORTH IT",
+   "summary": "JS fetch call sites are too varied to collapse behind a helper",
+   "detail": "78 fetch statements; only 13 are near-uniform, and those split into two sub-shapes of 6-7 one-liners each (POST->refresh, POST->toastRes). A generic jfetch() would save a handful of characters per site and obscure the ones that differ. Recorded so the next audit does not re-measure it."
+  }
+ ]
 }

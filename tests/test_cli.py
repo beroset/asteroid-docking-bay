@@ -221,3 +221,40 @@ def test_cmd_map_registers_topology_and_never_switches_power(monkeypatch):
     assert hubs["1-2"]["ports"] == {"1": "skipjack"}      # mapping preserved
     assert hubs["1-2"]["port_smart"] == {"1": True}       # verdict preserved
     assert saved["cfg"]["hub_names"] == {"1-2": "A16 #1"}  # auto-seeded
+
+
+def test_cli_power_commands_refuse_a_watch_held_under_an_oplock(monkeypatch, caplog):
+    """`on` / `off` / `cycle` must respect the operation lock, not only the
+    charge/drain/workbench task store.
+
+    The oplock is the CROSS-PROCESS claim — it lives in the config file
+    precisely so a separate process can see it, and it is what a dump, a wanze
+    run or a flash holds. `_busy_guard` consulted `active_op_on_slot`, which
+    reads the task registries only, so an interactive
+    `asteroid-docking-bay off <watch>` would cut VBUS underneath a running
+    4 GB dump — the same failure the lock was introduced to prevent.
+
+    The systemd charge timer is NOT the gap: it reads `held` from the live
+    /api/status (see _web_busy_slots). But that only works while the web
+    service is up, whereas the lock in the config is readable regardless — so
+    reading it directly is strictly the stronger check, and the only one an
+    interactive command has.
+    """
+    import time as _t
+    from asteroid_docking_bay import cli as c
+
+    cfg = {"hubs": [{"location": "1-2", "ports": {"3": "sturgeon"},
+                     "port_serials": {"3": "S1"}}],
+           "serials": {"S1": "sturgeon"},
+           "op_locks": {"S1": {"kind": "dump", "until": _t.time() + 3600}}}
+    monkeypatch.setattr(c, "load_config", lambda: cfg)
+    # no charge/drain/workbench task owns the slot — the ONLY claim is the lock
+    monkeypatch.setattr(c, "active_op_on_slot", lambda slot: None)
+
+    assert c._busy_guard("sturgeon", "1-2", 3) is True, (
+        "a CLI power command would cut VBUS on a watch held for a dump")
+
+    # ...and an expired lock must not block anything
+    cfg["op_locks"]["S1"]["until"] = _t.time() - 1
+    assert c._busy_guard("sturgeon", "1-2", 3) is False, (
+        "an expired lock still refused — locks must lapse, not become immortal")
