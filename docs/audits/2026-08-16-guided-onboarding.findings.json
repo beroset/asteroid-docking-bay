@@ -1,0 +1,190 @@
+{
+  "audit": "guided-onboarding",
+  "date": "2026-08-16",
+  "context": {
+    "trigger": "A plant-bug validation run overwrote the live config (12 hubs / 27 ports lost). moWerk declared the empty state a test fixture for the user onboarding rather than restoring it.",
+    "method": "Worked the guide from the user's position against a genuinely empty config, on the w541 rig, with moWerk as the tester and the hardware as the arbiter.",
+    "suite": {"before": 819, "after": 832},
+    "rule": "every new test was validated by planting the bug it exists to catch"
+  },
+  "findings": [
+    {
+      "id": "F1",
+      "title": "Guided setup could not see a non-PPPS hub",
+      "severity": "high",
+      "status": "fixed",
+      "detail": "The hub listing came from uhubctl_list(), which only reports hubs uhubctl can switch. Measured on the rig: uhubctl_list() 6 hubs, discover_hubs() 12 - the difference being the Sabrent box and the Lenovo dock, both carrying watches. A user with a dumb hub was told their hardware did not exist, on the first screen.",
+      "fix": "Use discover_hubs(), which is what `map` has always used, so guide and mapping agree.",
+      "plant": "revert to uhubctl_list -> the non-PPPS box vanishes from the grouped result"
+    },
+    {
+      "id": "F2",
+      "title": "A watch on an unmapped port had no row at all",
+      "severity": "high",
+      "status": "fixed",
+      "detail": "Status rows are built by walking the CONFIGURED hubs, so a watch on a port no hub owns was invisible while a-d-b could see, talk to and flash it. That is the first thing a new user does: one watch, no hub, straight into the machine.",
+      "fix": "A `direct` virtual view beside Orbit; light by design, since charge/drain/PPPS belong to a switchable port. Later extended to read sysfs as a third source so SSH watches appear too.",
+      "plant": "treat every path as unmapped; emit the section when empty; drop the fastboot source; drop the sysfs source"
+    },
+    {
+      "id": "F3",
+      "title": "The guide wrote nothing",
+      "severity": "high",
+      "status": "fixed",
+      "detail": "Six verified steps and no persistence: no hub map, no port, no watch. The final screen offered only Close, so a finished setup left the config exactly as empty as it started.",
+      "fix": "onboard.identify reads the codename off the watch and stores serial -> codename; Finish runs it once per watch it saw, serialized. Config is loaded fresh inside the lock at write time.",
+      "plant": "save a dict built in-place instead of a freshly loaded config - the shape of the wipe that started the day"
+    },
+    {
+      "id": "F4",
+      "title": "The onboarding was unreachable",
+      "severity": "high",
+      "status": "fixed",
+      "detail": "It lived behind a small `guided setup` text link in the meta row. A user who has just installed a-d-b has no reason to know it exists.",
+      "fix": "Opens by itself whenever nothing is mapped; the link is removed and there is no way to summon it. Also means it returns after a config loss on the next page load."
+    },
+    {
+      "id": "F5",
+      "title": "Naming was ADB-only, while the guide advertised SSH",
+      "severity": "medium",
+      "status": "fixed",
+      "detail": "A watch in developer/SSH mode answered 'did not answer' - blaming the watch for a link the reader never tried, at a dead end the guide had invited the user into.",
+      "fix": "get_watch_codename takes the same `shell` parameter battery_and_screen does; the op hands it whatever _reachable_transport returns.",
+      "plant": "drop the transport argument -> the SSH-only watch is unnameable"
+    },
+    {
+      "id": "F6",
+      "title": "A watch in fastboot or on Wear OS could not be named",
+      "severity": "medium",
+      "status": "fixed",
+      "detail": "A bootloader has no shell, so no transport reaches it. A Wear OS watch has no /etc/asteroid-release and a hostname of `localhost`, which is correctly refused as an identity.",
+      "fix": "fastboot getvar product; getprop ro.product.device for Android, tried BEFORE hostname. AsteroidOS codenames are the vendor codenames, so getprop answers directly.",
+      "plant": "remove the fastboot branch; move getprop after hostname"
+    },
+    {
+      "id": "F7",
+      "title": "The watch-side power check was dead on every AsteroidOS watch",
+      "severity": "high",
+      "status": "fixed",
+      "detail": "adb_external_power ran `dumpsys battery`, an Android command. Measured on sturgeon: `dumpsys: command not found`, function returns None. This is the corroborating half of the PPPS verdict - the branch that catches a hub which did NOT cut VBUS - so it existed, answered 'unknown' every time, and verified nothing. Surfaced by moWerk challenging an overstated claim about the verdict logic.",
+      "fix": "Read the kernel's power_supply class first; keep dumpsys for Wear OS units. Verified live: sturgeon None -> True.",
+      "plant": "revert to dumpsys-only; leave the glob unescaped"
+    },
+    {
+      "id": "F8",
+      "title": "adb_shell expands globs on the HOST",
+      "severity": "medium",
+      "status": "fixed",
+      "detail": "A bare * expands against the laptop's own /sys and ships the host's supply names (AC, BAT0) to the watch, which answers 'No such file'. Silent - indistinguishable from a watch with no power_supply.",
+      "fix": "Escape the glob so the watch's shell expands it.",
+      "sibling_checked": "battery_and_screen carries the same-looking glob but wraps its pipeline in double quotes, which suppresses host expansion. Verified against the watch - (100, False, 'Charging') - and left alone."
+    },
+    {
+      "id": "F9",
+      "title": "a-d-b reshaped watches during onboarding",
+      "severity": "high",
+      "status": "fixed",
+      "detail": "Staging a live SSH test required flipping the fleet USB preference, or the rig kept switching the watch back. The workaround WAS the bug report: a real user never flips the preference, so a first-timer connecting in SSH mode would watch a-d-b silently undo it.",
+      "fix": "Fleet-wide corrections are gated on the guide panel being OPEN - heartbeat while shown, explicit release on close - not on the last request, because a screen that polls nothing would drop out of an activity window while being read. The gate covers every watch, not only the one being onboarded.",
+      "plant": "remove the gate; make release a no-op"
+    },
+    {
+      "id": "F10",
+      "title": "The gate was added at one call site and assumed at the others",
+      "severity": "high",
+      "status": "fixed",
+      "detail": "Minutes after shipping F9 the rig proved it: a watch deliberately switched to SSH was peeled back by the background WARMER, a sibling of the gated path. Same shape as the pre-1.0 audit's F1/F8 pair.",
+      "fix": "Classify every caller that switches a watch's USB mode - status aligner and warmer are automatic (gated); flash path, onboard sweep and watch.switch_* are deliberate (untouched). The window moved to util, the leaf both layers import, because keeping the state beside one of them is what made it easy to miss the other.",
+      "plant": "remove the warmer's gate - asserted by its own test, not inferred from the status path's"
+    },
+    {
+      "id": "F11",
+      "title": "A service restart re-opened the hole",
+      "severity": "medium",
+      "status": "fixed",
+      "detail": "The quiet window is in memory, so a deploy cleared it, and the warmer's first pass runs about a second into startup. Measured: the gate refused twice, a deploy restarted the service, and one second later the same watch was switched anyway, mid-experiment.",
+      "fix": "Start armed. Also matches what a-d-b knows at that moment, which is nothing: it has not yet seen the bus and cannot tell a stray from a watch somebody is holding.",
+      "plant": "start the window at zero"
+    },
+    {
+      "id": "F12",
+      "title": "A reachable SSH watch was labelled 'not reachable'",
+      "severity": "medium",
+      "status": "fixed",
+      "detail": "The row carried no address, because a watch on the shared default has no ALLOCATED one and the renderer was passed null besides. Alarming on the one screen where a new user is deciding whether their setup works.",
+      "fix": "Resolve with ssh_reach_ip - the function already used on that path, not a second SSH detection. Physical port rows keep the allocation-only lookup, so the bare 'no address' pill still means stray there."
+    },
+    {
+      "id": "F13",
+      "title": "'Add another watch' was a wizard loop",
+      "severity": "medium",
+      "status": "fixed",
+      "detail": "It restarted the scan, which re-found the watch just onboarded - still docked, still powered - and announced 'found 2 watches already connected'.",
+      "fix": "Removed. Adding watches is a physical sequence: dock the next and it appears. Replaced with what to do instead, and with what `shelved` means - shut down first, port power off second."
+    },
+    {
+      "id": "F14",
+      "title": "The PPPS claim was stronger than the evidence",
+      "severity": "medium",
+      "status": "fixed",
+      "detail": "Registration reported hubs as 'switches its own power'. A descriptor only says the hub ANNOUNCES per-port switching, and a hub can acknowledge a power command with the power still on. Caught by moWerk.",
+      "fix": "Report announced, and say plainly that it is unconfirmed until a port is used with a watch on it."
+    },
+    {
+      "id": "F15",
+      "title": "Wording and placement of the first screens",
+      "severity": "low",
+      "status": "fixed",
+      "detail": "State and instruction ran together on the empty-bus screen; the WiFi button said 'by IP' while the box takes a hostname (moWerk onboarded beluga BY HOSTNAME through it); clearing the bus did not mention the physical per-port buttons or the enumeration storm; the panel sat at a guessed pixel offset.",
+      "fix": "Split the wording, drop 'by IP', name the buttons and the storm, and anchor the panel below the Orbit row by measurement - during onboarding the layout moves constantly."
+    },
+    {
+      "id": "F16",
+      "title": "sol keeps its USB gadget up with VBUS cut",
+      "severity": "medium",
+      "status": "reported",
+      "owner": "porting session",
+      "detail": "With its port's physical button off (LED dark, usb/online = 0 on every supply, confirmed from the watch itself), sol stayed enumerated and fully reachable over ADB. Never observed on this fleet in two months of shelving watches, which is strong evidence it is sol specifically rather than the hub: sol is the one watch being actively ported, and a gadget that asserts its pull-up unconditionally instead of following VBUS produces exactly this.",
+      "control_test_not_run": "switch another watch's physical button and see whether it vanishes from adb"
+    },
+    {
+      "id": "F17",
+      "title": "seed_hub_names has no entry for the Sabrent",
+      "severity": "low",
+      "status": "open",
+      "detail": "It registered as `Hub @ 1-6` while the A16 and the Lenovo dock got real names. Cosmetic."
+    },
+    {
+      "id": "F18",
+      "title": "An Orbit member's address field is named `ip` but holds a hostname",
+      "severity": "low",
+      "status": "open",
+      "detail": "beluga was onboarded by hostname and stored as {\"ip\": \"beluga\"}. Works; the name says the wrong thing."
+    }
+  ],
+  "dead_ends": [
+    {
+      "what": "A staged script reported a verdict it had not measured",
+      "detail": "Testing whether a laptop root port cuts VBUS, the sampler left running on the watch died with the adb session and its log never existed - and the script counted 'zero samples showing no power' as proof of data-only. Read as confirmed by moWerk before being retracted. Absence of evidence rendered as evidence, by a script written to avoid exactly that."
+    },
+    {
+      "what": "An overstated claim about a-d-b's own PPPS verdict",
+      "detail": "Claimed the verdict concluded 'VBUS cut confirmed' from an ADB drop alone and that the Sabrent could be mis-classified. Challenged by moWerk. The test in fact has three layers (descriptor capability gate, register gate returning dumb unless both off and on confirm, watch-side corroboration), and the Sabrent never reaches it because it is not flagged PPPS. The example was invented from adjacency; the challenge surfaced F7, which is real and worse."
+    },
+    {
+      "what": "A 6h10m clock skew nearly produced a confident wrong answer",
+      "detail": "Grepping the watch's journal for a charger event used host time against a watch clock more than six hours behind. The window landed in the watch's future and came back empty, which reads exactly like 'no event was logged'."
+    },
+    {
+      "what": "The phantom was a live watch",
+      "detail": "A row persisting on a port whose LED was dark looked like a stale kernel node. It was sol, awake, on battery, answering adb. Settled only by asking the watch about its own power - using the function fixed that morning in F7."
+    }
+  ],
+  "proven_on_hardware": [
+    {"path": "watch already connected -> keep on this port", "evidence": "sturgeon, over ADB and over SSH, auto-named both times"},
+    {"path": "nothing connected -> hub -> register -> watches one at a time", "evidence": "11 hub entries across 3 boxes; A16 announces PPPS, Sabrent does not; sol and aurora mapped and named"},
+    {"path": "nothing connected -> WiFi by hostname -> Orbit", "evidence": "beluga, with nothing plugged in"},
+    {"path": "welcome opens itself; skip -> developer mode, finish -> user mode", "evidence": "verified"},
+    {"path": "naming from fastboot / Wear OS", "evidence": "unit tests only, no hardware yet"}
+  ]
+}
