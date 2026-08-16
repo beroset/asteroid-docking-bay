@@ -1191,6 +1191,16 @@ def _direct_hub_view(cfg: dict, devices: dict, adb_paths: dict,
             _adb_state(devices, serial) if serial in devices else None,
             serial in fb_serials,
             lambda: _sysfs_usb_mode(path) == "ssh")
+        # DELIVERED power, from the only witness that can answer: the watch.
+        # A hub's per-port switch cuts VBUS but not the data lines, so a watch
+        # whose port was switched off -- by software OR by the hub's physical
+        # button, which no register can see -- keeps its gadget up on its own
+        # battery and reads as a perfectly healthy connection. Measured on sol
+        # 2026-08-16: usb/online 0 on every supply while adb answered normally,
+        # which is indistinguishable from a working port unless you ask.
+        charge_status = None
+        if state == "device":
+            _, _, charge_status = battery_and_screen(serial)
         rows.append({
             "codename": machine or serial, "machine": machine, "serial": serial,
             "direct": True, "empty": False,
@@ -1213,6 +1223,9 @@ def _direct_hub_view(cfg: dict, devices: dict, adb_paths: dict,
             "last_live_ts": cached.get("last_live_ts"),
             "geometry": cached.get("geometry"),
             "named": machine is not None,
+            "charge_status": charge_status,
+            # Not a guess from a register: the watch says it is running down.
+            "unpowered": charge_status == "Discharging",
         })
     if not rows:
         return None
