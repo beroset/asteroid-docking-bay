@@ -40,10 +40,25 @@ def parse_adb_devices(out: str) -> dict[str, dict]:
     return result
 
 
+# `adb devices -l` answers in well under a second, and in a disconnect storm in
+# a few. This is not a latency budget — it is the bound that stops a hung adb
+# server from blocking a thread FOREVER, because _run defaults to no timeout at
+# all. Deliberately far longer than any healthy or degraded call, so it can only
+# ever fire where the alternative was hanging.
+#
+# Safe to bound precisely because the failure is already handled correctly: a
+# timeout returns rc != 0, which this reads as "the call failed" (None) rather
+# than "no devices" — and _wait_adb_state discards failed samples instead of
+# treating them as a watch that vanished.
+_ADB_DEVICES_TIMEOUT = 20.0
+
+
 def adb_devices_checked() -> dict[str, str | list[str]] | None:
     """Like adb_devices, but None when the adb call itself failed (server
-    crash / not installed) — distinct from a genuinely empty device list."""
-    rc, out, err = _run("adb devices -l", check=False)
+    crash / not installed / hung) — distinct from a genuinely empty device
+    list."""
+    rc, out, err = _run("adb devices -l", check=False,
+                        timeout=_ADB_DEVICES_TIMEOUT)
     if rc != 0:
         log.warning("adb devices failed (rc=%s): %s", rc, err.strip() or "no stderr")
         return None

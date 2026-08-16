@@ -33,6 +33,58 @@
    "fix": "panelShow/panelHide own the mask convention; panelHideAll finds panels by CLASS rather than by a list, so a panel added tomorrow is covered without touching the handler.",
    "line_delta": "+6 code lines (+13 with comments) \u2014 this consolidation does NOT save lines. It replaces eight copies of a convention with one definition and removes a class of bug.",
    "test": "test_escape_closes_every_panel_not_just_the_first_two; plants both the hardcoded-list regression and a panelHide that forgets the mask."
+  },
+  {
+   "id": "F3",
+   "severity": "medium",
+   "area": "util / adb",
+   "status": "FIXED (adb half)",
+   "summary": "_run defaults to timeout=None, so the status path's device listing could hang a thread forever",
+   "detail": "util._run(cmd, check=True, timeout=None) waits indefinitely unless a caller passes a timeout, and 18 call sites do not. The one that matters most is adb_devices_checked -> `adb devices -l`, which runs on every status build: a hung adb server would block that thread for ever rather than failing.",
+   "fix": "adb_devices_checked now passes a deliberately generous 20s bound \u2014 far longer than any healthy or degraded call, so it can only fire where the alternative was hanging. Safe because the failure was ALREADY handled correctly: rc != 0 reads as 'call failed' (None), not 'no devices', and _wait_adb_state discards failed samples rather than treating them as watches that vanished.",
+   "test": "test_the_device_listing_cannot_hang_forever \u2014 pins both the bound and the failed-vs-empty distinction."
+  },
+  {
+   "id": "F4",
+   "severity": "medium",
+   "area": "fastboot",
+   "status": "REPORTED \u2014 not fixed tonight",
+   "summary": "`fastboot devices` is implemented twice, and only one of the two is bounded",
+   "detail": "_fastboot_devices() (fastboot.py:23) runs `fastboot devices` with NO timeout. _fb_list_refresh (fastboot.py:81) runs the same command with timeout=8 and a docstring warning that the scan takes 5-8s and 'ignores the subprocess timeout'. Two implementations of one listing, with different hang behaviour and different parsing.",
+   "why_not_fixed": "_fastboot_devices feeds _wait_for_fastboot, which is on the FLASH path. Changing its timing under stress is exactly what this audit refuses to do unattended. It is also the more interesting half: the two should become one function, and that is a shape decision, not a mechanical edit.",
+   "suggested": "One lister with an explicit bound, used by both the warmer and the flash wait; keep the cache in the caller, not in the lister."
+  },
+  {
+   "id": "N2",
+   "severity": "none",
+   "area": "oplock",
+   "status": "CHECKED \u2014 CLEAN",
+   "summary": "every oplock holder releases on every path",
+   "detail": "Three holders: watch.dump (worker releases in a finally; an explicit release if the thread never starts, with the reasoning in a comment), oplock.set (user-driven), wanze.probing_set (user-driven). The 4h expiry covers the remaining hairline between hold and thread start. No leak found."
+  },
+  {
+   "id": "N3",
+   "severity": "none",
+   "area": "drain / events",
+   "status": "CHECKED \u2014 PRIOR FINDING HOLDS",
+   "summary": "the wearability verdict is still protected by a sample/duration floor",
+   "detail": "An in-progress drain_rate can be noisy early (a 2-minute reading yields ~30%/h) and is shown live, which is honest. But it cannot become a watch's canonical est_h: _latest_drain_summaries enforces _DRAIN_MIN_SAMPLES and _DRAIN_MIN_HOURS, citing audit B4. Verified the earlier fix is real and still in place."
+  },
+  {
+   "id": "N4",
+   "severity": "low",
+   "area": "ops / drain",
+   "status": "OBSERVED",
+   "summary": "drain elapsed time is wall-clock, so a clock step corrupts a run",
+   "detail": "elapsed_h = (time.time() - task['start_ts'])/3600. A NTP step or manual clock set during a multi-hour run skews the rate. Recorded rather than 'fixed' because wall clock is the DEFENSIBLE choice here: the task is persisted and resumable across a service restart, and a monotonic clock does not survive that. A real fix would record both clocks, or sanity-bound elapsed_h, and is a design decision for mo."
+  },
+  {
+   "id": "N5",
+   "severity": "none",
+   "area": "webstatus",
+   "status": "OBSERVED",
+   "summary": "slow status refreshes are load-dependent, not chronic",
+   "detail": "Only 2 refreshes over 1s in a 40-minute window with most of the fleet shelved; earlier in the evening, with many watches live, it logged continuously at 1.1-2.2s. The breakdown attributes it to the 'render' phase (the per-port loop). Not chased: optimising without the load present is guesswork. If it is worth pursuing, sub-instrument the render loop first so the next slow refresh names the culprit rather than the phase."
   }
  ]
 }

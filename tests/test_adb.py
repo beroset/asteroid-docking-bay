@@ -297,3 +297,33 @@ def test_a_non_answer_is_not_accepted_as_an_identity(monkeypatch):
                         lambda s, cmd, **k: (0, "(none)", "") if cmd == "hostname" else (1, "", ""))
     assert adbmod.get_watch_codename("S1") is None, \
         "the resolver handed back a non-answer as the watch's name"
+
+
+def test_the_device_listing_cannot_hang_forever(monkeypatch):
+    """`adb devices -l` runs on the status path, and _run defaults to no
+    timeout at all — so a hung adb server would block the thread for ever
+    rather than failing. The listing must be bounded.
+
+    The bound is safe only because the failure is already handled correctly:
+    a timeout comes back rc != 0, which adb_devices_checked reads as "the call
+    failed" (None), NOT as "no devices". That distinction is what stops a
+    stuck adb server from reading as a fleet that vanished — which would in
+    turn drive recovery cycles that switch VBUS."""
+    from asteroid_docking_bay import adb as a
+
+    seen = {}
+
+    def fake_run(cmd, check=True, timeout=None):
+        seen["cmd"], seen["timeout"] = cmd, timeout
+        return 0, "List of devices attached\n", ""
+    monkeypatch.setattr(a, "_run", fake_run)
+    a.adb_devices_checked()
+    assert "adb devices" in seen["cmd"]
+    assert seen["timeout"], "the device listing is unbounded — a hung adb server wedges the caller"
+
+    # a timeout must read as "call failed", never as "no devices"
+    monkeypatch.setattr(a, "_run", lambda *x, **k: (1, "", "timeout"))
+    assert a.adb_devices_checked() is None, (
+        "a timed-out listing was reported as a successful empty result — every "
+        "watch would read as gone")
+    assert a.adb_devices() == {}, "the {}-on-failure contract changed"
