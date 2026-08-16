@@ -1,10 +1,16 @@
-# Architecture (0.4)
+# Architecture (1.0)
 
 0.1–0.3 grew as a single 4300-line file. That was the right shape while the
 feature set was being discovered on live hardware, and the wrong shape the
 moment other humans wanted to review and contribute. 0.4 splits it into a
-package, introduces classes where state and identity genuinely live, and adds
+package, introduced classes where state and identity genuinely live, and added
 a pytest suite for the pure logic.
+
+Everything since has kept that shape: ~18k lines of package across 36 modules,
+with ~13k lines of tests. This map went stale between 0.5 and 1.0 — twenty
+modules had appeared without being described here, including the op table that
+is the container split's security boundary — and was brought back level by the
+pre-1.0 audit. A test now fails if a module is missing from it.
 
 ## Layout
 
@@ -50,6 +56,49 @@ asteroid_docking_bay/
     webapp.py      Bottle app factory: routes, SSE streams, status cache,
                    background cache warmer
     cli.py         argparse commands + main()
+
+    rpc.py         RPC transport for the container split: NDJSON over TCP,
+                   the token gate, and the Dispatcher — the allow-list of
+                   op name -> handler (see docs/CONTAINERS.md)
+    rpcops.py      the backend op table itself: every /api route as a named
+                   data or stream op. Adding a capability means registering
+                   an op in a reviewable diff, which is why a test pins the
+                   list
+
+    oplock.py      a "leave this watch alone" marker for long operations,
+                   persisted in the config so a SEPARATE process can see it,
+                   and expiring so a crashed holder cannot wedge a watch.
+                   The cross-process half of tasks.py — note that
+                   active_op_on_slot does NOT see it
+    lastseen.py    last-known-good per-watch readings, so the UI can show a
+                   stale value marked as stale rather than a blank
+    registry.py    the Fleet Registry: a durable per-serial record of every
+                   watch the rig has ever seen, plus a change log
+    flap.py        counting how often a port re-enumerates — the connection
+                   shame badge
+
+    orbit.py       the Orbit port: fleet watches reachable over the air
+                   rather than on a USB socket
+    bt.py          host-side Bluetooth for Orbit — scan for watches and pair
+
+    variants.py    exact hardware codenames for watches that share one image
+    watchimg.py    per-watch product images from asteroidos.org, host-cached
+    watch_settings.py  the AsteroidOS settings a-d-b mirrors, and how to read
+                   them off a watch
+    weather.py     fetch weather (Open-Meteo, keyless) and shape it for a
+                   watch's weather dconf
+    stockrom.py    full-disk dump and the restore-to-stock path
+    wanze.py       host side of the on-watch probe that records while the
+                   watch is away
+    bench.py       driving the benchymark FPS benchmark app
+    boottime.py    boot-time measurement: VBUS-on to usable
+    diag.py        the a-d-b-doctor dataset — kernel diagnostics no watch
+                   image ships a tool for
+    drainlog.py    measuring battery current on a watch running on its own
+                   battery
+    aodcheck.py    catching the gap between what a watch is CONFIGURED to do
+                   and what it actually does
+    icecc.py       the compile cluster the dock itself runs on (Machine Room)
 tests/             pytest suite (pure logic only — no hardware, no adb)
 ```
 
@@ -64,6 +113,15 @@ One deliberate seam keeps that acyclic:
 
 - `adb.wait_serial_online()` can power-cycle a port as enumeration recovery;
   it imports `usb` lazily inside the function rather than at module level.
+
+`rpcops` sits above `webstatus` (it serves that document as `status.get`), and
+the web layer reaches the ops only through a caller — `LocalCaller` in
+monolithic mode, `RpcClient` in the split. There is **one acknowledged cycle**:
+`webstatus.finish_ssh_relocation` calls back into `rpcops` for
+`watch.switch_ssh`, worked around with a local import. It also reaches the op
+through the private `DISPATCH._data` rather than `Dispatcher.dispatch`, which
+skips the unknown-op check — as does `cli.cmd_status`. Recorded in the pre-1.0
+audit rather than untangled unattended.
 
 The background cache warmer (needs both `usb` and `fastboot`) lives in
 `ops`, with the operations: whichever process runs the ops — monolithic

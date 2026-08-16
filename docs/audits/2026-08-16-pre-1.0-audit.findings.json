@@ -85,6 +85,36 @@
    "status": "OBSERVED",
    "summary": "slow status refreshes are load-dependent, not chronic",
    "detail": "Only 2 refreshes over 1s in a 40-minute window with most of the fleet shelved; earlier in the evening, with many watches live, it logged continuously at 1.1-2.2s. The breakdown attributes it to the 'render' phase (the per-port loop). Not chased: optimising without the load present is guesswork. If it is worth pursuing, sub-instrument the render loop first so the next slow refresh names the culprit rather than the phase."
+  },
+  {
+   "id": "F5",
+   "severity": "medium",
+   "area": "docs / architecture",
+   "status": "FIXED",
+   "summary": "20 of 36 modules were missing from docs/ARCHITECTURE.md, which still said 0.4",
+   "detail": "The map a new contributor reads first had drifted badly between 0.5 and 1.0. Undocumented modules included rpcops (the op table the container split treats as its security boundary), rpc, oplock (the cross-process lock), orbit, registry, stockrom, wanze and icecc.",
+   "why_it_matters": "Not pedantry: the map is where someone looks to find out whether the thing they need already exists. An incomplete map is a direct cause of the duplication this audit was asked to hunt.",
+   "fix": "All 36 modules described, in their own docstrings' words; header moved to 1.0; the dependency section now covers rpc/rpcops and names the one acknowledged cycle (webstatus -> rpcops via a local import).",
+   "test": "test_every_module_is_in_the_architecture_map \u2014 fails if a module is absent, so the document cannot silently drift again. That absence of a test is why it drifted."
+  },
+  {
+   "id": "F6",
+   "severity": "low",
+   "area": "webstatus",
+   "status": "REPORTED",
+   "summary": "a docstring claims to mirror logic it does not mirror",
+   "detail": "webstatus._ssh_battery says it 'Mirrors rpcops._reachable_transport's selection'. It does not: _reachable_transport falls back to an ORBIT member's WiFi address, and _ssh_battery has only the ssh_reach_ip branch.",
+   "assessment": "The CODE is right \u2014 orbit members get battery from last_seen via the warmer, so a docked-SSH read has no business probing orbit. The COMMENT is the defect, and a dangerous one: someone 'aligning the mirror' would add a network probe per SSH watch per status refresh, which is exactly the 4.25s render regression _detect_rndis was written to remove.",
+   "suggested": "Reword to say it mirrors only the assigned-SSH-address branch, and why the orbit branch is deliberately absent."
+  },
+  {
+   "id": "F7",
+   "severity": "low",
+   "area": "rpc / callers",
+   "status": "REPORTED",
+   "summary": "two callers reach past Dispatcher.dispatch into the private _data dict",
+   "detail": "cli.cmd_status and webstatus.finish_ssh_relocation call DISPATCH._data['op'](args) directly. Dispatcher.dispatch(op, args) exists and raises RpcError for an unknown op; the private path raises KeyError instead, so a renamed op becomes a traceback rather than a clean error.",
+   "suggested": "Use dispatch() in both. Small and safe, but it belongs with the webstatus->rpcops cycle it is entangled with, which is a shape decision for mo."
   }
  ]
 }

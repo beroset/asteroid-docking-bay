@@ -265,3 +265,28 @@ def test_no_child_process_inherits_stdin():
     assert not offenders, (
         "subprocess call(s) inheriting stdin — adb shell will eat the "
         "caller's input:\n  " + "\n  ".join(offenders))
+
+
+def test_every_module_is_in_the_architecture_map():
+    """docs/ARCHITECTURE.md is the map a new contributor reads first, and mo's
+    rule is that it moves in the same commit that structure does.
+
+    It did not. Between 0.5 and 1.0 twenty of thirty-six modules appeared
+    without ever being described — including `rpcops`, the op table that the
+    container split treats as its security boundary, and `oplock`, the
+    cross-process lock. Nothing failed, because no test owned the document.
+
+    A missing entry is not pedantry here: the map is where someone looks to
+    find out whether the thing they need already exists, which is exactly how
+    duplicated code gets written."""
+    import re
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    doc = (root / "docs" / "ARCHITECTURE.md").read_text()
+    mods = {p.stem for p in (root / "asteroid_docking_bay").glob("*.py")
+            if p.stem != "__init__"}
+    missing = sorted(m for m in mods
+                     if not re.search(rf"\b{re.escape(m)}\.py\b|`{re.escape(m)}`", doc))
+    assert not missing, (
+        f"modules absent from docs/ARCHITECTURE.md: {missing} — add them to the "
+        f"Layout block in the same commit that adds the module")
