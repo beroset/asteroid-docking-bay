@@ -641,7 +641,14 @@ def _ssh_battery(cfg, serial) -> "tuple[int | None, bool, str | None]":
     """Battery / screen / charge for a watch on SSH, read over its SSH link so
     its row shows a live reading instead of the last ADB one. None when it has
     no assigned SSH IP or isn't reachable there — the caller then falls back to
-    the cached value. Mirrors rpcops._reachable_transport's selection."""
+    the cached value.
+
+    Mirrors only the ASSIGNED-ADDRESS branch of rpcops._reachable_transport,
+    not the whole selection. The orbit/WiFi fallback is deliberately absent:
+    an orbiting watch is not on a dock port, and its battery reaches the UI
+    from last_seen via the warmer instead. Adding that branch here would put a
+    network probe on the status path for every SSH watch on every refresh —
+    the 4.25s render that _detect_rndis exists to have removed."""
     ip = ssh_reach_ip(cfg, serial)
     if not ip:
         return None, False, None

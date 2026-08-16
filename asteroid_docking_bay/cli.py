@@ -339,6 +339,19 @@ def _charge_one(
         log.error("%s: not mapped to any hub port", codename)
         return False
 
+    # Charging POWERS THE PORT, so it is subject to the same claim check as
+    # `on` / `off` / `cycle`. It had none at all: not the operation lock, and
+    # not the task store — so `charge <watch>` during a dump cut the transfer,
+    # and during a drain test it recharged the watch mid-run and let the test
+    # go on to invent a result. That second failure is the one _busy_guard was
+    # written for, and this was the path still walking around it.
+    #
+    # Only the interactive path reaches here. The systemd timer
+    # (cmd_check_charge) is a separate entry point and is guarded from the
+    # other side by _web_busy_slots, which reads `held` from /api/status.
+    if _busy_guard(codename, loc, port):
+        return False
+
     smart = is_port_smart(cfg, codename)
     can_switch = smart is not False
 

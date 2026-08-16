@@ -258,3 +258,50 @@ def test_cli_power_commands_refuse_a_watch_held_under_an_oplock(monkeypatch, cap
     cfg["op_locks"]["S1"]["until"] = _t.time() - 1
     assert c._busy_guard("sturgeon", "1-2", 3) is False, (
         "an expired lock still refused — locks must lapse, not become immortal")
+
+
+def test_interactive_charge_respects_a_busy_or_locked_port(monkeypatch):
+    """`charge` powers the port, so it needs the same claim check as on/off/
+    cycle. It had NONE — neither the operation lock nor the task store.
+
+    Two failures that allowed. During a dump it cut the transfer. During a
+    drain test it powered the port mid-run, recharging the watch while the
+    test kept sampling — which does not fail loudly, it invents a result.
+    That second one is the exact scenario _busy_guard was written for, and
+    the charge path was still walking around it.
+
+    The systemd timer is a different entry point (cmd_check_charge) and is
+    guarded from the other side by _web_busy_slots, so it is deliberately not
+    what this covers."""
+    import time as _t
+    from asteroid_docking_bay import cli as c
+
+    cfg = {"hubs": [{"location": "1-2", "ports": {"3": "sturgeon"},
+                     "port_serials": {"3": "S1"}}],
+           "serials": {"S1": "sturgeon"},
+           "op_locks": {"S1": {"kind": "dump", "until": _t.time() + 3600}}}
+    switched = []
+    monkeypatch.setattr(c, "load_config", lambda: cfg)
+    monkeypatch.setattr(c, "find_port_for_codename", lambda cf, cn: ("1-2", 3))
+    monkeypatch.setattr(c, "uhubctl_set_power",
+                        lambda l, p, on: switched.append(on) or True)
+    monkeypatch.setattr(c, "active_op_on_slot", lambda slot: None)
+    # A tripwire on the first call AFTER the guard. Asserting only on
+    # "no power was switched" is not enough: with the guard removed the
+    # function runs its real charge loop, and the test hangs instead of
+    # failing. This makes the planted bug fail in milliseconds and say why.
+    def _past_the_guard(*a, **k):
+        raise AssertionError("reached the charge body — the guard did not stop it")
+    monkeypatch.setattr(c, "is_port_smart", _past_the_guard)
+
+    ok = c._charge_one("sturgeon", cfg, c.ChargeConfig())
+    assert ok is False, "charge proceeded on a watch held for a dump"
+    assert switched == [], "charge switched port power on a locked watch"
+
+    # ...and a drain test owning the slot must stop it too, lock or no lock
+    cfg["op_locks"] = {}
+    monkeypatch.setattr(c, "active_op_on_slot", lambda slot: "drain")
+    assert c._charge_one("sturgeon", cfg, c.ChargeConfig()) is False, (
+        "charge powered a port mid drain test — the run would keep sampling "
+        "a watch that is being recharged and report the result as real")
+    assert switched == [], "charge switched power during a drain test"

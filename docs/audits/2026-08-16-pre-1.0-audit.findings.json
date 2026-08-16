@@ -8,7 +8,7 @@
    "id": "F1",
    "severity": "high",
    "area": "cli / oplock",
-   "status": "FIXED",
+   "status": "FIXED \u2014 but incompletely at first; see F8",
    "summary": "interactive CLI on/off/cycle ignored the operation lock, so `off` during a dump cut VBUS",
    "detail": "_busy_guard consulted active_op_on_slot, which reads only the charge/drain/workbench task registries. A dump, wanze run or flash holds the OPLOCK, which lives in the config file precisely so a separate process can read it. So an interactive `asteroid-docking-bay off <watch>` would cut power under a running 4 GB transfer \u2014 the exact failure the lock was introduced to prevent.",
    "not_the_gap": "The systemd charge timer was already covered from the other side: _web_busy_slots reads `held` from /api/status (#41). But that only works while the web service is up; the lock in the config is readable regardless, so reading it directly is the stronger check and the only one an interactive command has.",
@@ -101,7 +101,7 @@
    "id": "F6",
    "severity": "low",
    "area": "webstatus",
-   "status": "REPORTED",
+   "status": "FIXED",
    "summary": "a docstring claims to mirror logic it does not mirror",
    "detail": "webstatus._ssh_battery says it 'Mirrors rpcops._reachable_transport's selection'. It does not: _reachable_transport falls back to an ORBIT member's WiFi address, and _ssh_battery has only the ssh_reach_ip branch.",
    "assessment": "The CODE is right \u2014 orbit members get battery from last_seen via the warmer, so a docked-SSH read has no business probing orbit. The COMMENT is the defect, and a dangerous one: someone 'aligning the mirror' would add a network probe per SSH watch per status refresh, which is exactly the 4.25s render regression _detect_rndis was written to remove.",
@@ -115,6 +115,18 @@
    "summary": "two callers reach past Dispatcher.dispatch into the private _data dict",
    "detail": "cli.cmd_status and webstatus.finish_ssh_relocation call DISPATCH._data['op'](args) directly. Dispatcher.dispatch(op, args) exists and raises RpcError for an unknown op; the private path raises KeyError instead, so a renamed op becomes a traceback rather than a clean error.",
    "suggested": "Use dispatch() in both. Small and safe, but it belongs with the webstatus->rpcops cycle it is entangled with, which is a shape decision for mo."
+  },
+  {
+   "id": "F8",
+   "severity": "high",
+   "area": "cli / charge",
+   "status": "FIXED",
+   "summary": "the interactive `charge` command had NO claim check at all",
+   "detail": "F1 guarded on/off/cycle and I assumed the remaining uhubctl_set_power sites were legitimately owned by their own operations. Classifying all seven showed that was wrong: cmd_charge -> _charge_one powers a port on and off with neither the oplock nor the task store consulted.",
+   "impact": "Two failures. During a dump it cuts the transfer. During a DRAIN TEST it powers the port mid-run, recharging the watch while the test keeps sampling \u2014 which does not fail loudly, it invents a result. That is verbatim the scenario _busy_guard's own docstring says destroyed five hours of readings.",
+   "not_the_gap": "The systemd timer (cmd_check_charge) is a separate entry point, guarded from the other side by _web_busy_slots. Deliberately unchanged.",
+   "lesson": "F1 shipped as 'fixed' on an unverified assumption about the other call sites. Finishing a shipped fix outranks finding a new one.",
+   "test": "test_interactive_charge_respects_a_busy_or_locked_port \u2014 covers both an oplock and a drain owning the slot. Uses a tripwire on the first call past the guard: asserting only 'no power switched' let the planted bug run the real charge loop and HANG the suite instead of failing."
   }
  ]
 }
