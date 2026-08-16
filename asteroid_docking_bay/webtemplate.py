@@ -3166,11 +3166,13 @@ function gView(){
 
   if(_gState==='choose') return {
     t:GREETING,
-    i:'Nothing is connected yet. On the watch, USB access must be on: '+
-      'Settings → USB → ADB (SSH also works).\\n\\nHow do you want to connect it?',
+    i:'Nothing is connected yet.\\n\\n'+
+      'If a watch is already plugged in, switch ADB or SSH on in its settings — '+
+      'until one of them is on, nothing here can see it.\\n\\n'+
+      'How do you want to add your first watch?',
     a:`<button class="btn" onclick="gWaitDirect()">Straight into this computer</button>`+
       ` <button class="btn" onclick="gMoveToHub()">Set up a USB hub first</button>`+
-      ` <button class="btn" onclick="gChooseOrbit()">Over WiFi, by IP</button>`+
+      ` <button class="btn" onclick="gChooseOrbit()">Add a watch via WiFi</button>`+
       ` <a href="#" class="gskip" onclick="gSkip();return false">skip setup</a>`};
 
   if(_gState==='waitdirect') return {
