@@ -27,6 +27,7 @@ from . import orbit
 from .usb import (_parse_hub_port_path, _port_device_present, _sysfs_hub_scan,
                   port_device_info,
                   _sysfs_path_to_serial_map, _sysfs_usb_mode, adb_usb_paths,
+                  gadget_composition,
                   watch_devices_on_bus,
                   recovery_cycle_lock, uhubctl_cycle,
                   uhubctl_list)
@@ -1008,6 +1009,11 @@ def _web_status_data(cfg: dict) -> list[dict]:
             # Only probe a watch that is actually reachable and idle; the read
             # is cached for ten minutes, so this costs one adb call per watch
             # per TTL rather than one per refresh.
+            # What this watch's gadget actually offers. Interfaces only: cheap
+            # sysfs reads, no probe, and the ONLY honest source -- idProduct
+            # cannot tell a healthy initramfs gadget from usb-moded's
+            # charging-only fallback, since both use 0afe.
+            comp = gadget_composition(f"{loc}.{port_num}")
             wanze_here = (wanze_mod.detect(serial)
                           if adb_state == "device" and not busy else None)
             if not busy:
@@ -1047,6 +1053,13 @@ def _web_status_data(cfg: dict) -> list[dict]:
                 "workbench": workbench,
                 "socket": sockets.get(port_str),
                 "excluded": excludes.get(port_str),
+                # adb and ssh together on one gadget: nothing to switch, and
+                # switching anyway is destructive on these kernels.
+                "ncm": comp["ncm"],
+                # The dead composition. A port CYCLE cannot fix it -- the
+                # gadget is wrong, not the enumeration -- so the UI must say
+                # reboot rather than offer a cycle that silently does nothing.
+                "gadget_dead": comp["mass_storage_only"],
             })
 
         for port_num in empty_nums:

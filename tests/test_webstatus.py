@@ -1094,3 +1094,66 @@ def test_a_codename_on_two_ports_does_not_light_up_both(monkeypatch, tmp_path):
         "another port - the watch appears in two places at once")
     assert rows["1-3:2"]["codename"] == "sol", (
         "the poisoned serial's cached identity overrode the port map")
+
+
+def test_a_row_reports_what_the_gadget_offers(monkeypatch):
+    """The row must carry the gadget state, because two of its values change
+    what the user should DO.
+
+    ncm: adb and ssh on one gadget -- switching the USB mode of such a watch is
+    destructive, not merely pointless (no rndis in these kernels, so usb-moded
+    lands in a charging-only fallback; it cost aurora a reboot mid-port).
+
+    gadget_dead: the mass-storage-only composition. A port CYCLE cannot fix it,
+    so the UI has to say reboot instead of offering a control that silently
+    does nothing.
+
+    Read from interfaces, never idProduct: 0afe is used by both the initramfs
+    gadget (which carries adb) and the dead fallback.
+    """
+    from asteroid_docking_bay import webstatus as ws
+
+    cfg = {"hubs": [{"location": "1-3.4", "ppps": True,
+                     "ports": {"2": "aurora"},
+                     "port_serials": {"2": "AUR"}}],
+           "serials": {"AUR": "aurora"}}
+
+    monkeypatch.setattr(ws, "adb_devices",
+                        lambda: {"AUR": {"status": "device", "usb": "1-3.4.2"}})
+    monkeypatch.setattr(ws, "adb_usb_paths", lambda d: {"AUR": "1-3.4.2"})
+    monkeypatch.setattr(ws, "_fastboot_list", lambda: {})
+    monkeypatch.setattr(ws, "_sysfs_hub_scan", lambda c: [
+        {"location": "1-3.4", "ports": [1, 2, 3, 4], "power": {}, "connect": {}}])
+    monkeypatch.setattr(ws, "_soft_remap", lambda cfg, online: None)
+    monkeypatch.setattr(ws, "port_device_info", lambda loc, port: None)
+    monkeypatch.setattr(ws, "_geometry_view", lambda state, serial: None)
+    monkeypatch.setattr(ws, "_battery_view",
+                        lambda state, serial, bat, forced, os_: (None, None))
+    monkeypatch.setattr(ws, "battery_and_screen", lambda serial, shell=None: (None, False, None))
+    monkeypatch.setattr(ws, "_orbit_hub_view", lambda cfg, seen: {"location": "orbit", "ports": []})
+    monkeypatch.setattr(ws, "_direct_hub_view", lambda *a, **k: None)
+
+    seen = {}
+    def comp(path):
+        seen["path"] = path
+        return {"adb": True, "ncm": True, "mass_storage_only": False, "interfaces": []}
+    monkeypatch.setattr(ws, "gadget_composition", comp)
+
+    def mapped_row(c):
+        # by PORT, not by index: empty ports share the hub and sort by socket
+        return next(r for r in ws._web_status_data(c)[0]["ports"] if r["port"] == 2)
+
+    row = mapped_row(cfg)
+    assert seen["path"] == "1-3.4.2", "the gadget was read for the wrong port"
+    assert row["ncm"] is True, (
+        "the row does not report that this watch offers adb and ssh at once -- "
+        "the UI cannot warn against switching a mode that would break it")
+    assert row["gadget_dead"] is False
+
+    monkeypatch.setattr(ws, "gadget_composition",
+                        lambda p: {"adb": False, "ncm": False,
+                                   "mass_storage_only": True, "interfaces": []})
+    dead = mapped_row(cfg)
+    assert dead["gadget_dead"] is True, (
+        "a mass-storage-only gadget was not flagged, so the UI would offer a "
+        "power cycle that cannot fix it")

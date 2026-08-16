@@ -1036,6 +1036,15 @@ const USB_SSH_IP='192.168.2.15';
 // Text, not logos — see the note in mkadb. Keys match watchctl.WEAR_BRANDS.
 const WEAR_SHORT={'WearOS':'WO','AndroidWear':'AW'};
 const WEAR_LONG={'WearOS':'Wear OS','AndroidWear':'Android Wear'};
+// A watch offering adb AND its own network link at once. Worth its own mark:
+// it is the one state where "switch to ssh" is not merely unnecessary but
+// destructive, and where ssh needs no address at all.
+function ncmBadge(p){
+  if(p.gadget_dead)
+    return ` <span class="cbadge err" title="${ux('mass-storage-only gadget: no adb, no network. A port CYCLE cannot fix this - the composition is wrong, not the enumeration. Only a reboot recovers it.','this watch is offering nothing usable - it needs a reboot, not a power cycle')}">${ux('DEAD GADGET','needs reboot')}</span>`;
+  if(!p.ncm)return '';
+  return ` <span class="cbadge ok" title="${ux('CDC-NCM: adb and ssh are live on one gadget. ssh reaches it at its IPv6 link-local with no address assigned at either end. Do NOT switch its USB mode - these kernels have no rndis and the switch lands in a charging-only fallback.','this watch offers both a data and a network connection at once')}">${ux('NCM','adb+ssh')}</span>`;
+}
 function mkadb(adb,fbprod,os,serial,sshIp,name){
   const nm=esc(name||serial||'');
   if(adb==='device'){
@@ -1122,7 +1131,7 @@ function mkadbrow(p){
   if(p.can_shelve&&p.adb===null)
     return shelveWrap(p,'<span class="dim">&mdash;</span>',
       'port is off and nothing is reachable, so a-d-b makes no claim about this watch — it cannot tell a safely halted watch from one running flat on battery. Click to record what you know.');
-  return mkadb(p.adb,null,p.os,p.serial,p.ssh_ip,p.codename);
+  return mkadb(p.adb,null,p.os,p.serial,p.ssh_ip,p.codename)+ncmBadge(p);
 }
 // The manual state correction. a-d-b can only vouch for an off-state it
 // delivered itself; however else a watch ended up powered down — the fastboot

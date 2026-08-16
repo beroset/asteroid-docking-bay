@@ -3398,3 +3398,46 @@ def test_a_serial_with_a_quote_cannot_escape_the_click_handler(tmp_path):
         f"the serial is not jsq-escaped in the click handler: {bi[-200:]}")
     assert "openBI('S'1'" not in bi, (
         "a raw quote in the serial closed the JS string inside the attribute")
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_the_gadget_badge_separates_both_from_dead(tmp_path):
+    """Two states a watch's USB gadget can be in that the connection badge
+    alone cannot express, and that lead to opposite advice.
+
+    NCM: adb and ssh live on one gadget. It matters because switching such a
+    watch's USB mode is not merely unnecessary but DESTRUCTIVE -- these kernels
+    have no rndis, so usb-moded lands in a charging-only fallback. It cost
+    aurora a reboot mid-port.
+
+    DEAD: the mass-storage-only composition, no adb and no network. A port
+    CYCLE cannot fix it, because the gadget composition is wrong rather than
+    the enumeration, so cycling re-enumerates the same broken gadget. The UI
+    must say reboot, or a user burns time on a control that silently does
+    nothing.
+    """
+    import json
+    h = tmp_path / "badge.js"
+    h.write_text(_DOM_STUBS + JS + r"""
+      const out = {
+        both: ncmBadge({ncm:true, gadget_dead:false}),
+        dead: ncmBadge({ncm:false, gadget_dead:true}),
+        deadWins: ncmBadge({ncm:true, gadget_dead:true}),
+        plain: ncmBadge({ncm:false, gadget_dead:false}),
+      };
+      console.log(JSON.stringify(out));
+      process.exit(0);
+    """)
+    r = subprocess.run(["node", str(h)], capture_output=True, text=True, timeout=25)
+    assert r.returncode == 0, r.stderr[:400]
+    out = json.loads(r.stdout.strip().splitlines()[-1])
+
+    assert "NCM" in out["both"], "a watch offering adb+ssh was not marked"
+    assert "rndis" in out["both"], (
+        "the badge does not warn against switching the USB mode -- that is the "
+        "action this state exists to prevent")
+    assert "reboot" in out["dead"].lower() and "cycle" in out["dead"].lower(), (
+        "the dead gadget must say reboot AND say a cycle will not do it")
+    assert out["deadWins"] == out["dead"], (
+        "a dead gadget rendered as a healthy NCM watch")
+    assert out["plain"] == "", "an ordinary adb watch grew a badge"
