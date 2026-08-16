@@ -618,6 +618,88 @@ def _wait_port_device(location: str, port: int, present: bool, timeout: float) -
         time.sleep(0.5)
 
 
+# ── Gadget composition: what a watch actually offers on the wire ─────────────
+# Read the INTERFACE list, never idProduct. idProduct is a userspace artefact
+# and ambiguous: 0afe is used by both the initramfs gadget (which carries adb)
+# and usb-moded's charging-only fallback (which carries nothing useful). They
+# are distinguishable only here. It is also not a boot-state signal -- the
+# porting session read 0afe as "stuck in initramfs" and diagnosed a boot hang
+# while the watch was sitting in LPM with a working launcher.
+_IFACE_ADB = ("ff", "42", "01")      # vendor-specific; the adb server claims it
+_IFACE_NCM_CTRL = ("02", "0d")       # CDC-NCM control -> the ssh-capable network
+_IFACE_MASS_STORAGE = "08"
+
+
+def usb_interfaces(path: str) -> "list[dict]":
+    """Every USB interface a device exposes: class/subclass/protocol + driver.
+
+    The bound driver is a second signal worth keeping: `cdc_ncm` bound means the
+    host has actually claimed the network function, not merely that the
+    descriptor advertises it.
+    """
+    out: list[dict] = []
+    for iface in sorted(glob.glob(f"{_SYSFS_USB}/{path}:*")):
+        try:
+            cls = Path(f"{iface}/bInterfaceClass").read_text().strip().lower()
+            sub = Path(f"{iface}/bInterfaceSubClass").read_text().strip().lower()
+            proto = Path(f"{iface}/bInterfaceProtocol").read_text().strip().lower()
+        except OSError:
+            continue
+        driver = None
+        try:
+            driver = os.path.basename(os.path.realpath(f"{iface}/driver"))
+        except OSError:
+            pass
+        out.append({"iface": os.path.basename(iface), "cls": cls, "sub": sub,
+                    "proto": proto, "driver": driver})
+    return out
+
+
+def gadget_composition(path: str) -> dict:
+    """What this watch offers right now, from its interfaces alone.
+
+    Returns {adb, ncm, mass_storage_only, interfaces}. `ncm` True means the
+    network function is live NOW -- a host netdev exists for it. It says
+    nothing about whether the watch is CAPABLE of NCM but not carrying it,
+    which only an on-device configfs probe can answer.
+
+    `mass_storage_only` is the dead composition: usb-moded's charging-only
+    fallback, reached when it is asked for a mode this kernel cannot provide.
+    A port power cycle CANNOT fix it -- the problem is the composition, not the
+    enumeration, so cycling re-enumerates the same broken gadget. Only a reboot
+    recovers it, and saying so beats offering a cycle that silently does
+    nothing.
+    """
+    ifaces = usb_interfaces(path)
+    adb = any((i["cls"], i["sub"], i["proto"]) == _IFACE_ADB for i in ifaces)
+    ncm = any((i["cls"], i["sub"]) == _IFACE_NCM_CTRL for i in ifaces)
+    storage = any(i["cls"] == _IFACE_MASS_STORAGE for i in ifaces)
+    return {"adb": adb, "ncm": ncm,
+            "mass_storage_only": bool(storage and not adb and not ncm),
+            "interfaces": ifaces}
+
+
+def usb_netdev_for(path: str) -> "str | None":
+    """The host network interface belonging to this watch, resolved through USB
+    topology.
+
+    Never match on interface names: they are generated from the USB path
+    (enp0s20u3u4u3i1), differ per port and per host, and adjacent watches differ
+    by one character -- the porting session lost an evening to an ssh attempt
+    against a neighbour's interface name.
+    """
+    for netdir in glob.glob("/sys/class/net/*"):
+        try:
+            dev = os.path.realpath(f"{netdir}/device")
+        except OSError:
+            continue
+        if f"/{path}/" in dev + "/" or dev.rstrip("/").endswith(f"/{path}"):
+            return os.path.basename(netdir)
+        if f"/{path}:" in dev:
+            return os.path.basename(netdir)
+    return None
+
+
 def test_port_power_switching(location: str, port: int,
                               serial: str | None = None) -> tuple[bool | None, str]:
     """

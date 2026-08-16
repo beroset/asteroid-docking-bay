@@ -209,3 +209,96 @@ def test_the_bus_scan_finds_a_watch_whose_bootloader_is_not_google(tmp_path, mon
 
     asus = next(d for d in u.watch_devices_on_bus() if d["path"] == "1-1")
     assert asus["vendor"] == "0b05", "the vendor id is not reported for triage"
+
+
+def test_gadget_composition_reads_interfaces_not_idproduct(tmp_path, monkeypatch):
+    """What a watch offers must be read from its INTERFACE list.
+
+    idProduct cannot answer it. `0afe` is used by BOTH the initramfs gadget,
+    which carries adb, and usb-moded's charging-only fallback, which carries
+    nothing useful -- so the same product ID means "fine" or "dead" depending
+    on interfaces alone. It is also not a boot-state signal: the porting
+    session read 0afe as "stuck in initramfs" and diagnosed a boot hang while
+    the watch sat in LPM with a working launcher.
+
+    The dead composition matters operationally: a port power CYCLE cannot fix
+    it, because the problem is the gadget composition rather than the
+    enumeration, so cycling re-enumerates the same broken gadget. Only a reboot
+    recovers it.
+    """
+    import asteroid_docking_bay.usb as usb
+
+    def mkiface(path, name, cls, sub, proto, driver=None):
+        d = tmp_path / f"{path}:{name}"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "bInterfaceClass").write_text(cls + "\n")
+        (d / "bInterfaceSubClass").write_text(sub + "\n")
+        (d / "bInterfaceProtocol").write_text(proto + "\n")
+        if driver:
+            drv = tmp_path / "drivers" / driver
+            drv.mkdir(parents=True, exist_ok=True)
+            (d / "driver").symlink_to(drv)
+        return d
+
+    monkeypatch.setattr(usb, "_SYSFS_USB", tmp_path)
+
+    # sol as measured on the rig: adb + NCM control + CDC data
+    mkiface("1-3.4.3", "1.0", "ff", "42", "01", "usbfs")
+    mkiface("1-3.4.3", "1.1", "02", "0d", "00", "cdc_ncm")
+    mkiface("1-3.4.3", "1.2", "0a", "00", "01", "cdc_ncm")
+    both = usb.gadget_composition("1-3.4.3")
+    assert both["adb"] and both["ncm"] and not both["mass_storage_only"]
+
+    # aurora as measured: adb only
+    mkiface("1-3.4.2", "1.0", "ff", "42", "01", "usbfs")
+    only_adb = usb.gadget_composition("1-3.4.2")
+    assert only_adb["adb"] and not only_adb["ncm"]
+    assert not only_adb["mass_storage_only"], (
+        "a healthy adb-only watch was reported as the dead composition")
+
+    # The initramfs gadget carries adb ALONGSIDE mass storage. Storage present
+    # is therefore not the signal -- storage WITHOUT adb or network is. Missing
+    # this distinction would recommend a reboot to a perfectly healthy watch.
+    mkiface("1-3.4.5", "1.0", "ff", "42", "01", "usbfs")
+    mkiface("1-3.4.5", "1.1", "08", "06", "50")
+    with_storage = usb.gadget_composition("1-3.4.5")
+    assert with_storage["adb"] and not with_storage["mass_storage_only"], (
+        "a watch offering adb alongside mass storage was called dead")
+
+    # usb-moded's charging-only fallback: mass storage and nothing else
+    mkiface("1-3.4.4", "1.0", "08", "06", "50")
+    dead = usb.gadget_composition("1-3.4.4")
+    assert dead["mass_storage_only"] and not dead["adb"] and not dead["ncm"], (
+        "the charging-only fallback was not recognised -- a-d-b would offer a "
+        "port cycle, which cannot fix a composition problem")
+
+    assert usb.gadget_composition("9-9") == {
+        "adb": False, "ncm": False, "mass_storage_only": False, "interfaces": []}
+
+
+def test_netdev_is_resolved_by_topology_not_by_name(monkeypatch):
+    """Interface names are generated from the USB path (enp0s20u3u4u3i1), differ
+    per port and per host, and adjacent watches differ by ONE character. The
+    porting session lost an evening to an ssh attempt against a neighbour's
+    name. Resolve through /sys/class/net/*/device instead.
+
+    The neighbouring path is the trap this pins: `1-3.4.3` must not match a
+    device sitting at `1-3.4.30`, which a naive substring test accepts.
+    """
+    import asteroid_docking_bay.usb as usb
+    # The longer sibling comes FIRST on purpose: a substring match would return
+    # it for "1-3.4.3" and the test would pass on luck otherwise.
+    tree = {
+        "/sys/class/net/enp0s20u3u4u9i1":
+            "/sys/devices/pci0000:00/usb1/1-3/1-3.4/1-3.4.30/1-3.4.30:1.1",
+        "/sys/class/net/enp0s20u3u4u3i1":
+            "/sys/devices/pci0000:00/usb1/1-3/1-3.4/1-3.4.3/1-3.4.3:1.1",
+        "/sys/class/net/enp0s25": "/sys/devices/pci0000:00/0000:00:19.0",
+    }
+    monkeypatch.setattr(usb.glob, "glob", lambda pat: list(tree))
+    monkeypatch.setattr(usb.os.path, "realpath", lambda p: tree[p.rsplit("/device", 1)[0]])
+
+    assert usb.usb_netdev_for("1-3.4.3") == "enp0s20u3u4u3i1"
+    assert usb.usb_netdev_for("1-3.4.30") == "enp0s20u3u4u9i1", (
+        "a longer sibling path was shadowed by its prefix")
+    assert usb.usb_netdev_for("1-3.4.2") is None
