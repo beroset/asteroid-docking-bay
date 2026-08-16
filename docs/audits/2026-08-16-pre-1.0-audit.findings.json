@@ -300,6 +300,38 @@
    "status": "FIXED",
    "summary": "the CLI could not select a release channel",
    "detail": "The web UI passed `channel` to _flash_one_watch; the CLI had no such option, so flashing 1.0 or 2.0 was reachable only from a browser. `flash --channel 1.0` now matches the selector."
+  },
+  {
+   "id": "F20",
+   "severity": "info",
+   "area": "restore / hypothesis",
+   "status": "PROVEN ON A SECOND DEVICE",
+   "summary": "the minimal restore worked on sparrow \u2014 mo's 'old layout + no keystore' hypothesis now holds on a watch that is not mooneye",
+   "sequence": "fastboot flash boot <stock boot from THIS watch's own dump>; fastboot erase userdata; fastboot erase cache; fastboot reboot. system was never written.",
+   "result": "sparrow booted to the stock Wear OS pairing screen ('tap to pair'), 2026-08-16.",
+   "why_this_one_matters": "mooneye alone could have been a device quirk. sparrow is a different vendor (ASUS), a different layout (29 partitions vs 18) and was restored from a dump taken in 2023 \u2014 so the method, not the device, is what carried it.",
+   "the_mechanism": "AsteroidOS installs to `boot` and `userdata` and NEVER touches `system` (see _flash_watch: flash userdata <rootfs.ext4>, flash boot). So on any watch where AsteroidOS lives in userdata, the stock Wear OS `system` is still sitting there untouched \u2014 which is exactly why restoring stock boot and erasing userdata is sufficient. That is structural rather than a coincidence, and it predicts the method for the whole class.",
+   "dump_identity_matters": "The archive was misleading: original-sparrow.7z looks canonical and newer by archive date, but it does NOT contain this watch's serial \u2014 it is the remains of mo's FIRST sparrow, the one bricked to EDL by a bootloader mishap. The 2023-named tar.xz DOES contain H1NZCJ010087020. Identity was established by grepping each image for the live serial, not by filename or date.",
+   "erase_vs_format": "`fastboot erase userdata` was enough here \u2014 Wear OS formatted /data itself on first boot. Worth remembering that erase leaves NO filesystem while the factory flow writes an empty one; if a device ever hangs on spinning balls after this method, `fastboot format userdata` is the cheap next step before doubting the method."
+  },
+  {
+   "id": "F21",
+   "severity": "medium",
+   "area": "adb / ops",
+   "status": "REPORTED",
+   "summary": "`adb reboot bootloader` HANGS on this build, and a-d-b runs exactly that form with no timeout",
+   "detail": "On sparrow running AsteroidOS 1.0, `adb -s <serial> reboot bootloader` never returns \u2014 it does not error, it hangs (killed by a 30s timeout; the watch stayed up, uptime unchanged). `adb -s <serial> shell 'reboot bootloader'` worked instantly and the watch was in fastboot within 3 seconds.",
+   "why_it_matters": "ops.py runs the HANGING form via _run(..., check=False) with no timeout, so port.bootloader can block a thread forever \u2014 the same class as the adb-devices hang fixed as F3 last night. The flash path calls it too.",
+   "suggested": "Use the shell form, and bound it. Both halves matter: the shell form is what actually works here, and the bound is what stops the other form's failure mode from wedging anything."
+  },
+  {
+   "id": "F22",
+   "severity": "info",
+   "area": "detection",
+   "status": "OBSERVED",
+   "summary": "a watch restored to stock Wear OS is invisible to a-d-b until adb is enabled by hand",
+   "detail": "The bus watcher logged 'absent' for the full 30 minutes while sparrow booted to the Wear OS pairing screen. Stock Wear OS with USB debugging off presents no adb gadget at all.",
+   "consequence": "Any guided procedure that restores a watch and then expects to see it must stop and wait for the user to enable developer options and USB debugging \u2014 it cannot poll its way there. That is exactly the 're-enable adb' step in mo's runtime-dump procedure, and it is a genuine stop point rather than a wait."
   }
  ]
 }
