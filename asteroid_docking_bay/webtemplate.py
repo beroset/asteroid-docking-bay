@@ -673,7 +673,12 @@ const WATCH_PRODUCT={
   mooneye:'TicWatch E', swift:'Asus ZenWatch 3', triggerfish:'Fossil Gen 5',
   koi:'Casio WSD-F10', nemo:'LG Watch Urbane 2nd Ed.', minnow:'Moto 360 (2014)',
   rinato:'Samsung Gear 2', sprat:'Samsung Gear Live', tetra:'Sony SmartWatch 3',
-  sol:'Sony SmartWatch 3'
+  // The Pixel Watch line, from moWerk 2026-08-16. r11 and the LTE variants are
+  // not on the rig yet; listed so the first one to dock is named rather than
+  // guessed at -- guessing is how sol ended up filed as a Sony.
+  r11:'Google Pixel Watch', aurora:'Google Pixel Watch 2',
+  eos:'Google Pixel Watch 2 LTE', sol:'Google Pixel Watch 3',
+  solius:'Google Pixel Watch 3 LTE'
 };
 // What to CALL a watch. Developer mode keeps the codename (it is the image
 // name, and two units can share one). User mode leads with the product and
@@ -1310,7 +1315,9 @@ function renderDirect(hub,rows,lo,hi){
     rows.push(
       `<tr class="wr direct-row" id="wr-direct-${esc(p.serial)}">`+
       `<td class="pcell"><span class="dirglyph" title="plugged straight in - on no mapped hub port">&#x1F50C;</span></td>`+
-      `<td class="smtc"><span class="cbadge no" title="${ux('bare port: no per-port power switching','this socket is always powered - it cannot be switched off')}">${ux('NO!','always on')}</span></td>`+
+      `<td class="smtc">${p.unpowered
+        ? `<span class="cbadge err" title="${ux('the watch reports no external power (power_supply online=0) while still enumerated — its port delivers data but no VBUS, which is what a hub&#39;s physical per-port button does: no register can see it','this watch is getting NO power - it is running down its own battery, even though it is still connected')}">${ux('NO VBUS','no power')}</span>`
+        : `<span class="cbadge no" title="${ux('bare port: no per-port power switching','this socket is always powered - it cannot be switched off')}">${ux('NO!','always on')}</span>`}</td>`+
       `<td class="connc">${mkadb(p.adb,null,p.os,p.serial,p.ssh_ip,nm)}</td>`+
       `<td class="thumb">${mkthumb(p)}</td>`+
       `<td><b class="cn" onclick="openCC('${jsq(p.serial)}','${jsq(p.machine||p.serial)}',event)" title="${ux('open Control Center','click for details')}">${esc(nm)}</b></td>`+
