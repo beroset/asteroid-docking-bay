@@ -71,6 +71,7 @@ _JSON_ROUTES = [
     ("POST", "/api/declare-shelved/<loc>/<port:int>", "port.declare_shelved", {},      True),
     ("GET",  "/api/onboard/guide/<action>",     "onboard.guide",   {},             False),
     ("POST", "/api/onboard/guide/probe/<loc>/<port:int>", "onboard.guide", {"action": "probe"}, False),
+    ("POST", "/api/onboard/identify/<serial>", "onboard.identify", {},        False),
     ("POST", "/api/hide/<loc>/<port:int>",         "port.hide",       {},             True),
     ("POST", "/api/hide-hub/<loc>",                "hub.hide",        {},             True),
     ("POST", "/api/charge/<loc>/<port:int>",       "charge.start",    {},             True),

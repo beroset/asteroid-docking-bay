@@ -2303,6 +2303,40 @@ def _onboard_stream(loc: str, port: int):
         yield msg
 
 
+@DISPATCH.op("onboard.identify")
+def _onboard_identify(args):
+    """Name a connected watch and remember it -- onboarding for a watch whose
+    port cannot be mapped (a bare laptop socket, or a hub nobody has mapped).
+
+    The hub flow learns a watch's name as a side effect of mapping its port.
+    With no port there is nothing to map, so the name has to be asked for
+    directly: read it off the watch, then write serial -> codename so every
+    later sighting is recognised and the fleet registry has an identity to
+    file against.
+
+    The ADB read is why this is an explicit user action and not part of the
+    status refresh: it blocks for as long as the watch takes to answer, which
+    is fine once, on a button, and not fine on every poll.
+
+    Loads the config fresh inside the lock and saves that -- never a dict
+    handed in from somewhere else, which is exactly how a caller's stale copy
+    once overwrote a full config.
+    """
+    serial = (args.get("serial") or "").strip()
+    if not is_a_serial(serial):
+        return {"ok": False, "error": "not a usable serial"}
+    codename = get_watch_codename(serial)
+    if not codename:
+        return {"ok": False,
+                "error": "the watch did not answer -- is it on ADB and booted?"}
+    with _config_lock:
+        cfg = load_config()
+        cfg.setdefault("serials", {})[serial] = codename
+        save_config(cfg)
+    registry.note(serial, source="onboard-direct", codename=codename)
+    return {"ok": True, "serial": serial, "codename": codename}
+
+
 @DISPATCH.stream_op("onboard.start")
 def _onboard_start(args):
     loc, port = args["loc"], args["port"]

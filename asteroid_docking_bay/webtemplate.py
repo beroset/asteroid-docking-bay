@@ -1283,6 +1283,42 @@ function renderMachineRoom(mr,rows){
       `</tr>`);
   });
 }
+function renderDirect(hub,rows,lo,hi){
+  // A watch on a USB port that belongs to no mapped hub: on the wire like a
+  // hub row, portless like an orbit row. No power cells, because a socket that
+  // cannot switch its own VBUS has nothing to put in them -- the Smart column
+  // states that once, which is the whole truth about this port.
+  rows.push(
+    `<tr class="hub-hdr direct-hdr"><td colspan="8">`+
+    `<span class="hl">&#x1F50C; Direct USB</span>`+
+    `<span class="dim">${esc(hub.description)}</span></td></tr>`
+  );
+  hub.ports.forEach(p=>{
+    const nm=p.named?watchName(p.machine):p.serial;
+    const act=p.named
+      ? `<span class="dim" title="${ux('known by serial, not by port','a-d-b recognises this watch')}">named</span>`
+      : `<button class="btn" onclick="identifyDirect('${jsq(p.serial)}')" title="ask the watch its codename and remember it, so it is recognised every time it is plugged in">name it</button>`;
+    rows.push(
+      `<tr class="wr direct-row" id="wr-direct-${esc(p.serial)}">`+
+      `<td class="pcell"><span class="dirglyph" title="plugged straight in - on no mapped hub port">&#x1F50C;</span></td>`+
+      `<td class="smtc"><span class="cbadge no" title="${ux('bare port: no per-port power switching','this socket is always powered - it cannot be switched off')}">${ux('NO!','always on')}</span></td>`+
+      `<td class="connc">${mkadb(p.adb,null,p.os,p.serial,null,nm)}</td>`+
+      `<td class="thumb">${mkthumb(p)}</td>`+
+      `<td><b class="cn" onclick="openCC('${jsq(p.serial)}','${jsq(p.machine||p.serial)}',event)" title="${ux('open Control Center','click for details')}">${esc(nm)}</b></td>`+
+      `<td class="stats"></td>`+
+      `<td class="batc" id="bat-direct-${esc(p.serial)}">${mkbatCell(p,lo,hi)}</td>`+
+      `<td class="actc">${act}</td>`+
+      `</tr>`
+    );
+  });
+}
+function identifyDirect(serial){
+  fetch('/api/onboard/identify/'+encodeURIComponent(serial),{method:'POST'})
+    .then(r=>r.json()).then(d=>{
+      toastRes(d&&d.ok,'named '+((d&&d.codename)||''),(d&&d.error)||'could not name the watch');
+      if(d&&d.ok)refresh();
+    }).catch(()=>toastErr('could not name the watch'));
+}
 function renderOrbit(hub,rows,lo,hi){
   // The Orbit section: a virtual hub of watches reached over the air. Same row
   // grammar as a physical hub minus power/port/smart, so it reads as one fleet.
@@ -1355,6 +1391,7 @@ function render(data){
   hubs.forEach(hub=>{
     if(hub.hidden&&!showHidden)return;
     if(hub.location==='orbit'){renderOrbit(hub,rows,lo,hi);return;}
+    if(hub.location==='direct'){renderDirect(hub,rows,lo,hi);return;}
     const hubHideBtn=`<a href="#" class="hidebtn" onclick="doHideHub('${jsq(hub.location)}');return false" title="${hub.hidden?'un-hide this hub':'hide/show this hub'}">${hub.hidden?'&#x2295;':'&#x2296;'}</a>`;
     // Lead with the physical-box name (A16 #1, the dock, …) so a row's box is
     // obvious; the raw chip address follows, dimmed. The pencil renames the box.
@@ -2979,7 +3016,7 @@ const G_STEPS=[
   {t:'Map the hub while it is empty',
    i:'a-d-b will ask each port whether it can switch its own power. Safe now, because nothing is docked.'},
   {t:'Add watches, one at a time',
-   i:'Dock exactly ONE watch and switch its port on. Repeat for each watch.'},
+   i:'Dock exactly ONE watch and switch its port on. Repeat for each watch. No hub, or no free port? A watch plugged straight into this computer works too, and a watch on WiFi can be added by its IP without plugging in anything at all.'},
   {t:'Done', i:''}
 ];
 function openGuide(){
@@ -3022,6 +3059,7 @@ function gActions(n){
   if(n===3)return `<button class="btn" onclick="gMapBare()">Map the ports</button>`+
     ` <button class="btn" onclick="gSkipMap()">I have no smart hub</button>`;
   if(n===4)return `<button class="btn" onclick="gCheckWatch()">Check now</button>`+
+    ` <button class="btn" onclick="gOrbitAdd()">add over WiFi instead</button>`+
     ` <button class="btn" onclick="gFinish()">Finish</button>`;
   return `<button class="btn" onclick="closeGuide()">Close</button>`;
 }
@@ -3102,9 +3140,44 @@ function gCheckWatch(){
   }).catch(()=>gRead(4,'stop','could not read the bus'));
 }
 function gFinish(){
-  _gStep=5;
-  gRead(5,'pass',_gSeated.length+' watch(es) set up'+(_gNoHub?' (no smart hub: power features unavailable)':'')+'.');
-  renderGuide();
+  // Finish WRITES. Every earlier step only reads hardware, so up to here the
+  // guide has changed nothing; this is where a watch stops being something
+  // a-d-b can see and becomes something it knows. Naming is what makes it
+  // stick: a watch with no port cannot be remembered by port, so it is
+  // remembered by serial. Serialized, one request at a time, because each one
+  // asks the watch a question over ADB.
+  _gStep=5; renderGuide();
+  const list=_gSeated.filter(w=>w.serial);
+  if(!list.length){
+    gRead(5,'hold','No watch was added. A watch on WiFi can still be added by its IP from the Orbit section on the main screen.');
+    return;
+  }
+  gRead(5,'hold','naming '+list.length+' watch(es)…');
+  const done=[];
+  const next=i=>{
+    if(i>=list.length){
+      gRead(5,'pass',done.join('\\n')+'\\n\\nThey are on the main screen now.'+
+        (_gNoHub?' Charge, drain and shelve stay unavailable: those need a hub that can switch its own ports.':''));
+      refresh(); return;
+    }
+    const w=list[i];
+    fetch('/api/onboard/identify/'+encodeURIComponent(w.serial),{method:'POST'})
+      .then(r=>r.json()).then(d=>{
+        done.push(d&&d.ok ? '✓ '+d.codename+'  '+w.serial
+                          : '✗ '+w.serial+' — '+((d&&d.error)||'could not be named'));
+        next(i+1);
+      }).catch(()=>{done.push('✗ '+w.serial+' — could not be named');next(i+1);});
+  };
+  next(0);
+}
+function gOrbitAdd(){
+  // No USB port at all is a real starting point -- a watch on WiFi can be
+  // onboarded with nothing plugged in, which still gives the Control Center
+  // and the diagnostics pull. The launch box lives in the Orbit header, so
+  // send the user there rather than building a second one here.
+  closeGuide();
+  const el=document.getElementById('orbip');
+  if(el){el.scrollIntoView({block:'center'});el.focus();}
 }
 // Every floating panel is a <div id="X"> with a <div id="Xmask"> behind it, so
 // showing and hiding one is the same three lines each time. It was written out
