@@ -151,6 +151,23 @@
    "the_insight": "The safety rule is not 'never restore userdata or per-device state'. It is 'never restore state from a DIFFERENT unit'. nemo's working restore used its own coherent dump, which is safe; the same partitions from another watch would not be. Provenance is the gate, not partition class \u2014 and fingerprint_gate already exists to establish provenance.",
    "why_not_fixed": "Relaxing a hard safety stop is not a night edit. It also needs mo's whitelist: procedures assigned per watch/family, only TESTED ones enabled, sibling inference (all LGs, all ASUS) marked as inference rather than evidence. beluga is an outlier; the newer layouts (sol/aurora, GKI A/B with a dynamic super partition) are untested for restore entirely.",
    "suggested": "A PROCEDURES table keyed by codename: partition list, userdata source (factory-empty | own-dump), evidence (tested date+serial | inferred from sibling), default REFUSE. restore_plan takes the procedure rather than assuming one."
+  },
+  {
+   "id": "F11",
+   "severity": "info",
+   "area": "stockrom / restore whitelist",
+   "status": "EVIDENCE RECOVERED",
+   "summary": "mooneye's restore procedure recovered from the porting transcripts \u2014 a THIRD distinct method",
+   "evidence": "meta-smartwatch session 82e99b58, 2026-07-06T16:38-16:46, mooneye M6600TB1Z300 (Mobvoi, Wear OS 8.0 Oreo).",
+   "sequence": "fastboot flash boot <own stock boot> ; fastboot erase userdata ; fastboot erase cache ; fastboot reboot -> booted to stock Wear OS ('tap to begin').",
+   "system_not_flashed": "The sparse system flash FAILED (remote: 'Unknown chunk type') and turned out to be unnecessary: '/system was pristine stock, and we never needed the sparse flash'. So the proven mooneye path does not write system at all.",
+   "device_constraints": [
+    "mooneye's MediaTek lk bootloader rejects img2simg sparse output \u2014 it groks only RAW/DONT_CARE, not FILL. Any future system write needs a FILL-FREE sparse image.",
+    "No separate vendor partition: /vendor is a symlink into /system.",
+    "/data is FBE-encrypted with keys in the TEE, which is why ERASING userdata is correct and restoring a foreign userdata would not be."
+   ],
+   "caveat": "The boot flashed in that session was a MODIFIED stock boot (ro.debuggable / adb_keys baked) for the Bluetooth investigation. A pure restore should flash the stock boot from the watch's own dump. The method is proven; that one substitution was not part of the goal.",
+   "so_there_are_three": "beluga (5 partitions + factory EMPTY userdata), nemo (system+boot+userdata+metadata+keystore+cache, all from its own dump), mooneye (boot + erase userdata + erase cache). Three genuinely different procedures across three vendors \u2014 which is exactly why the whitelist has to be per watch, not derived."
   }
  ]
 }
