@@ -1085,6 +1085,13 @@ def _web_status_data(cfg: dict) -> list[dict]:
                 min(socks) if socks else 9999)
     result.sort(key=_hub_key)
     _ph["render"] = time.perf_counter() - _t_render
+    # Physically connected but portless watches sit between the mapped hubs and
+    # Orbit: they are on the wire like a hub row, but have no port like an
+    # orbit row.
+    direct_view = _timed("direct", lambda: _direct_hub_view(
+        cfg, devices, _adb_paths, fb_by_path))
+    if direct_view:
+        result.append(direct_view)
     orbit_view = _timed("orbit", lambda: _orbit_hub_view(cfg, connected_serials))
     result.append(orbit_view)              # always last, below the physical hubs
     _persist_exact_codenames(_detected_exact)
@@ -1104,6 +1111,83 @@ def _port_handed_off(serial, adb_state, orbit_map, reachable) -> bool:
     still reach. Such a port frees to available and the watch shows in Orbit."""
     return bool(serial and adb_state not in ("device", "ssh", "fastboot")
                 and serial in orbit_map and reachable(serial))
+
+
+def _direct_hub_view(cfg: dict, devices: dict, adb_paths: dict,
+                     fb_by_path: dict) -> "dict | None":
+    """Watches on a USB port that belongs to no mapped hub.
+
+    This is the plain-laptop-port case, and the first thing a new user sees:
+    one watch, no smart hub, plugged straight into the machine. Without this
+    view a-d-b sees the watch on ADB and shows an empty table, because every
+    row is built by walking the CONFIGURED hubs and an unmapped port is not on
+    that walk. The watch appears here the moment it enumerates -- nothing to
+    map, nothing to save.
+
+    Also catches a watch on a hub the user has not mapped yet, which is the
+    same situation from a-d-b's point of view: something is connected and
+    a-d-b can talk to it, but no port owns it.
+
+    Deliberately light, like the Orbit view: everything a physical row carries
+    beyond identity -- charge, drain, PPPS, self-heal, port control -- is a
+    property of a port that can switch its own power, which by definition this
+    one cannot. `smart` is False for exactly that reason, so the UI renders it
+    as an always-on socket rather than pretending a control exists.
+
+    Reads no hardware: identity comes from config and the last-seen cache, so
+    a plugged-in unknown watch cannot slow the refresh down. Naming an unknown
+    watch is the guided setup's job (it can afford the blocking ADB read), not
+    this function's.
+
+    Returns None when nothing qualifies. Orbit is emitted empty because its
+    header carries the launch-by-IP box; this section has no control of its
+    own, so an always-present empty one would be noise.
+    """
+    mapped = {h["location"] for h in cfg.get("hubs", [])}
+
+    def _unmapped(path: str) -> bool:
+        # A watch hangs off its parent hub: "1-3.2" -> "1-3". A watch on a root
+        # port ("1-1") has no dotted parent, so it can never belong to a hub.
+        parent = path.rsplit(".", 1)[0] if "." in path else None
+        return parent not in mapped
+
+    found: "dict[str, str]" = {}                     # serial -> sysfs path
+    for serial, path in (adb_paths or {}).items():
+        if path and _unmapped(path):
+            found[serial] = path
+    fb_serials = set()
+    for path, serial in (fb_by_path or {}).items():
+        if path and _unmapped(path):
+            found.setdefault(serial, path)
+            fb_serials.add(serial)
+
+    rows: list[dict] = []
+    for serial, path in found.items():
+        machine = find_codename_for_serial(cfg, serial)
+        cached = last_seen.get(serial) or {}
+        state = _adb_state(devices, serial) if serial in devices else None
+        if state is None and serial in fb_serials:
+            state = "fastboot"
+        rows.append({
+            "codename": machine or serial, "machine": machine, "serial": serial,
+            "direct": True, "empty": False,
+            "path": path,
+            "adb": state,
+            "smart": False,          # a bare port is always on -- no control
+            "power": None,
+            "os": cached.get("os"),
+            "battery": cached.get("battery") if state in ("device", "ssh") else None,
+            "battery_cached": cached.get("battery"),
+            "last_live_ts": cached.get("last_live_ts"),
+            "geometry": cached.get("geometry"),
+            "named": machine is not None,
+        })
+    if not rows:
+        return None
+    rows.sort(key=lambda r: (r["codename"] or "").lower())
+    return {"location": "direct",
+            "description": "connected by USB, not on a mapped hub port",
+            "ports": rows, "virtual": True, "hidden": False}
 
 
 def _orbit_hub_view(cfg: dict, connected_serials: set) -> dict:
