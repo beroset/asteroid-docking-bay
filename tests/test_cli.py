@@ -305,3 +305,33 @@ def test_interactive_charge_respects_a_busy_or_locked_port(monkeypatch):
         "charge powered a port mid drain test — the run would keep sampling "
         "a watch that is being recharged and report the result as real")
     assert switched == [], "charge switched power during a drain test"
+
+
+def test_the_cli_exit_code_reports_what_the_command_actually_did(monkeypatch, capsys):
+    """A command's return value must reach the process exit status.
+
+    It was discarded: `dispatch[args.command](args, cfg)` ignored the result,
+    so `log` with no known serial printed an error, returned 1, and exited 0.
+    A human saw the failure and `$?` saw success — which is the wrong way round
+    for the half of this tool that exists to be scripted.
+
+    None means "fine" and must stay exit 0, because that is what almost every
+    command returns."""
+    import sys as _sys
+    from asteroid_docking_bay import cli as c
+
+    def run(retval):
+        monkeypatch.setattr(c, "load_config", lambda: {})
+        monkeypatch.setattr(c, "setup_logging", lambda *a, **k: None)
+        monkeypatch.setattr(_sys, "argv", ["asteroid-docking-bay", "status"])
+        monkeypatch.setattr(c, "cmd_status", lambda a, cf: retval)
+        try:
+            c.main()
+        except SystemExit as e:
+            return e.code
+        return "no exit"
+
+    assert run(None) == 0, "a normal command must exit 0"
+    assert run(0) == 0
+    assert run(1) == 1, "a command reporting failure still exited successfully"
+    assert run(2) == 2, "a distinct failure code was flattened"

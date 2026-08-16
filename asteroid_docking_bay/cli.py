@@ -941,7 +941,7 @@ def main():
         # with no known serial reported failure to a human and success to
         # `$?`. Anything scripting this tool was reading the wrong answer.
         # None (the common case) means "fine", so `or 0` keeps that.
-        dispatch[args.command](args, cfg)
+        sys.exit(dispatch[args.command](args, cfg) or 0)
     except KeyboardInterrupt:
         print("\nInterrupted.")
         sys.exit(1)
