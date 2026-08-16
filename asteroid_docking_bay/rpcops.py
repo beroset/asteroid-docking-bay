@@ -41,7 +41,7 @@ from .config import (_config_lock, _store_smart_verdict, allocate_ssh_ip,
                      orbit_add, orbit_forget, orbit_members,
                      hands_cal_for, set_hands_cal, set_hub_name,
                      register_hubs, seed_hub_names, hub_name_for)
-from .usb import (_sysfs_hub_scan, _sysfs_path_to_serial_map, adb_usb_paths,
+from .usb import (_sysfs_hub_scan, test_port_power_switching, _sysfs_path_to_serial_map, adb_usb_paths,
                   _sysfs_serial_at, xhci_slots,
                   test_port_power_switching, uhubctl_cycle, uhubctl_set_power, watch_devices_on_bus,
                   uhubctl_get_power, port_device_info, discover_hubs,
@@ -931,6 +931,56 @@ def _onboard_guide(args):
                 "before": before, "after": after,
                 "note": "register responded" if responds else
                         "register did not change — treat this port as dumb"}
+
+    if action in ("portinfo", "porttest"):
+        # What can this watch's CURRENT port actually do? Asked at the moment
+        # the user is deciding whether a hub is worth digging out, so it has to
+        # be specific about THIS socket rather than general advice.
+        path = (args.get("path") or "").strip()
+        if not path:
+            return {"ok": False, "error": "path is required"}
+        # "1-3.2" -> hub "1-3", port 2. "1-1" has no dotted parent: the watch
+        # hangs off the computer's own root hub, and a-d-b has no way to
+        # command power there -- per-port switching is a hub feature and
+        # discover_hubs never reports a root hub.
+        parent, _, tail = path.rpartition(".")
+        try:
+            port = int(tail)
+        except ValueError:
+            port = 0
+        if not parent or not port:
+            return {"ok": True, "path": path, "root": True, "switchable": False,
+                    "testable": False,
+                    "note": "this port is on the computer itself, with no hub "
+                            "between it and the watch, so there is no per-port "
+                            "power switch for a-d-b to command"}
+        hub = next((h for h in discover_hubs() if h["location"] == parent), None)
+        if hub is None:
+            return {"ok": True, "path": path, "root": False, "switchable": None,
+                    "testable": False, "hub": parent,
+                    "note": "no hub was found at " + parent}
+        if action == "portinfo":
+            return {"ok": True, "path": path, "root": False, "hub": parent,
+                    "port": port, "switchable": bool(hub.get("ppps")),
+                    "testable": bool(hub.get("ppps")),
+                    "description": hub.get("description", ""),
+                    "note": "the hub advertises per-port power switching"
+                            if hub.get("ppps") else
+                            "this hub does not advertise per-port power switching"}
+        # porttest: the advertised flag is a CLAIM. Hubs are known to
+        # acknowledge a power command and flip the status bit with VBUS still
+        # hot, so the only proof is the watch itself dropping off the bus and
+        # coming back. That is what this does, and why it is a button the user
+        # presses rather than something that happens to them.
+        serial = (args.get("serial") or "").strip() or None
+        smart, reason = test_port_power_switching(parent, port, serial)
+        with _config_lock:
+            cfg = load_config()
+            if _store_smart_verdict(cfg, parent, port, smart):
+                save_config(cfg)
+        return {"ok": True, "path": path, "hub": parent, "port": port,
+                "root": False, "switchable": smart, "testable": True,
+                "note": reason}
 
     if action != "preflight":
         return {"ok": False, "error": f"unknown action: {action}"}

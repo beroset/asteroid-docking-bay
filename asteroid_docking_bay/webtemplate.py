@@ -198,15 +198,15 @@ _WEB_TEMPLATE = """\
       background:none;border:none;color:#8b949e;font:inherit;font-size:11px;cursor:pointer;
       text-decoration:underline dotted}
     .tmsg-all:hover{color:#c9d1d9}
-    .gwrap{padding:16px 20px 20px}
+    .gwrap{padding:18px 22px 22px;text-align:center}
     .gtitle{font-weight:700;font-size:19px;margin-bottom:9px}
-    .gacts{margin-top:14px;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+    .gacts{margin-top:16px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:center}
     .gskip{color:#6e7681;font-size:12px;margin-left:6px;text-decoration:underline dotted}
     .gskip:hover{color:#8b949e}
     .ginput{background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#c9d1d9;
             padding:6px 9px;font-size:13px;min-width:220px}
-    .ginstr{color:#c9d1d9;margin:5px 0 7px;white-space:pre-wrap;line-height:1.5}
-    .gread{font-size:12px;color:#8b949e;border-left:2px solid #30363d;padding:3px 0 3px 9px;margin:6px 0;white-space:pre-wrap}
+    .ginstr{color:#c9d1d9;margin:5px auto 7px;white-space:pre-wrap;line-height:1.55;max-width:52em}
+    .gread{font-size:12px;color:#8b949e;border-left:2px solid #30363d;padding:3px 0 3px 9px;margin:10px auto;white-space:pre-wrap;display:inline-block;text-align:left;max-width:52em}
     .gread.pass{border-left-color:#3fb950;color:#c9d1d9}
     .gread.hold{border-left-color:#d29922}
     .gread.stop{border-left-color:#f85149;color:#ffa198}
@@ -3032,6 +3032,7 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeWatchImg();clo
 // as a failure rather than handed to the user as a form.
 let _gState='scan', _gFound=[], _gBoxes=[], _gNoHub=false;
 let _gAdopted=[], _gPoll=null, _gNote=null, _gSeen=[], _gDismissed=false;
+let _gPort=null;      // capability of the port the found watch sits on
 
 function openGuide(){
   if(!panelShow('guide'))return;
@@ -3051,6 +3052,48 @@ function gGuideOpen(){
 }
 
 // ── the screens ──────────────────────────────────────────────────────────────
+// One greeting for both ways in: a fresh install and a rig that lost its
+// config land on the same screen, and neither user wants to be told which of
+// the two happened to them.
+const GREETING='Hello! Docking bay is alive, but no ports are mapped yet.';
+// What THIS socket can do, said at the moment the user is deciding whether a
+// hub is worth digging out. The feature list is the honest half of that
+// decision: a port that cannot switch power costs you four things and nothing
+// else, so somebody with no hub should not feel locked out.
+const NO_POWER_MEANS=
+  'Everything except power works on such a port: the Control Center, readings, '+
+  'flashing, backup and restore. Charging, drain tests, shelving and automatic '+
+  'recovery need a port that can switch its own power — a powered hub that '+
+  'supports per-port power switching.';
+function gPortLine(){
+  if(!_gPort)return 'Checking what this port can do…';
+  if(_gPort.switchable===true)
+    return 'This port CAN switch its own power, so every feature is available.';
+  const why=_gPort.root
+    ? 'This is a port on the computer itself — there is no hub between it and '+
+      'the watch, so there is no per-port power switch to command.'
+    : 'This port cannot switch its own power'+(_gPort.note?' — '+_gPort.note:'')+'.';
+  return why+'\\n\\n'+NO_POWER_MEANS;
+}
+function gTestPort(){
+  // The advertised flag is a CLAIM: hubs acknowledge a power command and flip
+  // the status bit with VBUS still hot. The proof is the watch dropping off
+  // the bus and coming back, which briefly cuts its power -- so it happens on
+  // a button, never on its own.
+  const w=_gFound[0]; if(!w)return;
+  gNote('hold','cutting power to '+w.path+' for a moment and watching whether the watch drops…');
+  fetch('/api/onboard/porttest/'+encodeURIComponent(w.path),
+        {method:'POST',headers:{'Content-Type':'application/json'},
+         body:JSON.stringify({serial:w.serial||''})})
+    .then(r=>r.json()).then(d=>{
+      if(!d||!d.ok){gNote('stop',(d&&d.error)||'the test could not run');return;}
+      _gPort=d;
+      gNote(d.switchable===true?'pass':(d.switchable===false?'stop':'hold'),
+        d.switchable===true?'Confirmed: this port really cuts power. Every feature is available here.'
+        :d.switchable===false?'This port does not cut power'+(d.note?' — '+d.note:'')+'.'
+        :'Could not tell'+(d.note?' — '+d.note:'')+'.');
+    }).catch(()=>gNote('stop','the test could not run'));
+}
 function gView(){
   if(_gState==='scan') return {
     t:'Setting up', i:'Checking what is already connected…', a:''};
@@ -3059,19 +3102,21 @@ function gView(){
     const list=_gFound.map(w=>'    '+(w.product||'watch')+'  on port '+w.path+
       (w.serial?'  ('+w.serial+')':'')).join('\\n');
     return {
-      t:_gFound.length>1?'Found '+_gFound.length+' watches already connected'
-                        :'Found a watch already connected',
-      i:'Already plugged in and talking:\\n\\n'+list+'\\n\\n'+
-        'Keep '+(_gFound.length>1?'them':'it')+' on this port, or move to a USB hub? '+
-        'A hub is only needed to switch power per port — charging, drain tests and shelving. '+
-        'Everything else works on any port.',
-      a:`<button class="btn" onclick="gKeepHere()">Keep on this port</button>`+
+      t:GREETING,
+      i:(_gFound.length>1?'Found '+_gFound.length+' watches already connected'
+                         :'Found a watch already connected')+
+        ', plugged in and talking:\\n\\n'+list+'\\n\\n'+gPortLine()+'\\n\\n'+
+        'Keep '+(_gFound.length>1?'them':'it')+' where '+(_gFound.length>1?'they are':'it is')+
+        ', or move to a USB hub?',
+      a:(_gPort&&_gPort.testable
+          ? `<button class="btn" onclick="gTestPort()">Test this port</button> `:'')+
+        `<button class="btn" onclick="gKeepHere()">Keep on this port</button>`+
         ` <button class="btn" onclick="gMoveToHub()">Move to a hub</button>`+
         ` <a href="#" class="gskip" onclick="gSkip();return false">skip setup</a>`};
   }
 
   if(_gState==='choose') return {
-    t:'Add your first watch',
+    t:GREETING,
     i:'Nothing is connected yet. On the watch, USB access must be on: '+
       'Settings → USB → ADB (SSH also works).\\n\\nHow do you want to connect it?',
     a:`<button class="btn" onclick="gWaitDirect()">Straight into this computer</button>`+
@@ -3147,7 +3192,11 @@ function gScan(){
   fetch('/api/onboard/guide/bus').then(r=>r.json()).then(d=>{
     _gFound=d.watches||[];
     _gState=_gFound.length?'found':'choose';
-    _gNote=null; renderGuide();
+    _gNote=null; _gPort=null; renderGuide();
+    if(_gFound.length)
+      fetch('/api/onboard/portinfo/'+encodeURIComponent(_gFound[0].path))
+        .then(r=>r.json()).then(d2=>{if(d2&&d2.ok){_gPort=d2;renderGuide();}})
+        .catch(()=>{});
   }).catch(()=>gNote('stop','could not read the USB bus'));
 }
 // Naming is automatic and serialized: each one is an ADB round-trip to the
