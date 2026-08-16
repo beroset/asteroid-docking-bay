@@ -1068,7 +1068,14 @@ def test_a_codename_on_two_ports_does_not_light_up_both(monkeypatch, tmp_path):
         {"location": "1-3.4", "ports": [1, 2, 3, 4], "power": {}, "connect": {}}])
     monkeypatch.setattr(ws, "_soft_remap", lambda cfg, online: None)
     monkeypatch.setattr(ws, "port_device_info", lambda loc, port: None)
-    monkeypatch.setattr(ws, "_geometry_view", lambda state, serial: None)
+    # THE GEOMETRY CACHE IS THE TRAP: it is keyed by serial, and the entry
+    # recorded while another watch was enumerating under the bogus string
+    # carries THAT watch's machine name. Stubbing this to None would hide half
+    # the bug, and did - the first version of this test passed with the guard
+    # removed.
+    monkeypatch.setattr(ws, "_geometry_view", lambda state, serial: (
+        {"machine": "aurora", "resolution": "320x320"}
+        if serial == "systempart=/dev/mapper/system" else None))
     monkeypatch.setattr(ws, "_battery_view",
                         lambda state, serial, bat, forced, os_: (None, None))
     monkeypatch.setattr(ws, "battery_and_screen", lambda serial, shell=None: (None, False, None))
